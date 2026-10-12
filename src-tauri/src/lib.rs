@@ -59,7 +59,7 @@ impl App {
 }
 
 /// What the first-run page shows.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Status {
     version: &'static str,
     server: Option<String>,

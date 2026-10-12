@@ -24,7 +24,7 @@ jobs:
       # linuxdeploy is itself an AppImage; runners have no FUSE.
       APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
