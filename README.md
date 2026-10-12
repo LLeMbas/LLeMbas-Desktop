@@ -1,0 +1,56 @@
+# LLeMbas Desktop
+
+Your [LLeMbas](https://llembas.eu) server in a window of its own, with the agent on this computer.
+
+- **The whole web UI**: chats, agent chats, the library, reports, settings. Same account, models,
+  permissions and credits as in the browser; the app is a front end to the server you already run.
+- **The agent, built in.** LLeMbas Desktop carries the [LLeMbas CLI](https://github.com/LLeMbas/LLeMbas-CLI)
+  and runs it in the background as this computer's device, so agent chats started on the server
+  can work in your projects here, without a terminal.
+- **In the tray**: close the window and the agent keeps running; the tray menu starts and stops it,
+  links the computer, and changes the server.
+
+> **Alpha.** Linux first (`.deb` and AppImage, x86-64). Windows and macOS later.
+
+## Install
+
+Download the `.deb` or the AppImage from the
+[latest release](https://github.com/LLeMbas/LLeMbas-Desktop/releases/latest). Check it against
+`SHA256SUMS` in the same release.
+
+```sh
+sudo apt install ./LLeMbas_*_amd64.deb        # Debian, Ubuntu
+chmod +x LLeMbas_*.AppImage && ./LLeMbas_*.AppImage
+```
+
+On GNOME the tray needs the *AppIndicator* extension; without it, closing the window hides the
+app, and starting it again brings the window back.
+
+## Use
+
+1. Start LLeMbas and enter your server's address. Sign in there as you would in a browser.
+2. From the tray, **Link this computer**. The approval page opens in the window; approve it.
+3. The agent starts. In the server's new-chat screen, choose this computer for an agent chat.
+
+The agent is the LLeMbas CLI's `lembas service`, using the CLI's own configuration
+(`~/.config/lembas`). If you also installed the CLI and run `lembas service` yourself, the app sees
+it and does not start a second one: they are the same device.
+
+## Build
+
+Needs Rust (stable) and, on Linux, WebKitGTK 4.1 and an AppIndicator library:
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+scripts/fetch-cli.sh                 # the bundled CLI, checked against its release signature
+cargo install tauri-cli --version "^2" --locked
+cargo tauri dev                      # or: cargo tauri build
+```
+
+There is no Node and no bundler: the app's one local page is plain HTML, CSS and JavaScript in
+`ui/`. Everything else on screen is the server's own web UI. The version of the CLI it carries is
+in `lembas-cli.version`.
+
+## Licence
+
+MIT; see [LICENSE](LICENSE). The bundled LLeMbas CLI is MIT too, with its own third-party notices.

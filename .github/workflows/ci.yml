@@ -1,0 +1,38 @@
+# Checks on every push to main and every pull request: formatting, lints, tests, and the page's
+# JavaScript. The app is built for real only by release.yml, from a tag.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries (WebKitGTK, the tray)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          cache-workspaces: src-tauri
+      - name: The bundled LLeMbas CLI, verified
+        run: scripts/fetch-cli.sh
+      - name: Formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+      - name: Lints
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test --locked
+      - name: The first-run page's JavaScript
+        run: node --check ui/app.js

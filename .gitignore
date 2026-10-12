@@ -1,0 +1,5 @@
+# Rust and Tauri build output
+/src-tauri/target/
+/src-tauri/gen/
+# The bundled LLeMbas CLI: fetched and verified by scripts/fetch-cli.sh, never committed
+/src-tauri/binaries/lembas-*

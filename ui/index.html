@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>LLeMbas</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<main class="card" aria-labelledby="title">
+  <header class="brand">
+    <img src="logo-mark.svg" alt="" width="40" height="40">
+    <div>
+      <h1 id="title"><b>LL</b>e<b>M</b>bas</h1>
+      <p class="muted">Desktop <span id="version"></span></p>
+    </div>
+  </header>
+
+  <section aria-labelledby="server-h">
+    <h2 id="server-h">[ SERVER ]</h2>
+    <form id="server-form" class="field" novalidate>
+      <label for="address">Address of your LLeMbas server</label>
+      <div class="row">
+        <input id="address" name="address" type="text" inputmode="url" autocomplete="url"
+               placeholder="https://ai.example" spellcheck="false" required>
+        <button type="submit" class="btn btn--primary">Connect</button>
+      </div>
+      <p class="hint" id="server-hint" aria-live="polite">Sign in there as you would in a browser.</p>
+    </form>
+  </section>
+
+  <section aria-labelledby="agent-h" id="agent-section" hidden>
+    <h2 id="agent-h">[ AGENT ]</h2>
+    <p class="muted">The agent lets agent chats on your server work in this computer's projects.
+      It is the LLeMbas CLI, built in, running in the background while the app runs.</p>
+    <p class="status" id="agent-status" aria-live="polite"></p>
+    <div class="row row--buttons">
+      <button type="button" class="btn" id="link">Link this computer</button>
+      <button type="button" class="btn" id="toggle">Start the agent</button>
+      <button type="button" class="btn btn--primary" id="open">Open the server</button>
+    </div>
+  </section>
+</main>
+</body>
+</html>

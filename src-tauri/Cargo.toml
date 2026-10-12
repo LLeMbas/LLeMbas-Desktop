@@ -1,0 +1,36 @@
+[package]
+name = "llembas-desktop"
+version = "0.1.0"
+description = "LLeMbas Desktop: your LLeMbas server in a window, with the agent on this computer"
+authors = ["Jaroslav Beneš"]
+license = "MIT"
+repository = "https://github.com/LLeMbas/LLeMbas-Desktop"
+homepage = "https://llembas.eu"
+edition = "2021"
+
+[lib]
+# The library holds the app; main.rs only starts it (the shape Tauri expects for mobile too).
+name = "llembas_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", default-features = false, features = ["tls", "native-certs", "json"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

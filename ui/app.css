@@ -1,0 +1,130 @@
+/* The first-run page: the LLeMbas look (Moria dark, Shire light), no build step. */
+:root {
+  --font-ui: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-xl: 1.5rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-6: 1.5rem;
+  --sp-8: 2rem;
+  --radius: 2px;
+  --press: 2px;
+  --control-h: 2.5rem;
+  --card-max: 34rem;
+
+  color-scheme: dark;
+  --bg: #0B0D10;
+  --surface: #11151A;
+  --surface-hover: #1D232B;
+  --border: #26303A;
+  --border-strong: #5C6976;
+  --ink: #E2E8EC;
+  --ink-muted: #A6B2BC;
+  --accent: #8FD8E8;
+  --accent-hover: #B4E6F1;
+  --accent-ink: #061418;
+  --leaf: #7EE081;
+  --warning: #F0A840;
+  --shadow-card: 4px 4px 0 rgba(0, 0, 0, 0.55);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #F1EAD6;
+    --surface: #F8F3E5;
+    --surface-hover: #ECE4CF;
+    --border: #CBBF9D;
+    --border-strong: #2A2E22;
+    --ink: #1F2418;
+    --ink-muted: #474D3B;
+    --accent: #285F3C;
+    --accent-hover: #1F4D30;
+    --accent-ink: #F8F3E5;
+    --leaf: #3D6B1C;
+    --warning: #7E5200;
+    --shadow-card: 4px 4px 0 var(--border-strong);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; min-height: 100%; }
+
+body {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--sp-4);
+  background: var(--bg);
+  color: var(--ink);
+  font: var(--text-base) / 1.6 var(--font-body);
+}
+
+.card {
+  width: min(100%, var(--card-max));
+  display: grid;
+  gap: var(--sp-6);
+  padding: var(--sp-8);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+.brand { display: grid; grid-template-columns: 40px 1fr; gap: var(--sp-3); align-items: center; }
+h1 { margin: 0; font: 600 var(--text-xl) / 1.2 var(--font-ui); }
+h1 b { color: var(--leaf); font-weight: 700; }
+h2 { margin: 0 0 var(--sp-3); font: 600 var(--text-sm) / 1.2 var(--font-ui); letter-spacing: 0.08em; color: var(--accent); }
+p { margin: 0; }
+.muted { color: var(--ink-muted); font-size: var(--text-sm); }
+
+/* A field is three stacked parts on fixed rows: label, control row, hint. */
+.field { display: grid; grid-template-rows: auto var(--control-h) auto; gap: var(--sp-2); }
+label { font: var(--text-sm) / 1.4 var(--font-ui); color: var(--ink-muted); }
+.hint { font-size: var(--text-sm); color: var(--ink-muted); min-height: 1.4em; }
+.hint.is-error, .status.is-error { color: var(--warning); }
+
+.row { display: grid; grid-template-columns: 1fr auto; gap: var(--sp-2); }
+.row--buttons { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); margin-top: var(--sp-3); }
+
+input {
+  height: var(--control-h);
+  min-width: 0;
+  padding: 0 var(--sp-3);
+  font: var(--text-base) var(--font-ui);
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+input:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn {
+  height: var(--control-h);
+  padding: 0 var(--sp-4);
+  font: 600 var(--text-sm) var(--font-ui);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--press) var(--press) 0 rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+.btn:hover { background: var(--surface-hover); }
+.btn:active { transform: translate(var(--press), var(--press)); box-shadow: none; }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn--primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.btn--primary:hover { background: var(--accent-hover); }
+
+.status { font: var(--text-sm) / 1.4 var(--font-ui); margin-top: var(--sp-3); }
+.status.is-ok { color: var(--leaf); }
+
+@media (max-width: 30rem) {
+  .card { padding: var(--sp-4); gap: var(--sp-4); }
+  .row { grid-template-columns: 1fr; grid-template-rows: var(--control-h) var(--control-h); }
+  .field { grid-template-rows: auto auto auto; }
+}

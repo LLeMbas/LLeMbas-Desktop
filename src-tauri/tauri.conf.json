@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LLeMbas",
+  "mainBinaryName": "llembas-desktop",
+  "identifier": "eu.llembas.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage"],
+    "category": "Productivity",
+    "shortDescription": "Your LLeMbas server in a window, with the agent on this computer",
+    "longDescription": "LLeMbas Desktop opens your LLeMbas server's web UI in a window of its own and runs the LLeMbas CLI agent on this computer, so agent chats can work in your projects here without a terminal.",
+    "license": "MIT",
+    "homepage": "https://llembas.eu",
+    "publisher": "LLeMbas",
+    "copyright": "Copyright (c) 2026 Jaroslav Beneš",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/lembas"]
+  }
+}
