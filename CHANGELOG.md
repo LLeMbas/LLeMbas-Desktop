@@ -6,6 +6,10 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-10-14
+
+The first alpha, for Linux. It carries LLeMbas CLI 1.1.0.
+
 ### Added
 
 - The app: the server's web UI in a window of its own, a first-run page to choose the server, and a
