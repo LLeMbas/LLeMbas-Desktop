@@ -6,6 +6,8 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-14
+
 ### Added
 
 - Updates: the app looks for a new release at start and every six hours, shows an **update**
