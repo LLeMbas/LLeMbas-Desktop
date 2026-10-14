@@ -6,6 +6,8 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-14
+
 ### Added
 
 - The window is LLeMbas's own: a title bar in the LLeMbas look with the server's address, the
