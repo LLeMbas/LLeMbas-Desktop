@@ -6,6 +6,11 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-14
+
+Carries LLeMbas CLI 1.2.0, whose agent stays linked before any folder is allowed and follows
+changes to its folders without a restart.
+
 ### Added
 
 - **Project folders**: Settings… (in the title bar's and the tray's menu) lists the folders the
