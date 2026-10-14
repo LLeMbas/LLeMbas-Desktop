@@ -7,8 +7,9 @@ Your [LLeMbas](https://llembas.eu) server in a window of its own, with the agent
 - **The agent, built in.** LLeMbas Desktop carries the [LLeMbas CLI](https://github.com/LLeMbas/LLeMbas-CLI)
   and runs it in the background as this computer's device, so agent chats started on the server
   can work in your projects here, without a terminal.
-- **In the tray**: close the window and the agent keeps running; the tray menu starts and stops it,
-  links the computer, and changes the server.
+- **Its own window**: a LLeMbas title bar with the agent's state and a menu (start and stop the
+  agent, link the computer, reload, change server, quit). Close the window and the agent keeps
+  running in the tray, which has the same menu.
 
 > **Alpha.** Linux first (`.deb` and AppImage, x86-64). Windows and macOS later.
 
@@ -19,12 +20,12 @@ Download the `.deb` or the AppImage from the
 `SHA256SUMS` in the same release.
 
 ```sh
-sudo apt install ./LLeMbas_*_amd64.deb        # Debian, Ubuntu
-chmod +x LLeMbas_*.AppImage && ./LLeMbas_*.AppImage
+sudo apt install ./llembas-desktop_*_amd64.deb      # Debian, Ubuntu (replaces 0.1.0's l-le-mbas)
+chmod +x llembas-desktop_*.AppImage && ./llembas-desktop_*.AppImage
 ```
 
-On GNOME the tray needs the *AppIndicator* extension; without it, closing the window hides the
-app, and starting it again brings the window back.
+On GNOME the tray needs the *AppIndicator* extension; without it, the title bar's menu has
+everything, and starting the app again brings a hidden window back.
 
 ## Use
 
@@ -33,7 +34,8 @@ app, and starting it again brings the window back.
 3. The agent starts. In the server's new-chat screen, choose this computer for an agent chat.
 
 The agent is the LLeMbas CLI's `lembas service`, using the CLI's own configuration
-(`~/.config/lembas`). If you also installed the CLI and run `lembas service` yourself, the app sees
+(`~/.config/lembas`). The app's copy of the CLI lives in its own directory
+(`/usr/lib/llembas-desktop/`), not on your `PATH`. If you also installed the CLI and run `lembas service` yourself, the app sees
 it and does not start a second one: they are the same device.
 
 ## Build

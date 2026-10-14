@@ -1,0 +1,54 @@
+/* LLeMbas Desktop's own pages: one set of tokens (Moria dark, Shire light), as on llembas.eu. */
+:root {
+  --font-ui: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-xl: 1.5rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-6: 1.5rem;
+  --sp-8: 2rem;
+  --radius: 2px;
+  --press: 2px;
+  --control-h: 2.5rem;
+  --card-max: 34rem;
+
+  color-scheme: dark;
+  --bg: #0B0D10;
+  --surface: #11151A;
+  --surface-hover: #1D232B;
+  --border: #26303A;
+  --border-strong: #5C6976;
+  --ink: #E2E8EC;
+  --ink-muted: #A6B2BC;
+  --accent: #8FD8E8;
+  --accent-hover: #B4E6F1;
+  --accent-ink: #061418;
+  --leaf: #7EE081;
+  --warning: #F0A840;
+  --shadow-card: 4px 4px 0 rgba(0, 0, 0, 0.55);
+  --danger: #E5534B;
+  --titlebar-h: 36px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #F1EAD6;
+    --surface: #F8F3E5;
+    --surface-hover: #ECE4CF;
+    --border: #CBBF9D;
+    --border-strong: #2A2E22;
+    --ink: #1F2418;
+    --ink-muted: #474D3B;
+    --accent: #285F3C;
+    --accent-hover: #1F4D30;
+    --accent-ink: #F8F3E5;
+    --leaf: #3D6B1C;
+    --warning: #7E5200;
+    --shadow-card: 4px 4px 0 var(--border-strong);
+    --danger: #B3261E;
+  }
+}

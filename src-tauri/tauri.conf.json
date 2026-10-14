@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LLeMbas",
+  "productName": "llembas-desktop",
   "mainBinaryName": "llembas-desktop",
   "identifier": "eu.llembas.desktop",
   "build": {
@@ -15,7 +15,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage"],
+    "targets": [
+      "deb",
+      "appimage"
+    ],
     "category": "Productivity",
     "shortDescription": "Your LLeMbas server in a window, with the agent on this computer",
     "longDescription": "LLeMbas Desktop opens your LLeMbas server's web UI in a window of its own and runs the LLeMbas CLI agent on this computer, so agent chats can work in your projects here without a terminal.",
@@ -30,6 +33,19 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/lembas"]
+    "resources": {
+      "binaries/lembas": "lembas"
+    },
+    "linux": {
+      "deb": {
+        "desktopTemplate": "llembas-desktop.desktop",
+        "conflicts": [
+          "l-le-mbas"
+        ],
+        "replaces": [
+          "l-le-mbas"
+        ]
+      }
+    }
   }
 }

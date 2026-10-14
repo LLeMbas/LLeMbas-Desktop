@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Put the LLeMbas CLI that LLeMbas Desktop carries where Tauri's bundler wants it:
-#   src-tauri/binaries/lembas-<target triple>
+# Put the LLeMbas CLI that LLeMbas Desktop carries where the bundle takes it from:
+#   src-tauri/binaries/lembas   (a resource: installed in the app's own directory, never on PATH)
 #
 #   scripts/fetch-cli.sh [target-triple]      (default: this machine's, from rustc)
 #
@@ -39,6 +39,7 @@ ssh-keygen -Y verify -f "$work/allowed" -I lembas-release -n lembas-release \
   || { echo "fetch-cli: $ASSET.gz does not match SHA256SUMS" >&2; exit 1; }
 
 mkdir -p src-tauri/binaries
-gunzip -c "$work/$ASSET.gz" > "src-tauri/binaries/lembas-$TRIPLE"
-chmod 755 "src-tauri/binaries/lembas-$TRIPLE"
-echo "fetch-cli: LLeMbas CLI $VERSION ($ASSET) -> src-tauri/binaries/lembas-$TRIPLE"
+gunzip -c "$work/$ASSET.gz" > src-tauri/binaries/lembas
+chmod 755 src-tauri/binaries/lembas
+rm -f src-tauri/binaries/lembas-*   # where an earlier version of this script put it
+echo "fetch-cli: LLeMbas CLI $VERSION ($ASSET) -> src-tauri/binaries/lembas"

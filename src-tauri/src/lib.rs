@@ -1,8 +1,11 @@
 //! LLeMbas Desktop: the server's web UI in a window of its own, and the LLeMbas CLI's agent
 //! running on this computer, so agent chats can work in its projects without a terminal.
 //!
-//! - **One window, `main`.** Before a server is chosen it shows the app's own first-run page
-//!   (`ui/`); after, the server itself. Closing it hides it; the tray brings it back.
+//! - **One window, `main`, drawn by the app**: no system decoration, the app's own title bar (a
+//!   local page, `ui/titlebar.html`) on top and the content below it — before a server is chosen
+//!   the first-run page (`ui/index.html`), after it the server itself. Two webviews in one window,
+//!   so the server's pages never share a document with the app's controls. Closing hides the
+//!   window; the tray, the title bar's menu or starting the app again bring it back.
 //! - **The server's pages get no IPC.** They are remote content, and the one capability lists no
 //!   remote URL. Links that leave the server open in the system browser.
 //! - **The agent is the CLI's**: `lembas login --json` links this computer, and
@@ -20,8 +23,11 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::webview::WebviewBuilder;
+use tauri::window::{Color, WindowBuilder};
 use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent, Wry,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
+    RunEvent, Url, Webview, WebviewUrl, Window, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
@@ -30,6 +36,13 @@ use agent::{Agent, State as AgentState};
 use settings::Settings;
 
 const MAIN: &str = "main";
+const TITLEBAR: &str = "titlebar";
+const CONTENT: &str = "content";
+/// The title bar's height, in logical pixels: `--titlebar-h` in `ui/titlebar.css`.
+const TITLE_H: f64 = 36.0;
+/// The frame left around the webviews while the window is not maximized: the window's own
+/// surface, where the pointer resizes it (a webview over the edge would take the events).
+const FRAME: f64 = 4.0;
 
 struct App {
     config_dir: PathBuf,
@@ -156,33 +169,90 @@ fn local_page() -> Url {
     Url::parse(base).expect("a fixed URL")
 }
 
+fn content(handle: &AppHandle) -> Option<Webview> {
+    handle.get_webview(CONTENT)
+}
+
+fn main_window(handle: &AppHandle) -> Option<Window> {
+    handle.get_window(MAIN)
+}
+
 /// Show the main window on `server`, or on the first-run page; made when it does not exist.
 fn open_main(handle: &AppHandle, server: Option<&str>) -> Result<(), String> {
     let target = match server {
         Some(s) => Some(Url::parse(s).map_err(|e| format!("{s}: {e}"))?),
         None => None,
     };
-    if let Some(w) = handle.get_webview_window(MAIN) {
-        w.navigate(target.unwrap_or_else(local_page))
+    if let (Some(w), Some(c)) = (main_window(handle), content(handle)) {
+        c.navigate(target.unwrap_or_else(local_page))
             .map_err(|e| e.to_string())?;
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
         return Ok(());
     }
+    build_main(handle, target).map_err(|e| e.to_string())
+}
+
+fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
+    let window = WindowBuilder::new(handle, MAIN)
+        .title("LLeMbas")
+        .inner_size(1280.0, 840.0)
+        .min_inner_size(420.0, 560.0)
+        .decorations(false)
+        // The frame's colour: the Moria border, as `--border` in the pages.
+        .background_color(Color(0x26, 0x30, 0x3A, 0xFF))
+        .build()?;
+    let size = window
+        .inner_size()?
+        .to_logical::<f64>(window.scale_factor()?);
+    window.add_child(
+        WebviewBuilder::new(TITLEBAR, WebviewUrl::App("titlebar.html".into())),
+        LogicalPosition::new(FRAME, FRAME),
+        LogicalSize::new(size.width - 2.0 * FRAME, TITLE_H),
+    )?;
     let url = match target {
         Some(u) => WebviewUrl::External(u),
         None => WebviewUrl::App("index.html".into()),
     };
     let nav = handle.clone();
-    WebviewWindowBuilder::new(handle, MAIN, url)
-        .title("LLeMbas")
-        .inner_size(1280.0, 840.0)
-        .min_inner_size(420.0, 560.0)
-        .on_navigation(move |url| allowed(&nav, url))
-        .build()
-        .map_err(|e| e.to_string())?;
+    window.add_child(
+        WebviewBuilder::new(CONTENT, url).on_navigation(move |url| allowed(&nav, url)),
+        LogicalPosition::new(FRAME, FRAME + TITLE_H),
+        LogicalSize::new(
+            size.width - 2.0 * FRAME,
+            (size.height - TITLE_H - 2.0 * FRAME).max(0.0),
+        ),
+    )?;
     Ok(())
+}
+
+/// Lay the two webviews out in the window: the title bar on top, the content under it, and the
+/// frame around both unless the window is maximized (then there is nothing to resize).
+fn layout(window: &Window) {
+    let handle = window.app_handle();
+    let (Some(bar), Some(body)) = (handle.get_webview(TITLEBAR), handle.get_webview(CONTENT))
+    else {
+        return;
+    };
+    let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) else {
+        return;
+    };
+    let frame = if window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false)
+    {
+        0
+    } else {
+        (FRAME * scale).round() as u32
+    };
+    let title = (TITLE_H * scale).round() as u32;
+    let width = size.width.saturating_sub(2 * frame);
+    let _ = bar.set_position(PhysicalPosition::new(frame, frame));
+    let _ = bar.set_size(PhysicalSize::new(width, title));
+    let _ = body.set_position(PhysicalPosition::new(frame, frame + title));
+    let _ = body.set_size(PhysicalSize::new(
+        width,
+        size.height.saturating_sub(title + 2 * frame),
+    ));
 }
 
 /// The window may show the app's own pages and the server; anything else opens in the browser.
@@ -250,8 +320,10 @@ fn start_link(handle: &AppHandle) -> Result<(), String> {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
                         if let Ok(url) = Url::parse(link) {
-                            if let Some(w) = handle.get_webview_window(MAIN) {
-                                let _ = w.navigate(url);
+                            if let Some(c) = content(&handle) {
+                                let _ = c.navigate(url);
+                            }
+                            if let Some(w) = main_window(&handle) {
                                 let _ = w.show();
                                 let _ = w.set_focus();
                             }
@@ -304,7 +376,7 @@ fn status_of(handle: &AppHandle) -> Status {
 
 fn show(handle: &AppHandle) {
     let server = handle.state::<App>().settings().server;
-    if let Some(w) = handle.get_webview_window(MAIN) {
+    if let Some(w) = main_window(handle) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -341,40 +413,91 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
     )?;
     let mut tray = TrayIconBuilder::with_id("tray")
         .tooltip("LLeMbas")
-        .menu(&menu)
-        .on_menu_event(|h, ev| match ev.id().as_ref() {
-            "open" => show(h),
-            "toggle" => {
-                let on = !h.state::<App>().agent.wanted();
-                if let Err(e) = set_agent_wanted(h, on) {
-                    h.dialog()
-                        .message(e)
-                        .kind(MessageDialogKind::Error)
-                        .show(|_| {});
-                }
-            }
-            "link" => {
-                if let Err(e) = start_link(h) {
-                    h.dialog()
-                        .message(e)
-                        .kind(MessageDialogKind::Warning)
-                        .show(|_| {});
-                }
-            }
-            "server" => {
-                let _ = open_main(h, None);
-            }
-            "quit" => {
-                h.state::<App>().agent.stop();
-                h.exit(0);
-            }
-            _ => {}
-        });
+        .menu(&menu);
     if let Some(icon) = handle.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
     tray.build(handle)?;
     Ok(TrayItems { status, toggle })
+}
+
+/// A menu item chosen, from the tray or from the title bar's menu: the same ids in both.
+fn on_menu(h: &AppHandle, id: &str) {
+    match id {
+        "open" => show(h),
+        "toggle" => {
+            let on = !h.state::<App>().agent.wanted();
+            if let Err(e) = set_agent_wanted(h, on) {
+                h.dialog()
+                    .message(e)
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            }
+        }
+        "link" => {
+            if let Err(e) = start_link(h) {
+                h.dialog()
+                    .message(e)
+                    .kind(MessageDialogKind::Warning)
+                    .show(|_| {});
+            }
+        }
+        "reload" => {
+            if let Some(c) = content(h) {
+                if let Ok(url) = c.url() {
+                    let _ = c.navigate(url);
+                }
+            }
+        }
+        "server" => {
+            let _ = open_main(h, None);
+        }
+        "quit" => {
+            h.state::<App>().agent.stop();
+            h.exit(0);
+        }
+        _ => {}
+    }
+}
+
+/// The title bar's menu: the tray's items, where the window is (a desktop without a tray —
+/// GNOME without the AppIndicator extension — has no other way to reach them).
+#[tauri::command]
+fn titlebar_menu(window: Window) -> Result<(), String> {
+    let h = window.app_handle();
+    let app = h.state::<App>();
+    let m = |id: &str, text: &str, on: bool| MenuItem::with_id(h, id, text, on, None::<&str>);
+    let build = || -> tauri::Result<Menu<Wry>> {
+        let status = m("status", &app.agent.state().label(), false)?;
+        let toggle = m(
+            "toggle",
+            if app.agent.wanted() {
+                "Stop the agent"
+            } else {
+                "Start the agent"
+            },
+            true,
+        )?;
+        let link = m("link", "Link this computer…", true)?;
+        let reload = m("reload", "Reload", true)?;
+        let server = m("server", "Change server…", true)?;
+        let quit = m("quit", "Quit LLeMbas", true)?;
+        Menu::with_items(
+            h,
+            &[
+                &status,
+                &toggle,
+                &link,
+                &PredefinedMenuItem::separator(h)?,
+                &reload,
+                &server,
+                &PredefinedMenuItem::separator(h)?,
+                &quit,
+            ],
+        )
+    };
+    let menu = build().map_err(|e| e.to_string())?;
+    window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 
 fn on_agent_state(handle: &AppHandle, state: &AgentState) {
@@ -399,11 +522,16 @@ pub fn run() {
             get_status,
             set_server,
             set_agent,
-            link_computer
+            link_computer,
+            titlebar_menu
         ])
+        .on_menu_event(|h, ev| on_menu(h, ev.id().as_ref()))
         .setup(|app| {
             let handle = app.handle().clone();
             let config_dir = app.path().app_config_dir()?;
+            if let Ok(dir) = app.path().resource_dir() {
+                cli::set_bundled(&dir);
+            }
             let log = app.path().app_log_dir()?.join("agent.log");
             let notify_handle = handle.clone();
             let agent = Agent::new(log, move |s| {
@@ -428,14 +556,23 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| match event {
             // Closing the window keeps the app (and the agent) in the tray.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == MAIN {
-                    let _ = window.hide();
-                    api.prevent_close();
-                }
+            WindowEvent::CloseRequested { api, .. } if window.label() == MAIN => {
+                let _ = window.hide();
+                api.prevent_close();
             }
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
+                if window.label() == MAIN =>
+            {
+                layout(window);
+                let _ = window.emit_to(
+                    TITLEBAR,
+                    "maximized",
+                    window.is_maximized().unwrap_or(false),
+                );
+            }
+            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("LLeMbas Desktop could not start")

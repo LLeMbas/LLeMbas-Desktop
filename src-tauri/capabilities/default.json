@@ -1,7 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The app's own pages (the first-run page). The server's web UI is a remote page and gets no IPC at all: this capability lists no remote URLs.",
+  "description": "The app's own pages: the title bar and the first-run page. The server's web UI is a remote page in the same window and gets no IPC at all: this capability lists no remote URL. The window permissions are the title bar's: moving, resizing, minimising, maximising and closing (which hides).",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close"
+  ]
 }

@@ -6,22 +6,38 @@
 //! installed by hand on the same computer are one device to the server, not two.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-/// The bundled binary: Tauri puts an `externalBin` beside the app's own executable.
-/// `LLEMBAS_DESKTOP_CLI` points elsewhere, for development.
+static BUNDLED: OnceLock<PathBuf> = OnceLock::new();
+
+/// Where the bundle put the CLI: the app's resource directory (`/usr/lib/llembas-desktop/` from
+/// the .deb, inside the AppImage otherwise) — the app's own copy, never on PATH, so it neither
+/// shadows nor is shadowed by a `lembas` installed by hand. Set once at start.
+pub fn set_bundled(resource_dir: &Path) {
+    let _ = BUNDLED.set(resource_dir.join(exe_name()));
+}
+
+fn exe_name() -> &'static str {
+    if cfg!(windows) {
+        "lembas.exe"
+    } else {
+        "lembas"
+    }
+}
+
+/// The CLI to run: `LLEMBAS_DESKTOP_CLI` (development), else the bundled one, else one beside
+/// the app's executable (`cargo tauri dev`).
 pub fn binary() -> PathBuf {
     if let Some(p) = std::env::var_os("LLEMBAS_DESKTOP_CLI") {
         return PathBuf::from(p);
     }
-    let name = if cfg!(windows) {
-        "lembas.exe"
-    } else {
-        "lembas"
-    };
+    if let Some(p) = BUNDLED.get().filter(|p| p.exists()) {
+        return p.clone();
+    }
     std::env::current_exe()
         .ok()
-        .and_then(|e| e.parent().map(|d| d.join(name)))
-        .unwrap_or_else(|| PathBuf::from(name))
+        .and_then(|e| e.parent().map(|d| d.join(exe_name())))
+        .unwrap_or_else(|| PathBuf::from(exe_name()))
 }
 
 fn home() -> PathBuf {
