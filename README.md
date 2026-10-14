@@ -27,6 +27,14 @@ chmod +x llembas-desktop_*.AppImage && ./llembas-desktop_*.AppImage
 On GNOME the tray needs the *AppIndicator* extension; without it, the title bar's menu has
 everything, and starting the app again brings a hidden window back.
 
+## Updates
+
+LLeMbas Desktop looks for a new release when it starts and every six hours. When there is one, an
+**update** button appears in the title bar (and *Install LLeMbas x.y.z…* in its menu; *Check for
+updates…* otherwise). Installing asks for your password to update the `.deb` (an AppImage updates
+itself), then the app starts again. Every package is checked against the release signing key
+built into the app before anything is installed.
+
 ## Use
 
 1. Start LLeMbas and enter your server's address. Sign in there as you would in a browser.

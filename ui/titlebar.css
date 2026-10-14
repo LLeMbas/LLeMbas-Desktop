@@ -15,8 +15,8 @@ html, body {
 
 .bar {
   display: grid;
-  /* leaf · name · host (takes the rest, and is the drag area) · agent · menu · sep · 3 controls */
-  grid-template-columns: var(--titlebar-h) auto minmax(0, 1fr) auto var(--titlebar-h) 1px repeat(3, 2.875rem);
+  /* leaf · name · host (takes the rest, and is the drag area) · update · agent · menu · sep · 3 controls */
+  grid-template-columns: var(--titlebar-h) auto minmax(0, 1fr) auto auto var(--titlebar-h) 1px repeat(3, 2.875rem);
   align-items: center;
   height: var(--titlebar-h);
   border-bottom: 1px solid var(--border);
@@ -65,6 +65,15 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .bar__agent[data-state="starting"] .dot { background: var(--accent); }
 .bar__agent[data-state="failed"] .dot,
 .bar__agent[data-state="not_linked"] .dot { background: var(--warning); }
+
+.bar__update {
+  padding: 0 var(--sp-3);
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+.bar__update:hover { color: var(--accent-ink); background: var(--accent-hover); }
+/* Hidden keeps its grid track (auto, so zero wide): the slots after it never move. */
+.bar__update[hidden] { display: block; width: 0; padding: 0; overflow: hidden; }
 
 .bar__sep { width: 1px; height: 1.25rem; background: var(--border); }
 

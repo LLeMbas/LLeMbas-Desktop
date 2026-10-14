@@ -26,11 +26,12 @@ use tauri::tray::TrayIconBuilder;
 use tauri::webview::WebviewBuilder;
 use tauri::window::{Color, WindowBuilder};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
-    RunEvent, Url, Webview, WebviewUrl, Window, WindowEvent, Wry,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent, Url, Webview, WebviewUrl,
+    Window, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_updater::UpdaterExt;
 
 use agent::{Agent, State as AgentState};
 use settings::Settings;
@@ -50,6 +51,8 @@ struct App {
     agent: Agent,
     tray: Mutex<Option<TrayItems>>,
     linking: Mutex<bool>,
+    /// The newer release the last check found, if any.
+    update: Mutex<Option<String>>,
 }
 
 struct TrayItems {
@@ -79,6 +82,8 @@ struct Status {
     linked: bool,
     agent: AgentState,
     agent_wanted: bool,
+    /// A newer release of the app, when the last check found one.
+    update: Option<String>,
 }
 
 fn status(app: &App) -> Status {
@@ -89,6 +94,7 @@ fn status(app: &App) -> Status {
         server: s.server,
         agent: app.agent.state(),
         agent_wanted: app.agent.wanted(),
+        update: app.update.lock().unwrap().clone(),
     }
 }
 
@@ -215,6 +221,10 @@ fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
         Some(u) => WebviewUrl::External(u),
         None => WebviewUrl::App("index.html".into()),
     };
+    #[cfg(target_os = "linux")]
+    if let Some(bar) = handle.get_webview(TITLEBAR) {
+        pin_titlebar(&bar);
+    }
     let nav = handle.clone();
     window.add_child(
         WebviewBuilder::new(CONTENT, url).on_navigation(move |url| allowed(&nav, url)),
@@ -224,12 +234,45 @@ fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
             (size.height - TITLE_H - 2.0 * FRAME).max(0.0),
         ),
     )?;
+    layout(&window);
     Ok(())
+}
+
+/// On Linux, Tauri packs every webview of a window into the window's GTK box, each with an equal
+/// share of the height, and positions and sizes set on a webview are not applied there. So the
+/// title bar is told directly: a fixed height, no share of what is left (the content takes it).
+#[cfg(target_os = "linux")]
+fn pin_titlebar(bar: &Webview) {
+    let _ = bar.with_webview(|pv| {
+        use gtk::prelude::*;
+        let view = pv.inner();
+        view.set_size_request(-1, TITLE_H as i32);
+        if let Some(parent) = view.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) {
+            parent.set_child_packing(&view, false, false, 0, gtk::PackType::Start);
+        }
+    });
 }
 
 /// Lay the two webviews out in the window: the title bar on top, the content under it, and the
 /// frame around both unless the window is maximized (then there is nothing to resize).
 fn layout(window: &Window) {
+    let framed =
+        !(window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false));
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        // The box's border is the frame: the window's own surface, which GTK resizes by.
+        if let Ok(vbox) = window.default_vbox() {
+            vbox.set_border_width(if framed { FRAME as u32 } else { 0 });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    place(window, framed);
+}
+
+#[cfg(not(target_os = "linux"))]
+fn place(window: &Window, framed: bool) {
+    use tauri::{PhysicalPosition, PhysicalSize};
     let handle = window.app_handle();
     let (Some(bar), Some(body)) = (handle.get_webview(TITLEBAR), handle.get_webview(CONTENT))
     else {
@@ -421,6 +464,110 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
     Ok(TrayItems { status, toggle })
 }
 
+/// How often a running app looks for a new release (and once shortly after it starts).
+const UPDATE_EVERY: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+/// Ask the update manifest whether a newer release exists; remember and announce the answer.
+/// The manifest and each package are signed with the updater key, which the app checks before
+/// installing anything.
+async fn check_update(handle: &AppHandle) -> Result<Option<String>, String> {
+    let found = handle
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|u| u.version);
+    *handle.state::<App>().update.lock().unwrap() = found.clone();
+    let _ = handle.emit("status", status_of(handle));
+    Ok(found)
+}
+
+fn watch_updates(handle: AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        loop {
+            let _ = tauri::async_runtime::block_on(check_update(&handle));
+            std::thread::sleep(UPDATE_EVERY);
+        }
+    });
+}
+
+/// Download and install the newer release, then start again on it. A .deb is installed with
+/// the system's password prompt (pkexec); an AppImage replaces itself.
+async fn install_update(handle: AppHandle) -> Result<(), String> {
+    let update = handle
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("LLeMbas is up to date.")?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("The update could not be installed: {e}"))?;
+    handle.state::<App>().agent.stop();
+    handle.restart()
+}
+
+fn offer_update(h: &AppHandle) {
+    let h = h.clone();
+    tauri::async_runtime::spawn(async move {
+        let version = match check_update(&h).await {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                h.dialog()
+                    .message(format!(
+                        "LLeMbas {} is the newest release.",
+                        env!("CARGO_PKG_VERSION")
+                    ))
+                    .title("LLeMbas is up to date")
+                    .show(|_| {});
+                return;
+            }
+            Err(e) => {
+                h.dialog()
+                    .message(format!("Could not look for updates: {e}"))
+                    .title("LLeMbas")
+                    .kind(MessageDialogKind::Warning)
+                    .show(|_| {});
+                return;
+            }
+        };
+        let again = h.clone();
+        h.dialog()
+            .message(format!(
+                "LLeMbas {version} is available (this is {}). Install it now? LLeMbas starts again afterwards; the agent stops for a moment.",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .title("Update LLeMbas")
+            .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+                "Install".into(),
+                "Later".into(),
+            ))
+            .show(move |yes| {
+                if yes {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = install_update(again.clone()).await {
+                            again
+                                .dialog()
+                                .message(e)
+                                .title("LLeMbas")
+                                .kind(MessageDialogKind::Error)
+                                .show(|_| {});
+                        }
+                    });
+                }
+            });
+    });
+}
+
+#[tauri::command]
+fn update_app(handle: AppHandle) {
+    offer_update(&handle);
+}
+
 /// A menu item chosen, from the tray or from the title bar's menu: the same ids in both.
 fn on_menu(h: &AppHandle, id: &str) {
     match id {
@@ -442,6 +589,7 @@ fn on_menu(h: &AppHandle, id: &str) {
                     .show(|_| {});
             }
         }
+        "update" => offer_update(h),
         "reload" => {
             if let Some(c) = content(h) {
                 if let Ok(url) = c.url() {
@@ -479,6 +627,10 @@ fn titlebar_menu(window: Window) -> Result<(), String> {
             true,
         )?;
         let link = m("link", "Link this computer…", true)?;
+        let update = match app.update.lock().unwrap().clone() {
+            Some(v) => m("update", &format!("Install LLeMbas {v}…"), true)?,
+            None => m("update", "Check for updates…", true)?,
+        };
         let reload = m("reload", "Reload", true)?;
         let server = m("server", "Change server…", true)?;
         let quit = m("quit", "Quit LLeMbas", true)?;
@@ -490,6 +642,7 @@ fn titlebar_menu(window: Window) -> Result<(), String> {
                 &link,
                 &PredefinedMenuItem::separator(h)?,
                 &reload,
+                &update,
                 &server,
                 &PredefinedMenuItem::separator(h)?,
                 &quit,
@@ -518,12 +671,14 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|h, _argv, _cwd| show(h)))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_status,
             set_server,
             set_agent,
             link_computer,
-            titlebar_menu
+            titlebar_menu,
+            update_app
         ])
         .on_menu_event(|h, ev| on_menu(h, ev.id().as_ref()))
         .setup(|app| {
@@ -547,10 +702,12 @@ pub fn run() {
                 agent,
                 tray: Mutex::new(None),
                 linking: Mutex::new(false),
+                update: Mutex::new(None),
             });
             let items = build_tray(&handle)?;
             *handle.state::<App>().tray.lock().unwrap() = Some(items);
             open_main(&handle, loaded.server.as_deref())?;
+            watch_updates(handle.clone());
             if let (true, Some(server)) = (loaded.agent, loaded.server) {
                 handle.state::<App>().agent.start(server);
             }

@@ -1,6 +1,6 @@
 [package]
 name = "llembas-desktop"
-version = "0.2.0"
+version = "0.3.0"
 description = "LLeMbas Desktop: your LLeMbas server in a window, with the agent on this computer"
 authors = ["Jaroslav Beneš"]
 license = "MIT"
@@ -21,12 +21,17 @@ tauri = { version = "2", features = ["tray-icon", "unstable"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", default-features = false, features = ["tls", "native-certs", "json"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The window's GTK box: Tauri packs every webview into it with an equal share on Linux.
+gtk = "0.18"
 
 [profile.release]
 codegen-units = 1

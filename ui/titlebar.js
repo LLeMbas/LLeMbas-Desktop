@@ -29,6 +29,9 @@ function render(s) {
   $("agent").dataset.state = state
   $("agent-text").textContent = WORDS[state] ?? state
   $("agent").title = state === "failed" ? `Agent stopped: ${s.agent.detail}` : "Agent"
+  $("update").hidden = !s.update
+  $("update").textContent = s.update ? `update ${s.update}` : "update"
+  $("update").title = s.update ? `LLeMbas ${s.update} is available (this is ${s.version})` : ""
 }
 
 function maximized(on) {
@@ -41,6 +44,7 @@ function maximized(on) {
 $("minimize").addEventListener("click", () => win.minimize())
 $("maximize").addEventListener("click", () => win.toggleMaximize())
 $("close").addEventListener("click", () => win.close())
+$("update").addEventListener("click", () => invoke("update_app"))
 $("menu").addEventListener("click", () => invoke("titlebar_menu"))
 $("agent").addEventListener("click", () => invoke("titlebar_menu"))
 

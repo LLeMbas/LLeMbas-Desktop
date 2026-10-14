@@ -6,6 +6,18 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Updates: the app looks for a new release at start and every six hours, shows an **update**
+  button in the title bar when there is one, and installs it (the .deb with the system's password
+  prompt, an AppImage in place) after checking its signature. The menu can also check by hand.
+
+### Fixed
+
+- On Linux the server's page took only the lower half of the window, under an empty title bar
+  area. The title bar is now its fixed height and the page takes the rest; the frame you resize
+  the window by is drawn around both.
+
 ## [0.2.0] — 2026-10-14
 
 ### Added
