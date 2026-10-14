@@ -53,7 +53,9 @@ jobs:
           mkdir dist
           cp src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/appimage/*.AppImage dist/
           cd dist
-          { echo "# llembas-desktop $VERSION"; sha256sum -- *; } > SHA256SUMS
+          # Written beside the folder first: inside it, the glob would list SHA256SUMS itself.
+          { echo "# llembas-desktop $VERSION"; sha256sum -- *; } > ../SHA256SUMS
+          mv ../SHA256SUMS .
           cat SHA256SUMS
       - name: Publish the GitHub Release
         env:
