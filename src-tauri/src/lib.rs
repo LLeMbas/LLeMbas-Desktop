@@ -13,6 +13,7 @@
 
 mod agent;
 mod cli;
+mod remote;
 mod settings;
 
 use std::io::{BufRead, BufReader};
@@ -34,6 +35,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
 use agent::{Agent, State as AgentState};
+use remote::Remote;
 use settings::Settings;
 
 const MAIN: &str = "main";
@@ -53,6 +55,8 @@ struct App {
     linking: Mutex<bool>,
     /// The newer release the last check found, if any.
     update: Mutex<Option<String>>,
+    /// The agent's folders, as `lembas remote` last answered.
+    remote: Mutex<Option<Remote>>,
 }
 
 struct TrayItems {
@@ -84,6 +88,8 @@ struct Status {
     agent_wanted: bool,
     /// A newer release of the app, when the last check found one.
     update: Option<String>,
+    /// Which folders the agent may open sessions in (None: not known yet).
+    remote: Option<Remote>,
 }
 
 fn status(app: &App) -> Status {
@@ -95,6 +101,7 @@ fn status(app: &App) -> Status {
         agent: app.agent.state(),
         agent_wanted: app.agent.wanted(),
         update: app.update.lock().unwrap().clone(),
+        remote: app.remote.lock().unwrap().clone(),
     }
 }
 
@@ -159,10 +166,132 @@ fn set_agent_wanted(handle: &AppHandle, on: bool) -> Result<(), String> {
     let app = handle.state::<App>();
     let s = app.update(|s| s.agent = on)?;
     match (on, s.server) {
-        (true, Some(server)) => app.agent.start(server),
+        (true, Some(server)) => {
+            app.agent.start(server);
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                // Connected but allowed into no folder is the state a new computer starts in:
+                // say so where the folders are chosen, rather than showing a green light.
+                if let Some(r) = refresh_remote(&h) {
+                    if !r.usable() {
+                        let _ = h.run_on_main_thread({
+                            let h = h.clone();
+                            move || {
+                                let _ = open_main(&h, None);
+                            }
+                        });
+                    }
+                }
+            });
+        }
         _ => app.agent.stop(),
     }
     Ok(())
+}
+
+/// Ask the CLI which folders the agent may use; remember and announce it.
+fn refresh_remote(handle: &AppHandle) -> Option<Remote> {
+    let r = remote::run(&["list"]).ok();
+    *handle.state::<App>().remote.lock().unwrap() = r.clone();
+    let _ = handle.emit("status", status_of(handle));
+    r
+}
+
+/// After a change: remember the new state, and start the app's own agent again when the CLI
+/// says the running service cannot take the change live.
+fn remote_changed(handle: &AppHandle, r: Remote) {
+    let app = handle.state::<App>();
+    *app.remote.lock().unwrap() = Some(r.clone());
+    if r.restart_needed && app.agent.wanted() {
+        if let Some(server) = app.settings().server {
+            app.agent.start(server);
+        }
+    }
+    let _ = handle.emit("status", status_of(handle));
+}
+
+/// Run a `lembas remote` change off the main thread; the page hears the outcome as `status`,
+/// or as `remote-error`.
+fn change_remote(handle: &AppHandle, args: Vec<String>) {
+    let h = handle.clone();
+    std::thread::spawn(move || {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        match remote::run(&refs) {
+            Ok(r) => remote_changed(&h, r),
+            Err(e) => {
+                let _ = h.emit("remote-error", e);
+            }
+        }
+    });
+}
+
+#[tauri::command]
+fn remote_refresh(handle: AppHandle) {
+    std::thread::spawn(move || {
+        refresh_remote(&handle);
+    });
+}
+
+/// Choose a folder with the system's dialog and let the agent work in it (this turns remote
+/// control on, if it was off).
+#[tauri::command]
+fn remote_add(handle: AppHandle) {
+    let h = handle.clone();
+    handle
+        .dialog()
+        .file()
+        .set_title("A folder the agent may work in")
+        .pick_folder(move |picked| {
+            if let Some(path) = picked.and_then(|p| p.into_path().ok()) {
+                change_remote(&h, vec!["add".into(), path.to_string_lossy().into_owned()]);
+            }
+        });
+}
+
+#[tauri::command]
+fn remote_remove(handle: AppHandle, dir: String) {
+    change_remote(&handle, vec!["remove".into(), dir]);
+}
+
+#[tauri::command]
+fn remote_mode(handle: AppHandle, mode: String) -> Result<(), String> {
+    if !["manual", "edit", "auto", "plan"].contains(&mode.as_str()) {
+        return Err(format!("no such mode: {mode}"));
+    }
+    change_remote(&handle, vec!["mode".into(), mode]);
+    Ok(())
+}
+
+#[tauri::command]
+fn remote_terminal(handle: AppHandle, on: bool) {
+    change_remote(
+        &handle,
+        vec!["terminal".into(), if on { "on" } else { "off" }.into()],
+    );
+}
+
+/// The server's pages are told they are in LLeMbas Desktop, and on which computer: it shows
+/// the device that is this computer as "Local". A label only — it grants nothing.
+fn user_agent() -> String {
+    let platform = if cfg!(target_os = "linux") {
+        "X11; Linux x86_64"
+    } else if cfg!(target_os = "macos") {
+        "Macintosh; Intel Mac OS X 10_15_7"
+    } else {
+        "Windows NT 10.0; Win64; x64"
+    };
+    let host = cli::hostname()
+        .filter(|h| {
+            h.len() <= 253
+                && h.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
+        })
+        .map(|h| format!(" (host={h})"))
+        .unwrap_or_default();
+    format!(
+        "Mozilla/5.0 ({platform}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15 LLeMbasDesktop/{}{host}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// The app's own first-run page, as the webview addresses it on this platform.
@@ -227,7 +356,9 @@ fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
     }
     let nav = handle.clone();
     window.add_child(
-        WebviewBuilder::new(CONTENT, url).on_navigation(move |url| allowed(&nav, url)),
+        WebviewBuilder::new(CONTENT, url)
+            .user_agent(&user_agent())
+            .on_navigation(move |url| allowed(&nav, url)),
         LogicalPosition::new(FRAME, FRAME + TITLE_H),
         LogicalSize::new(
             size.width - 2.0 * FRAME,
@@ -439,7 +570,7 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
     )?;
     let toggle = MenuItem::with_id(handle, "toggle", "Start the agent", true, None::<&str>)?;
     let link = MenuItem::with_id(handle, "link", "Link this computer…", true, None::<&str>)?;
-    let server = MenuItem::with_id(handle, "server", "Change server…", true, None::<&str>)?;
+    let server = MenuItem::with_id(handle, "server", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(handle, "quit", "Quit LLeMbas", true, None::<&str>)?;
     let menu = Menu::with_items(
         handle,
@@ -610,8 +741,11 @@ fn on_menu(h: &AppHandle, id: &str) {
 
 /// The title bar's menu: the tray's items, where the window is (a desktop without a tray —
 /// GNOME without the AppIndicator extension — has no other way to reach them).
+/// The title bar's menu, opened under the button that asked for it: `x`, `y` are the button's
+/// bottom-left corner in the title bar page. (A plain popup opens at the pointer, which a Wayland
+/// compositor does not tell the app — it landed in the middle of the window.)
 #[tauri::command]
-fn titlebar_menu(window: Window) -> Result<(), String> {
+fn titlebar_menu(window: Window, x: f64, y: f64) -> Result<(), String> {
     let h = window.app_handle();
     let app = h.state::<App>();
     let m = |id: &str, text: &str, on: bool| MenuItem::with_id(h, id, text, on, None::<&str>);
@@ -632,7 +766,7 @@ fn titlebar_menu(window: Window) -> Result<(), String> {
             None => m("update", "Check for updates…", true)?,
         };
         let reload = m("reload", "Reload", true)?;
-        let server = m("server", "Change server…", true)?;
+        let server = m("server", "Settings…", true)?;
         let quit = m("quit", "Quit LLeMbas", true)?;
         Menu::with_items(
             h,
@@ -650,7 +784,13 @@ fn titlebar_menu(window: Window) -> Result<(), String> {
         )
     };
     let menu = build().map_err(|e| e.to_string())?;
-    window.popup_menu(&menu).map_err(|e| e.to_string())
+    // The title bar sits inside the frame while the window is not maximized.
+    let framed =
+        !(window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false));
+    let inset = if framed { FRAME } else { 0.0 };
+    window
+        .popup_menu_at(&menu, LogicalPosition::new(x + inset, y + inset))
+        .map_err(|e| e.to_string())
 }
 
 fn on_agent_state(handle: &AppHandle, state: &AgentState) {
@@ -678,7 +818,12 @@ pub fn run() {
             set_agent,
             link_computer,
             titlebar_menu,
-            update_app
+            update_app,
+            remote_refresh,
+            remote_add,
+            remote_remove,
+            remote_mode,
+            remote_terminal
         ])
         .on_menu_event(|h, ev| on_menu(h, ev.id().as_ref()))
         .setup(|app| {
@@ -703,11 +848,18 @@ pub fn run() {
                 tray: Mutex::new(None),
                 linking: Mutex::new(false),
                 update: Mutex::new(None),
+                remote: Mutex::new(None),
             });
             let items = build_tray(&handle)?;
             *handle.state::<App>().tray.lock().unwrap() = Some(items);
             open_main(&handle, loaded.server.as_deref())?;
             watch_updates(handle.clone());
+            {
+                let h = handle.clone();
+                std::thread::spawn(move || {
+                    refresh_remote(&h);
+                });
+            }
             if let (true, Some(server)) = (loaded.agent, loaded.server) {
                 handle.state::<App>().agent.start(server);
             }

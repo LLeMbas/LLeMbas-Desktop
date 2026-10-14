@@ -16,6 +16,7 @@ const WORDS = {
   running: "agent running",
   elsewhere: "agent running (service)",
   failed: "agent stopped",
+  no_folders: "agent: no folders",
 }
 
 function render(s) {
@@ -25,7 +26,9 @@ function render(s) {
   } catch {}
   $("host").textContent = host
   $("host").title = s.server || ""
-  const state = s.agent.state
+  // Connected but allowed into no folder: a green light would say it works when it cannot.
+  const noFolders = s.remote && !(s.remote.enabled && s.remote.roots.length)
+  const state = s.agent.state === "running" && noFolders ? "no_folders" : s.agent.state
   $("agent").dataset.state = state
   $("agent-text").textContent = WORDS[state] ?? state
   $("agent").title = state === "failed" ? `Agent stopped: ${s.agent.detail}` : "Agent"
@@ -45,8 +48,13 @@ $("minimize").addEventListener("click", () => win.minimize())
 $("maximize").addEventListener("click", () => win.toggleMaximize())
 $("close").addEventListener("click", () => win.close())
 $("update").addEventListener("click", () => invoke("update_app"))
-$("menu").addEventListener("click", () => invoke("titlebar_menu"))
-$("agent").addEventListener("click", () => invoke("titlebar_menu"))
+// The menu opens under the button that was clicked: its bottom-left corner, in page pixels.
+function menuAt(button) {
+  const r = button.getBoundingClientRect()
+  return invoke("titlebar_menu", { x: r.left, y: r.bottom })
+}
+$("menu").addEventListener("click", (e) => menuAt(e.currentTarget))
+$("agent").addEventListener("click", (e) => menuAt(e.currentTarget))
 
 listen("status", (e) => render(e.payload))
 listen("maximized", (e) => maximized(!!e.payload))

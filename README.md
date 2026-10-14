@@ -39,7 +39,9 @@ built into the app before anything is installed.
 
 1. Start LLeMbas and enter your server's address. Sign in there as you would in a browser.
 2. From the tray, **Link this computer**. The approval page opens in the window; approve it.
-3. The agent starts. In the server's new-chat screen, choose this computer for an agent chat.
+3. The agent starts. Choose the folders it may work in (Settings…, *Add folder…*); a new
+   computer allows none until you do.
+4. In the server's Agents tab, start an agent chat on **Local** and pick one of those folders.
 
 The agent is the LLeMbas CLI's `lembas service`, using the CLI's own configuration
 (`~/.config/lembas`). The app's copy of the CLI lives in its own directory

@@ -33,7 +33,7 @@ p { margin: 0; }
 
 /* A field is three stacked parts on fixed rows: label, control row, hint. */
 .field { display: grid; grid-template-rows: auto var(--control-h) auto; gap: var(--sp-2); }
-label { font: var(--text-sm) / 1.4 var(--font-ui); color: var(--ink-muted); }
+label, .label { font: var(--text-sm) / 1.4 var(--font-ui); color: var(--ink-muted); }
 .hint { font-size: var(--text-sm); color: var(--ink-muted); min-height: 1.4em; }
 .hint.is-error, .status.is-error { color: var(--warning); }
 
@@ -77,3 +77,53 @@ input:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outl
   .row { grid-template-columns: 1fr; grid-template-rows: var(--control-h) var(--control-h); }
   .field { grid-template-rows: auto auto auto; }
 }
+
+/* The folder list: every row the same two tracks, the path cut from the left (its end is the
+   part that tells folders apart), the full path in the title. */
+.folders { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.folders li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: var(--control-h);
+  padding: 0 0 0 var(--sp-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.folders .path {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  font: var(--text-sm) var(--font-ui);
+}
+.folders .path bdi { direction: ltr; unicode-bidi: isolate; }
+.folders .btn { height: calc(var(--control-h) - 2px); box-shadow: none; border-width: 0 0 0 1px; }
+.folders .empty { padding: var(--sp-3); color: var(--warning); font-size: var(--text-sm); }
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  grid-auto-rows: auto var(--control-h) auto;
+  column-gap: var(--sp-4);
+  row-gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+/* Each field spans three shared rows (label, control, hint), so the controls of side-by-side
+   fields sit on one line whatever their labels and hints do. */
+.settings-grid .field { grid-row: span 3; grid-template-rows: subgrid; }
+select {
+  height: var(--control-h);
+  min-width: 0;
+  padding: 0 var(--sp-2);
+  font: var(--text-sm) var(--font-ui);
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.check { display: flex; align-items: center; gap: var(--sp-2); color: var(--ink); }
+.check input { width: 1.1rem; height: 1.1rem; margin: 0; accent-color: var(--accent); }

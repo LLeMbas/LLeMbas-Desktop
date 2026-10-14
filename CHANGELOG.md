@@ -6,6 +6,21 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Project folders**: Settings… (in the title bar's and the tray's menu) lists the folders the
+  agent may work in, with *Add folder…* (the system's folder dialog), *Remove*, the most an agent
+  chat may do there, and whether the server may open a terminal. Turning the agent on with no
+  folder chosen opens this page. Changes go through the bundled CLI (`lembas remote`).
+- The server is told it is shown in LLeMbas Desktop and on which computer, so it lists this
+  computer's device as **Local**, first.
+
+### Fixed
+
+- The title bar's menu opens under the button, not in the middle of the window.
+- The agent no longer shows a green light while it may open no folder: the title bar says
+  *agent: no folders*.
+
 ## [0.3.0] — 2026-10-14
 
 ### Added

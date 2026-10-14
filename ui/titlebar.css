@@ -64,7 +64,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .bar__agent[data-state="elsewhere"] .dot { background: var(--leaf); }
 .bar__agent[data-state="starting"] .dot { background: var(--accent); }
 .bar__agent[data-state="failed"] .dot,
-.bar__agent[data-state="not_linked"] .dot { background: var(--warning); }
+.bar__agent[data-state="not_linked"] .dot,
+.bar__agent[data-state="no_folders"] .dot { background: var(--warning); }
 
 .bar__update {
   padding: 0 var(--sp-3);

@@ -108,6 +108,25 @@ fn running_in(state: &Path) -> Option<u32> {
     (pid != 0 && alive(pid)).then_some(pid)
 }
 
+/// This computer's host name: what the CLI sent the server as `device_host` at login
+/// (`os.hostname()`, the kernel's node name), so the server can tell which device is this one.
+#[cfg(unix)]
+pub fn hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    let r = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if r != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let name = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+#[cfg(not(unix))]
+pub fn hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok().filter(|s| !s.is_empty())
+}
+
 #[cfg(unix)]
 pub fn alive(pid: u32) -> bool {
     // Signal 0 checks without sending; EPERM means it exists but is someone else's.

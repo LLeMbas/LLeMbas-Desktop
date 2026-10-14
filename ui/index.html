@@ -43,6 +43,35 @@
       <button type="button" class="btn btn--primary" id="open">Open the server</button>
     </div>
   </section>
+
+  <section aria-labelledby="folders-h" id="folders-section" hidden>
+    <h2 id="folders-h">[ PROJECT FOLDERS ]</h2>
+    <p class="muted">Agent chats from your server can work in these folders and anything inside
+      them — nowhere else on this computer. Start one in the server's Agents tab, on
+      <strong>Local</strong>.</p>
+    <ul class="folders" id="folders"></ul>
+    <p class="status" id="folders-status" aria-live="polite"></p>
+    <div class="row row--buttons">
+      <button type="button" class="btn btn--primary" id="add-folder">Add folder…</button>
+    </div>
+    <div class="settings-grid">
+      <div class="field">
+        <label for="max-mode">The most an agent chat may do here</label>
+        <select id="max-mode">
+          <option value="manual">Manual — asks first</option>
+          <option value="edit">Edit — asks before commands</option>
+          <option value="auto">Auto — asks nothing</option>
+          <option value="plan">Plan — changes nothing</option>
+        </select>
+        <p class="hint">A chat asking for more is lowered to this.</p>
+      </div>
+      <div class="field">
+        <span class="label">Terminal</span>
+        <label class="check"><input type="checkbox" id="terminal"> Let the server open a terminal here</label>
+        <p class="hint">A shell as you, in one of these folders.</p>
+      </div>
+    </div>
+  </section>
 </main>
 </body>
 </html>
