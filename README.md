@@ -55,6 +55,7 @@ Needs Rust (stable) and, on Linux, WebKitGTK 4.1 and an AppIndicator library:
 ```sh
 sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
 scripts/fetch-cli.sh                 # the bundled CLI, checked against its release signature
+scripts/fetch-tokens.sh              # verifies ui/tokens.css against tokens.lock.json
 cargo install tauri-cli --version "^2" --locked
 cargo tauri dev                      # or: cargo tauri build
 ```
@@ -62,6 +63,13 @@ cargo tauri dev                      # or: cargo tauri build
 There is no Node and no bundler: the app's one local page is plain HTML, CSS and JavaScript in
 `ui/`. Everything else on screen is the server's own web UI. The version of the CLI it carries is
 in `lembas-cli.version`.
+
+Two files in `ui/` are generated and committed. `ui/tokens.css` is the server's design tokens,
+copied by `scripts/fetch-tokens.sh <server tag>` from a checkout of the server beside this
+repository (`../LLeMbas`, or `LEMBAS_SERVER`) and pinned in `tokens.lock.json`; run it with a
+new tag when the server's look changes. `ui/i18n.js` is the pages' words in the server's
+languages, written by `scripts/gen-i18n.py` from the server's catalogues and the script's own
+table; run it when a string on the page changes.
 
 ## Licence
 

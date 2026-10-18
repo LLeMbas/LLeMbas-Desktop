@@ -34,5 +34,8 @@ jobs:
       - name: Tests
         working-directory: src-tauri
         run: cargo test --locked
-      - name: The first-run page's JavaScript
-        run: node --check ui/app.js
+      - name: The pages' JavaScript, and the script the content view runs
+        run: |
+          for f in ui/*.js src-tauri/src/*.js; do node --check "$f"; done
+      - name: The design tokens are the server's, as pinned
+        run: scripts/fetch-tokens.sh

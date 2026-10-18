@@ -8,6 +8,12 @@
 //!   window; the tray, the title bar's menu or starting the app again bring it back.
 //! - **The server's pages get no IPC.** They are remote content, and the one capability lists no
 //!   remote URL. Links that leave the server open in the system browser.
+//! - **The window follows the server's theme** (Moria or Shire, the account's choice, not the
+//!   desktop's): a script in the content view reports the page's `data-theme` by trying to
+//!   navigate to `llembas-theme:<name>`, which the navigation handler notes and refuses (see
+//!   `THEME_SCRIPT`). The frame, the title bar and the first-run page are painted in it, and it
+//!   is remembered for the next start. No IPC is granted for this: a navigation attempt is all
+//!   the page can make, and the only thing it can say is one of two theme names.
 //! - **The agent is the CLI's**: `lembas login --json` links this computer, and
 //!   `lembas service run` is the device (see `agent.rs`).
 
@@ -38,6 +44,11 @@ use agent::{Agent, State as AgentState};
 use remote::Remote;
 use settings::Settings;
 
+/// The colours the window paints itself, read out of `ui/tokens.css` by `build.rs`.
+mod tokens {
+    include!(concat!(env!("OUT_DIR"), "/tokens.rs"));
+}
+
 const MAIN: &str = "main";
 const TITLEBAR: &str = "titlebar";
 const CONTENT: &str = "content";
@@ -46,6 +57,54 @@ const TITLE_H: f64 = 36.0;
 /// The frame left around the webviews while the window is not maximized: the window's own
 /// surface, where the pointer resizes it (a webview over the edge would take the events).
 const FRAME: f64 = 4.0;
+/// The scheme the content page's theme report is a navigation to: `llembas-theme:shire`.
+const THEME_SCHEME: &str = "llembas-theme";
+/// Run in the content view on every page: reports the page's theme (see the module's notes).
+const THEME_SCRIPT: &str = include_str!("theme_report.js");
+
+/// The two looks the server's tokens define, named as `tokens.css` selects them (`data-theme`).
+/// A custom theme on the server reports its base, which is one of these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Theme {
+    Moria,
+    Shire,
+}
+
+impl Theme {
+    fn parse(name: &str) -> Option<Theme> {
+        match name {
+            "moria" => Some(Theme::Moria),
+            "shire" => Some(Theme::Shire),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Theme::Moria => "moria",
+            Theme::Shire => "shire",
+        }
+    }
+
+    /// The frame's colour: the theme's `--border`, which the pages draw their edges in.
+    fn frame(self) -> Color {
+        let (r, g, b) = match self {
+            Theme::Moria => tokens::MORIA_BORDER,
+            Theme::Shire => tokens::SHIRE_BORDER,
+        };
+        Color(r, g, b, 0xFF)
+    }
+
+    /// A webview's own colour, `--bg`: what shows where a page has not painted yet, so a
+    /// server page loading in the dark theme is not a white flash first.
+    fn background(self) -> Color {
+        let (r, g, b) = match self {
+            Theme::Moria => tokens::MORIA_BG,
+            Theme::Shire => tokens::SHIRE_BG,
+        };
+        Color(r, g, b, 0xFF)
+    }
+}
 
 struct App {
     config_dir: PathBuf,
@@ -57,6 +116,8 @@ struct App {
     update: Mutex<Option<String>>,
     /// The agent's folders, as `lembas remote` last answered.
     remote: Mutex<Option<Remote>>,
+    /// What the window is painted in: the server page's theme, as last reported.
+    theme: Mutex<Theme>,
 }
 
 struct TrayItems {
@@ -76,6 +137,10 @@ impl App {
             .map_err(|e| format!("could not save the settings: {e}"))?;
         Ok(s.clone())
     }
+
+    fn theme(&self) -> Theme {
+        *self.theme.lock().unwrap()
+    }
 }
 
 /// What the first-run page shows.
@@ -90,6 +155,8 @@ struct Status {
     update: Option<String>,
     /// Which folders the agent may open sessions in (None: not known yet).
     remote: Option<Remote>,
+    /// The theme the app's own pages are painted in: `moria` or `shire`, the server page's.
+    theme: &'static str,
 }
 
 fn status(app: &App) -> Status {
@@ -102,6 +169,7 @@ fn status(app: &App) -> Status {
         agent_wanted: app.agent.wanted(),
         update: app.update.lock().unwrap().clone(),
         remote: app.remote.lock().unwrap().clone(),
+        theme: app.theme().name(),
     }
 }
 
@@ -330,19 +398,21 @@ fn open_main(handle: &AppHandle, server: Option<&str>) -> Result<(), String> {
 }
 
 fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
+    let theme = handle.state::<App>().theme();
     let window = WindowBuilder::new(handle, MAIN)
         .title("LLeMbas")
         .inner_size(1280.0, 840.0)
         .min_inner_size(420.0, 560.0)
         .decorations(false)
-        // The frame's colour: the Moria border, as `--border` in the pages.
-        .background_color(Color(0x26, 0x30, 0x3A, 0xFF))
+        // The frame's colour: the theme's border, as the pages draw theirs.
+        .background_color(theme.frame())
         .build()?;
     let size = window
         .inner_size()?
         .to_logical::<f64>(window.scale_factor()?);
     window.add_child(
-        WebviewBuilder::new(TITLEBAR, WebviewUrl::App("titlebar.html".into())),
+        WebviewBuilder::new(TITLEBAR, WebviewUrl::App("titlebar.html".into()))
+            .background_color(theme.background()),
         LogicalPosition::new(FRAME, FRAME),
         LogicalSize::new(size.width - 2.0 * FRAME, TITLE_H),
     )?;
@@ -358,6 +428,8 @@ fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
     window.add_child(
         WebviewBuilder::new(CONTENT, url)
             .user_agent(&user_agent())
+            .background_color(theme.background())
+            .initialization_script(THEME_SCRIPT)
             .on_navigation(move |url| allowed(&nav, url)),
         LogicalPosition::new(FRAME, FRAME + TITLE_H),
         LogicalSize::new(
@@ -430,7 +502,14 @@ fn place(window: &Window, framed: bool) {
 }
 
 /// The window may show the app's own pages and the server; anything else opens in the browser.
+/// A `llembas-theme:` "navigation" is the content page reporting its theme: noted, never loaded.
 fn allowed(handle: &AppHandle, url: &Url) -> bool {
+    if url.scheme() == THEME_SCHEME {
+        if let Some(theme) = Theme::parse(url.path()) {
+            set_theme(handle, theme);
+        }
+        return false;
+    }
     let local = matches!(url.scheme(), "tauri" | "asset")
         || url.host_str() == Some("tauri.localhost")
         || url.scheme() == "about"
@@ -447,6 +526,29 @@ fn allowed(handle: &AppHandle, url: &Url) -> bool {
         let _ = handle.opener().open_url(url.as_str(), None::<&str>);
     }
     same
+}
+
+/// The server page shows `theme`: paint the frame and the webviews in it, remember it for the
+/// next start, and tell the app's own pages (they hear it as `status`).
+fn set_theme(handle: &AppHandle, theme: Theme) {
+    let app = handle.state::<App>();
+    {
+        let mut current = app.theme.lock().unwrap();
+        if *current == theme {
+            return;
+        }
+        *current = theme;
+    }
+    let _ = app.update(|s| s.theme = Some(theme.name().into()));
+    if let Some(w) = main_window(handle) {
+        let _ = w.set_background_color(Some(theme.frame()));
+    }
+    for label in [TITLEBAR, CONTENT] {
+        if let Some(v) = handle.get_webview(label) {
+            let _ = v.set_background_color(Some(theme.background()));
+        }
+    }
+    let _ = handle.emit("status", status_of(handle));
 }
 
 /// Link this computer: `lembas login <server> --json`, with the approval shown in the window
@@ -841,6 +943,12 @@ pub fn run() {
                 let _ = notify_handle.run_on_main_thread(move || on_agent_state(&h, &s));
             });
             let loaded = settings::load(&config_dir);
+            // Until a server page has said, the server's own default: Moria.
+            let theme = loaded
+                .theme
+                .as_deref()
+                .and_then(Theme::parse)
+                .unwrap_or(Theme::Moria);
             app.manage(App {
                 config_dir,
                 settings: Mutex::new(loaded.clone()),
@@ -849,6 +957,7 @@ pub fn run() {
                 linking: Mutex::new(false),
                 update: Mutex::new(None),
                 remote: Mutex::new(None),
+                theme: Mutex::new(theme),
             });
             let items = build_tray(&handle)?;
             *handle.state::<App>().tray.lock().unwrap() = Some(items);
@@ -890,4 +999,38 @@ pub fn run() {
                 handle.state::<App>().agent.stop();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_theme_is_one_of_two_names() {
+        assert_eq!(Theme::parse("moria"), Some(Theme::Moria));
+        assert_eq!(Theme::parse("shire"), Some(Theme::Shire));
+        assert_eq!(Theme::parse("Shire"), None);
+        assert_eq!(Theme::parse(""), None);
+        for t in [Theme::Moria, Theme::Shire] {
+            assert_eq!(Theme::parse(t.name()), Some(t));
+        }
+    }
+
+    #[test]
+    fn the_themes_come_out_of_tokens_css_as_two_different_looks() {
+        // build.rs read these out of ui/tokens.css: a light and a dark theme cannot share
+        // either colour, and the frame is not the page.
+        assert_ne!(Theme::Moria.frame(), Theme::Shire.frame());
+        assert_ne!(Theme::Moria.background(), Theme::Shire.background());
+        assert_ne!(Theme::Moria.frame(), Theme::Moria.background());
+        assert_ne!(Theme::Shire.frame(), Theme::Shire.background());
+    }
+
+    #[test]
+    fn the_theme_report_is_a_navigation_the_handler_can_read() {
+        let url = Url::parse("llembas-theme:shire").unwrap();
+        assert_eq!(url.scheme(), THEME_SCHEME);
+        assert_eq!(Theme::parse(url.path()), Some(Theme::Shire));
+        assert!(THEME_SCRIPT.contains(THEME_SCHEME));
+    }
 }

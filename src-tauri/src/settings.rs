@@ -13,6 +13,10 @@ pub struct Settings {
     pub server: Option<String>,
     /// Run the agent while the app runs (once this computer is linked to the server).
     pub agent: bool,
+    /// The server page's theme the last time it said (`moria` or `shire`): what the window's
+    /// frame, the title bar and the first-run page are painted in until the server says again.
+    /// None until a server page has been shown.
+    pub theme: Option<String>,
 }
 
 pub fn file(config_dir: &Path) -> PathBuf {
@@ -84,6 +88,7 @@ mod tests {
         let s = Settings {
             server: Some("https://ai.example".into()),
             agent: true,
+            theme: Some("shire".into()),
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), s);
