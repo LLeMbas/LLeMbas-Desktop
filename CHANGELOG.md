@@ -6,6 +6,12 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-18
+
+Carries LLeMbas CLI 1.3.0: a plan in every agent chat, the instance's instructions and
+knowledge scope on the device, Edit and Regenerate on agent chats. The app's look comes from
+the server's tokens and follows the page's theme; its own pages speak nine languages.
+
 ### Changed
 
 - The app's own pages take their look from the server's `tokens.css`, copied by

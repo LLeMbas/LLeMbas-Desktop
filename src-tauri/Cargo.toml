@@ -1,6 +1,6 @@
 [package]
 name = "llembas-desktop"
-version = "0.4.0"
+version = "0.5.0"
 description = "LLeMbas Desktop: your LLeMbas server in a window, with the agent on this computer"
 authors = ["Jaroslav Beneš"]
 license = "MIT"
