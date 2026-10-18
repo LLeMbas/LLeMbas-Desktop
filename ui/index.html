@@ -7,6 +7,8 @@
 <title>LLeMbas</title>
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="app.css">
+<script src="theme.js"></script>
+<script src="i18n.js" defer></script>
 <script src="app.js" defer></script>
 </head>
 <body>
@@ -20,55 +22,54 @@
   </header>
 
   <section aria-labelledby="server-h">
-    <h2 id="server-h">[ SERVER ]</h2>
+    <h2 id="server-h" data-i18n>Server</h2>
     <form id="server-form" class="field" novalidate>
-      <label for="address">Address of your LLeMbas server</label>
+      <label for="address" data-i18n>Address of your LLeMbas server</label>
       <div class="row">
         <input id="address" name="address" type="text" inputmode="url" autocomplete="url"
                placeholder="https://ai.example" spellcheck="false" required>
-        <button type="submit" class="btn btn--primary">Connect</button>
+        <button type="submit" class="btn btn--primary" data-i18n>Connect</button>
       </div>
-      <p class="hint" id="server-hint" aria-live="polite">Sign in there as you would in a browser.</p>
+      <p class="hint" id="server-hint" aria-live="polite" data-i18n>Sign in there as you would in a browser.</p>
     </form>
   </section>
 
   <section aria-labelledby="agent-h" id="agent-section" hidden>
-    <h2 id="agent-h">[ AGENT ]</h2>
-    <p class="muted">The agent lets agent chats on your server work in this computer's projects.
+    <h2 id="agent-h" data-i18n>Agent</h2>
+    <p class="muted" data-i18n>The agent lets agent chats on your server work in this computer's projects.
       It is the LLeMbas CLI, built in, running in the background while the app runs.</p>
     <p class="status" id="agent-status" aria-live="polite"></p>
     <div class="row row--buttons">
-      <button type="button" class="btn" id="link">Link this computer</button>
-      <button type="button" class="btn" id="toggle">Start the agent</button>
-      <button type="button" class="btn btn--primary" id="open">Open the server</button>
+      <button type="button" class="btn" id="link" data-i18n>Link this computer</button>
+      <button type="button" class="btn" id="toggle" data-i18n>Start the agent</button>
+      <button type="button" class="btn btn--primary" id="open" data-i18n>Open the server</button>
     </div>
   </section>
 
   <section aria-labelledby="folders-h" id="folders-section" hidden>
-    <h2 id="folders-h">[ PROJECT FOLDERS ]</h2>
-    <p class="muted">Agent chats from your server can work in these folders and anything inside
-      them — nowhere else on this computer. Start one in the server's Agents tab, on
-      <strong>Local</strong>.</p>
+    <h2 id="folders-h" data-i18n>Project folders</h2>
+    <p class="muted" data-i18n>Agent chats from your server can work in these folders and anything inside
+      them — nowhere else on this computer. Start one in the server's Agents tab, on “Local”.</p>
     <ul class="folders" id="folders"></ul>
     <p class="status" id="folders-status" aria-live="polite"></p>
     <div class="row row--buttons">
-      <button type="button" class="btn btn--primary" id="add-folder">Add folder…</button>
+      <button type="button" class="btn btn--primary" id="add-folder" data-i18n>Add folder…</button>
     </div>
     <div class="settings-grid">
       <div class="field">
-        <label for="max-mode">The most an agent chat may do here</label>
+        <label for="max-mode" data-i18n>The most an agent chat may do here</label>
         <select id="max-mode">
-          <option value="manual">Manual — asks first</option>
-          <option value="edit">Edit — asks before commands</option>
-          <option value="auto">Auto — asks nothing</option>
-          <option value="plan">Plan — changes nothing</option>
+          <option value="manual" data-i18n>Manual — asks first</option>
+          <option value="edit" data-i18n>Edit — asks before commands</option>
+          <option value="auto" data-i18n>Auto — asks nothing</option>
+          <option value="plan" data-i18n>Plan — changes nothing</option>
         </select>
-        <p class="hint">A chat asking for more is lowered to this.</p>
+        <p class="hint" data-i18n>A chat asking for more is lowered to this.</p>
       </div>
       <div class="field">
-        <span class="label">Terminal</span>
-        <label class="check"><input type="checkbox" id="terminal"> Let the server open a terminal here</label>
-        <p class="hint">A shell as you, in one of these folders.</p>
+        <span class="label" data-i18n>Terminal</span>
+        <label class="check"><input type="checkbox" id="terminal"> <span data-i18n>Let the server open a terminal here</span></label>
+        <p class="hint" data-i18n>A shell as you, in one of these folders.</p>
       </div>
     </div>
   </section>

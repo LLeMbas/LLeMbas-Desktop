@@ -1,5 +1,6 @@
-// The first-run page. It talks to the app over Tauri's IPC — four commands, see src-tauri/src/lib.rs.
+// The first-run page. It talks to the app over Tauri's IPC — the commands in src-tauri/src/lib.rs.
 // The server's own pages never get this: they are remote content with no capability.
+// Every word shown goes through `t` (i18n.js, loaded before this), in the system's language.
 "use strict"
 
 const { invoke } = window.__TAURI__.core
@@ -8,28 +9,29 @@ const { listen } = window.__TAURI__.event
 const $ = (id) => document.getElementById(id)
 
 const AGENT = {
-  off: () => ["The agent is off.", ""],
-  not_linked: () => ["This computer is not linked to the server yet.", ""],
-  starting: () => ["The agent is starting…", ""],
-  running: () => ["The agent is running: agent chats can use this computer.", "is-ok"],
-  elsewhere: (pid) => [`A LLeMbas CLI service already runs here (pid ${pid}); it is this computer's agent.`, "is-ok"],
-  failed: (why) => [`The agent stopped: ${why}. Trying again shortly.`, "is-error"],
+  off: () => [t("The agent is off."), ""],
+  not_linked: () => [t("This computer is not linked to the server yet."), ""],
+  starting: () => [t("The agent is starting…"), ""],
+  running: () => [t("The agent is running: agent chats can use this computer."), "is-ok"],
+  elsewhere: (pid) => [t("A LLeMbas CLI service already runs here (pid %(pid)s); it is this computer's agent.", { pid }), "is-ok"],
+  failed: (why) => [t("The agent stopped: %(why)s. Trying again shortly.", { why }), "is-error"],
 }
 
 function render(s) {
+  window.lembasTheme.apply(s.theme)
   $("version").textContent = s.version
   if (s.server && !$("address").value) $("address").value = s.server
   $("agent-section").hidden = !s.server
   const noFolders = s.remote && !(s.remote.enabled && s.remote.roots.length)
   const [text, cls] =
     s.agent.state === "running" && noFolders
-      ? ["The agent is connected, but may open no folder yet: add one below.", "is-error"]
+      ? [t("The agent is connected, but may open no folder yet: add one below."), "is-error"]
       : (AGENT[s.agent.state] ?? AGENT.off)(s.agent.detail)
   const status = $("agent-status")
   status.textContent = text
   status.className = `status ${cls}`
-  $("link").textContent = s.linked ? "Link again" : "Link this computer"
-  $("toggle").textContent = s.agent_wanted ? "Stop the agent" : "Start the agent"
+  $("link").textContent = s.linked ? t("Link again") : t("Link this computer")
+  $("toggle").textContent = s.agent_wanted ? t("Stop the agent") : t("Start the agent")
   $("toggle").disabled = !s.linked && !s.agent_wanted
   renderFolders(s)
 }
@@ -43,7 +45,7 @@ function renderFolders(s) {
   if (!r.enabled || !r.roots.length) {
     const li = document.createElement("li")
     li.className = "empty"
-    li.textContent = "No folder yet: the agent can open nothing. Add the folder of a project."
+    li.textContent = t("No folder yet: the agent can open nothing. Add the folder of a project.")
     list.append(li)
   }
   for (const dir of r.enabled ? r.roots : []) {
@@ -57,8 +59,8 @@ function renderFolders(s) {
     const remove = document.createElement("button")
     remove.type = "button"
     remove.className = "btn"
-    remove.textContent = "Remove"
-    remove.setAttribute("aria-label", `Remove ${dir}`)
+    remove.textContent = t("Remove")
+    remove.setAttribute("aria-label", t("Remove %(dir)s", { dir }))
     remove.addEventListener("click", () => invoke("remote_remove", { dir }))
     li.append(path, remove)
     list.append(li)
@@ -79,7 +81,7 @@ $("server-form").addEventListener("submit", async (e) => {
   const button = e.target.querySelector("button")
   button.disabled = true
   hint.className = "hint"
-  hint.textContent = "Looking for a LLeMbas server there…"
+  hint.textContent = t("Looking for a LLeMbas server there…")
   try {
     await invoke("set_server", { address: $("address").value })
     // The window now shows the server.
