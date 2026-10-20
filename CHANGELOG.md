@@ -6,6 +6,17 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-20
+
+Carries LLeMbas CLI 1.5.0: harness spec 2.0.0 — background work as jobs the person can see,
+enter and stop, and subagents that run in the background and talk back.
+
+### Changed
+
+- Carries LLeMbas CLI 1.5.0. The agent on this computer runs subagents in the background, keeps
+  every background command and subagent as a job of its session, and reports them to a LLeMbas
+  server 1.6.0, which shows them in the chat with Stop and a message box.
+
 ## [0.6.0] — 2026-10-20
 
 Carries LLeMbas CLI 1.4.0: harness spec 1.2.0, so the agent's memory, notes and skills are the
