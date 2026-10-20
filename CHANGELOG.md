@@ -6,6 +6,17 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-20
+
+Carries LLeMbas CLI 1.4.0: harness spec 1.2.0, so the agent's memory, notes and skills are the
+same tools as the server's.
+
+### Changed
+
+- Carries LLeMbas CLI 1.4.0. The agent on this computer and a LLeMbas server 1.5.0 now send a
+  model the same library tools — `memory`, `note_view`, `note_manage`, `skills_list`,
+  `skill_view`, `skill_manage` — whether the agent uses its own library or the server's.
+
 ## [0.5.0] — 2026-10-18
 
 Carries LLeMbas CLI 1.3.0: a plan in every agent chat, the instance's instructions and
