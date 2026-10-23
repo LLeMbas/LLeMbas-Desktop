@@ -30,7 +30,7 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::webview::WebviewBuilder;
+use tauri::webview::{PermissionKind, PermissionResponse, WebviewBuilder};
 use tauri::window::{Color, WindowBuilder};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent, Url, Webview, WebviewUrl,
@@ -425,20 +425,54 @@ fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
         pin_titlebar(&bar);
     }
     let nav = handle.clone();
+    let perm = handle.clone();
     window.add_child(
         WebviewBuilder::new(CONTENT, url)
             .user_agent(&user_agent())
             .background_color(theme.background())
             .initialization_script(THEME_SCRIPT)
-            .on_navigation(move |url| allowed(&nav, url)),
+            .on_navigation(move |url| allowed(&nav, url))
+            .on_permission_request(move |view, kind| permission(&perm, &view, kind)),
         LogicalPosition::new(FRAME, FRAME + TITLE_H),
         LogicalSize::new(
             size.width - 2.0 * FRAME,
             (size.height - TITLE_H - 2.0 * FRAME).max(0.0),
         ),
     )?;
+    #[cfg(target_os = "linux")]
+    if let Some(content) = handle.get_webview(CONTENT) {
+        enable_capture(&content);
+    }
     layout(&window);
     Ok(())
+}
+
+/// The server's dictation asks for the microphone, and a webview answers a permission request
+/// only if its app does: WebKitGTK refuses anything it is not answered on, and has no prompt of
+/// its own -- so the microphone simply said "Permission may be blocked" with no way to allow it.
+/// Granted for the microphone, in the content view, once a server is chosen, and for nothing
+/// else (a camera or a screen gets the platform's default, which on Linux is no). The content view
+/// never shows another origin: `allowed` sends every other site to the system browser.
+fn permission(handle: &AppHandle, view: &Webview, kind: PermissionKind) -> PermissionResponse {
+    if kind != PermissionKind::Microphone || view.label() != CONTENT {
+        return PermissionResponse::Default;
+    }
+    if handle.state::<App>().settings().server.is_some() {
+        PermissionResponse::Allow
+    } else {
+        PermissionResponse::Deny
+    }
+}
+
+/// Media capture on, explicitly: current WebKitGTK has it on by default, but the AppImage carries
+/// the older WebKitGTK of the system it was built on.
+#[cfg(target_os = "linux")]
+fn enable_capture(view: &Webview) {
+    let _ = view.with_webview(|pv| {
+        use gtk::prelude::*;
+        let settings: gtk::glib::Object = pv.inner().property("settings");
+        settings.set_property("enable-media-stream", true);
+    });
 }
 
 /// On Linux, Tauri packs every webview of a window into the window's GTK box, each with an equal

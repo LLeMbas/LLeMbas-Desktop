@@ -6,6 +6,24 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-23
+
+The microphone works, and LLeMbas CLI 1.5.1 inside.
+
+### Fixed
+
+- **Dictation said the microphone was blocked, with no way to allow it.** The server's page asks
+  for the microphone, and a webview grants it only if the app answers: WebKitGTK refuses whatever
+  it is not answered on, and shows no prompt of its own. Desktop now allows the microphone -- the
+  microphone only, and only for the server's page in the content view; a camera or a screen still
+  gets the platform's refusal. Media capture is also switched on explicitly, for the older
+  WebKitGTK the AppImage carries.
+
+### Changed
+
+- Carries LLeMbas CLI 1.5.1: an image counts by its size, so a screenshot no longer makes the
+  agent compact.
+
 ## [0.7.0] — 2026-10-20
 
 Carries LLeMbas CLI 1.5.0: harness spec 2.0.0 — background work as jobs the person can see,
