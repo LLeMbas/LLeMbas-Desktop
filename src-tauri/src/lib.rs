@@ -439,10 +439,6 @@ fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
             (size.height - TITLE_H - 2.0 * FRAME).max(0.0),
         ),
     )?;
-    #[cfg(target_os = "linux")]
-    if let Some(content) = handle.get_webview(CONTENT) {
-        enable_capture(&content);
-    }
     layout(&window);
     Ok(())
 }
@@ -462,17 +458,6 @@ fn permission(handle: &AppHandle, view: &Webview, kind: PermissionKind) -> Permi
     } else {
         PermissionResponse::Deny
     }
-}
-
-/// Media capture on, explicitly: current WebKitGTK has it on by default, but the AppImage carries
-/// the older WebKitGTK of the system it was built on.
-#[cfg(target_os = "linux")]
-fn enable_capture(view: &Webview) {
-    let _ = view.with_webview(|pv| {
-        use gtk::prelude::*;
-        let settings: gtk::glib::Object = pv.inner().property("settings");
-        settings.set_property("enable-media-stream", true);
-    });
 }
 
 /// On Linux, Tauri packs every webview of a window into the window's GTK box, each with an equal
