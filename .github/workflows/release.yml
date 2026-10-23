@@ -62,5 +62,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           git tag -l --format='%(contents)' "$TAG" | sed '/-----BEGIN SSH SIGNATURE-----/,$d' > notes.md
+          # A tag moved to a fixed commit and pushed again replaces its release:
+          # the old one, and the files built from the old commit, go first.
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "LLeMbas Desktop $VERSION" --notes-file notes.md dist/*

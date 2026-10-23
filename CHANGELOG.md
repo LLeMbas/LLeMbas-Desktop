@@ -6,16 +6,7 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
-## [0.7.2] — 2026-10-24
-
-### Fixed
-
-- **0.7.1 did not start on Linux.** It read a WebKitGTK property that can only be written, and the
-  app stopped before its window appeared ("property 'settings' of type 'WebKitWebView' is not
-  readable"). That line is gone; the microphone permission it was meant to back up stays, and
-  current WebKitGTK has media capture on by default.
-
-## [0.7.1] — 2026-10-23
+## [0.7.1] — 2026-10-24
 
 The microphone works, and LLeMbas CLI 1.5.1 inside.
 
@@ -25,8 +16,7 @@ The microphone works, and LLeMbas CLI 1.5.1 inside.
   for the microphone, and a webview grants it only if the app answers: WebKitGTK refuses whatever
   it is not answered on, and shows no prompt of its own. Desktop now allows the microphone -- the
   microphone only, and only for the server's page in the content view; a camera or a screen still
-  gets the platform's refusal. Media capture is also switched on explicitly, for the older
-  WebKitGTK the AppImage carries.
+  gets the platform's refusal.
 
 ### Changed
 
