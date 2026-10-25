@@ -6,6 +6,17 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-10-25
+
+Linking this computer again leaves one device, and LLeMbas CLI 1.5.2 inside.
+
+### Changed
+
+- Carries LLeMbas CLI 1.5.2. Linking this computer again no longer leaves an offline copy of it on
+  the server holding its agent chats: the old link is signed out, and a LLeMbas server 1.7.2 or
+  later moves its chats to the new one. When the agent cannot connect, the menu's status now says
+  why -- a certificate that is not trusted, for instance -- instead of only "could not reach".
+
 ## [0.7.1] — 2026-10-24
 
 The microphone works, and LLeMbas CLI 1.5.1 inside.
