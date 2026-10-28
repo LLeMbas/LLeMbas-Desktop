@@ -1,5 +1,5 @@
-//! Besides Tauri's own build step: the two themes' colours the window itself paints, read out
-//! of `ui/tokens.css` (the server's tokens, fetched by `scripts/fetch-tokens.sh`) into
+//! Besides Tauri's own build step: the two themes' page colour, which the window itself paints
+//! before the page has (so a dark theme does not start white), read out of `ui/tokens.css` (the server's tokens, fetched by `scripts/fetch-tokens.sh`) into
 //! `$OUT_DIR/tokens.rs`, so no colour is written in Rust. `lib.rs` includes that file.
 
 use std::env;
@@ -10,7 +10,7 @@ use std::path::Path;
 /// Rust names the constants get.
 const THEMES: [(&str, &str); 2] = [("moria", "MORIA"), ("shire", "SHIRE")];
 /// The tokens taken from each theme, by the custom property and the constant's suffix.
-const TOKENS: [(&str, &str); 2] = [("--bg", "BG"), ("--border", "BORDER")];
+const TOKENS: [(&str, &str); 1] = [("--bg", "BG")];
 
 fn main() {
     let tokens = Path::new("../ui/tokens.css");

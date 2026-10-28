@@ -1,8 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The app's own pages: the title bar and the first-run page. The server's web UI is a remote page in the same window and gets no IPC at all: this capability lists no remote URL. The window permissions are the title bar's: moving, resizing, minimising, maximising and closing (which hides).",
-  "windows": ["main"],
+  "description": "The app's own page (ui/), the only content with the bridge. It names the main window and no remote URL: no server page is ever loaded, and HTML the viewer shows is a sealed frame on its own scheme, which no capability names. The window permissions are the title bar's: moving, resizing, minimising, maximising and closing (which hides).",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

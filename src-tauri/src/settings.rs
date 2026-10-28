@@ -1,22 +1,35 @@
-//! What the app remembers: which server it opens, and whether the agent should run. One small
-//! JSON file in the app's config directory; nothing secret is in it (the device's key is the
+//! What the app remembers: which server it talks to, whether the agent should run, the theme and
+//! whether to notify. One small JSON file in the app's config directory; nothing secret is in it
+//! (the app's sign-in is `account.json`, readable by this user only; the device's key is the
 //! LLeMbas CLI's, in its own config).
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
     /// The server's base address, `https://host[:port]`, with no trailing slash.
     pub server: Option<String>,
     /// Run the agent while the app runs (once this computer is linked to the server).
     pub agent: bool,
-    /// The server page's theme the last time it said (`moria` or `shire`): what the window's
-    /// frame, the title bar and the first-run page are painted in until the server says again.
-    /// None until a server page has been shown.
+    /// The account's theme the last time the server said (`moria` or `shire`): what the window
+    /// is painted in until it says again. None until it has.
     pub theme: Option<String>,
+    /// Say with a notification when a reply or an agent's work finishes out of sight.
+    pub notify: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            server: None,
+            agent: false,
+            theme: None,
+            notify: true,
+        }
+    }
 }
 
 pub fn file(config_dir: &Path) -> PathBuf {
@@ -85,10 +98,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("llembas-desktop-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(load(&dir), Settings::default());
+        assert!(Settings::default().notify);
+        // A file from before 1.0 has no `notify`: it is on.
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            file(&dir),
+            r#"{"server":"https://ai.example","agent":true}"#,
+        )
+        .unwrap();
+        assert!(load(&dir).notify);
         let s = Settings {
             server: Some("https://ai.example".into()),
             agent: true,
             theme: Some("shire".into()),
+            notify: false,
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), s);

@@ -10,7 +10,10 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src ipc: http://ipc.localhost; frame-src llembas-sealed: http://llembas-sealed.localhost; object-src 'none'; base-uri 'none'; form-action 'none'",
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {
@@ -20,8 +23,8 @@
       "appimage"
     ],
     "category": "Productivity",
-    "shortDescription": "Your LLeMbas server in a window, with the agent on this computer",
-    "longDescription": "LLeMbas Desktop opens your LLeMbas server's web UI in a window of its own and runs the LLeMbas CLI agent on this computer, so agent chats can work in your projects here without a terminal.",
+    "shortDescription": "The LLeMbas agent on this computer, and your server's chats",
+    "longDescription": "LLeMbas Desktop runs the LLeMbas CLI agent on this computer, so agent chats can work in your projects here without a terminal, and shows them, and the chats on your LLeMbas 2.0 server, in an app of its own: the agent's working directory and the server's files side by side, and a viewer for what the agent shows you.",
     "license": "MIT",
     "homepage": "https://llembas.eu",
     "publisher": "LLeMbas",

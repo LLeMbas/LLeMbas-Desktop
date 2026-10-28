@@ -1,47 +1,51 @@
-//! LLeMbas Desktop: the server's web UI in a window of its own, and the LLeMbas CLI's agent
-//! running on this computer, so agent chats can work in its projects without a terminal.
+//! LLeMbas Desktop: the agent on this computer, and the chats on your LLeMbas server, in an app
+//! of its own.
 //!
-//! - **One window, `main`, drawn by the app**: no system decoration, the app's own title bar (a
-//!   local page, `ui/titlebar.html`) on top and the content below it — before a server is chosen
-//!   the first-run page (`ui/index.html`), after it the server itself. Two webviews in one window,
-//!   so the server's pages never share a document with the app's controls. Closing hides the
-//!   window; the tray, the title bar's menu or starting the app again bring it back.
-//! - **The server's pages get no IPC.** They are remote content, and the one capability lists no
-//!   remote URL. Links that leave the server open in the system browser.
-//! - **The window follows the server's theme** (Moria or Shire, the account's choice, not the
-//!   desktop's): a script in the content view reports the page's `data-theme` by trying to
-//!   navigate to `llembas-theme:<name>`, which the navigation handler notes and refuses (see
-//!   `THEME_SCRIPT`). The frame, the title bar and the first-run page are painted in it, and it
-//!   is remembered for the next start. No IPC is granted for this: a navigation attempt is all
-//!   the page can make, and the only thing it can say is one of two theme names.
+//! - **One window, `main`, one page: the app's own** (`ui/`). It draws its own title bar, the
+//!   chats, the two explorers and the viewer. No server page is ever loaded into it: the page
+//!   talks to the server's `/api/v2` through the commands here (`server.rs`), and the token that
+//!   takes stays in Rust.
+//! - **Only that page gets the bridge.** The one capability names the `main` window and no remote
+//!   URL; the window refuses every navigation away from the app's page, and HTML the viewer shows
+//!   is a sealed frame on a scheme of its own with no IPC and no network (`sealed.rs`).
 //! - **The agent is the CLI's**: `lembas login --json` links this computer, and
-//!   `lembas service run` is the device (see `agent.rs`).
+//!   `lembas service run` is the device (`agent.rs`). The app reads the CLI's state and runs its
+//!   commands; it never writes the CLI's files.
+//! - **A 2.0 server only.** Discovery is checked before anything else (`server::check`).
 
 mod agent;
 mod cli;
+mod files;
 mod remote;
+mod sealed;
+mod server;
 mod settings;
+mod watch;
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use serde_json::Value;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::webview::{PermissionKind, PermissionResponse, WebviewBuilder};
-use tauri::window::{Color, WindowBuilder};
+use tauri::window::Color;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent, Url, Webview, WebviewUrl,
-    Window, WindowEvent, Wry,
+    AppHandle, Emitter, LogicalPosition, Manager, RunEvent, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, Window, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
 use agent::{Agent, State as AgentState};
 use remote::Remote;
+use server::{Account, ApiError, Discovery};
 use settings::Settings;
 
 /// The colours the window paints itself, read out of `ui/tokens.css` by `build.rs`.
@@ -50,20 +54,9 @@ mod tokens {
 }
 
 const MAIN: &str = "main";
-const TITLEBAR: &str = "titlebar";
-const CONTENT: &str = "content";
-/// The title bar's height, in logical pixels: `--titlebar-h` in `ui/titlebar.css`.
-const TITLE_H: f64 = 36.0;
-/// The frame left around the webviews while the window is not maximized: the window's own
-/// surface, where the pointer resizes it (a webview over the edge would take the events).
-const FRAME: f64 = 4.0;
-/// The scheme the content page's theme report is a navigation to: `llembas-theme:shire`.
-const THEME_SCHEME: &str = "llembas-theme";
-/// Run in the content view on every page: reports the page's theme (see the module's notes).
-const THEME_SCRIPT: &str = include_str!("theme_report.js");
 
 /// The two looks the server's tokens define, named as `tokens.css` selects them (`data-theme`).
-/// A custom theme on the server reports its base, which is one of these.
+/// The account's theme, as `/api/v2/me` says; a custom theme counts as Moria, the default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Theme {
     Moria,
@@ -86,17 +79,8 @@ impl Theme {
         }
     }
 
-    /// The frame's colour: the theme's `--border`, which the pages draw their edges in.
-    fn frame(self) -> Color {
-        let (r, g, b) = match self {
-            Theme::Moria => tokens::MORIA_BORDER,
-            Theme::Shire => tokens::SHIRE_BORDER,
-        };
-        Color(r, g, b, 0xFF)
-    }
-
-    /// A webview's own colour, `--bg`: what shows where a page has not painted yet, so a
-    /// server page loading in the dark theme is not a white flash first.
+    /// The window's own colour, `--bg`: what shows before the page has painted, so a dark
+    /// theme does not start with a white flash.
     fn background(self) -> Color {
         let (r, g, b) = match self {
             Theme::Moria => tokens::MORIA_BG,
@@ -116,8 +100,19 @@ struct App {
     update: Mutex<Option<String>>,
     /// The agent's folders, as `lembas remote` last answered.
     remote: Mutex<Option<Remote>>,
-    /// What the window is painted in: the server page's theme, as last reported.
     theme: Mutex<Theme>,
+    /// The chosen server, once discovery has passed.
+    server: Mutex<Option<Discovery>>,
+    /// Why the chosen server was refused, or could not be reached, at the last look.
+    refused: Mutex<Option<String>>,
+    /// The app's own sign-in to that server.
+    account: Mutex<Option<Account>>,
+    /// Set to cancel the device login in progress.
+    signing_in: Mutex<Option<Arc<AtomicBool>>>,
+    streams: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    next_stream: AtomicU64,
+    sealed: sealed::Pages,
+    watch: watch::Watch,
 }
 
 struct TrayItems {
@@ -141,13 +136,39 @@ impl App {
     fn theme(&self) -> Theme {
         *self.theme.lock().unwrap()
     }
+
+    /// The app door and the token, when the app is signed in to a server that passed.
+    fn door(&self) -> Option<(String, String)> {
+        let server = self.server.lock().unwrap().clone()?;
+        let account = self.account.lock().unwrap().clone()?;
+        Some((server.app, account.token))
+    }
+
+    /// The folders the agent may use: what the explorer and the viewer may read.
+    fn roots(&self) -> Vec<String> {
+        self.remote
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|r| r.usable())
+            .map(|r| r.roots.clone())
+            .unwrap_or_default()
+    }
 }
 
-/// What the first-run page shows.
+/// What the app's page draws from: everything but the token.
 #[derive(Clone, Serialize)]
 struct Status {
     version: &'static str,
+    /// The chosen server's address.
     server: Option<String>,
+    /// What discovery said about it, once it passed.
+    discovery: Option<Discovery>,
+    refused: Option<String>,
+    /// Discovery has answered (or failed) for the chosen server.
+    checked: bool,
+    account: Option<Account>,
+    signing_in: bool,
     linked: bool,
     agent: AgentState,
     agent_wanted: bool,
@@ -155,22 +176,41 @@ struct Status {
     update: Option<String>,
     /// Which folders the agent may open sessions in (None: not known yet).
     remote: Option<Remote>,
-    /// The theme the app's own pages are painted in: `moria` or `shire`, the server page's.
     theme: &'static str,
+    /// This computer's name: the device an agent chat on it runs on says this `host`.
+    host: Option<String>,
+    notify: bool,
 }
 
 fn status(app: &App) -> Status {
     let s = app.settings();
+    let discovery = app.server.lock().unwrap().clone();
+    let refused = app.refused.lock().unwrap().clone();
     Status {
         version: env!("CARGO_PKG_VERSION"),
         linked: s.server.as_deref().is_some_and(cli::linked_to),
+        checked: s.server.is_none() || discovery.is_some() || refused.is_some(),
         server: s.server,
+        discovery,
+        refused,
+        account: app.account.lock().unwrap().as_ref().map(Account::public),
+        signing_in: app.signing_in.lock().unwrap().is_some(),
         agent: app.agent.state(),
         agent_wanted: app.agent.wanted(),
         update: app.update.lock().unwrap().clone(),
         remote: app.remote.lock().unwrap().clone(),
         theme: app.theme().name(),
+        host: cli::hostname(),
+        notify: s.notify,
     }
+}
+
+fn status_of(handle: &AppHandle) -> Status {
+    status(&handle.state::<App>())
+}
+
+fn announce(handle: &AppHandle) {
+    let _ = handle.emit("status", status_of(handle));
 }
 
 #[tauri::command]
@@ -178,47 +218,332 @@ fn get_status(app: tauri::State<'_, App>) -> Status {
     status(&app)
 }
 
-/// Check that `address` is a LLeMbas server, remember it, and open it.
+// --- The server ------------------------------------------------------------------------------
+
+/// Look at the chosen server again (at start, and when the page asks): discovery, and the
+/// sign-in kept for it.
+fn check_server(handle: &AppHandle) {
+    let app = handle.state::<App>();
+    let Some(base) = app.settings().server else {
+        return;
+    };
+    let found = server::discover(&base);
+    match found {
+        Ok(d) => {
+            *app.account.lock().unwrap() = server::load_account(&app.config_dir, &d.base);
+            *app.server.lock().unwrap() = Some(d);
+            *app.refused.lock().unwrap() = None;
+        }
+        Err(why) => {
+            *app.server.lock().unwrap() = None;
+            *app.refused.lock().unwrap() = Some(why);
+        }
+    }
+    announce(handle);
+}
+
 #[tauri::command]
-async fn set_server(handle: AppHandle, address: String) -> Result<String, String> {
+async fn recheck_server(handle: AppHandle) -> Result<Status, String> {
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || check_server(&h))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(status_of(&handle))
+}
+
+/// Check that `address` is a LLeMbas 2.0 server and remember it. A refused one is not kept.
+#[tauri::command]
+async fn set_server(handle: AppHandle, address: String) -> Result<Status, String> {
     let base = settings::normalise(&address)?;
     let probe = base.clone();
-    let name = tauri::async_runtime::spawn_blocking(move || discover(&probe))
+    let d = tauri::async_runtime::spawn_blocking(move || server::discover(&probe))
         .await
         .map_err(|e| e.to_string())??;
     let app = handle.state::<App>();
     let before = app.settings().server;
-    app.update(|s| s.server = Some(base.clone()))?;
-    if before.as_deref() != Some(base.as_str()) {
+    app.update(|s| s.server = Some(d.base.clone()))?;
+    if before.as_deref() != Some(d.base.as_str()) {
         app.agent.stop();
+        app.watch.reset();
     }
-    open_main(&handle, Some(&base))?;
-    Ok(name)
+    *app.account.lock().unwrap() = server::load_account(&app.config_dir, &d.base);
+    *app.server.lock().unwrap() = Some(d);
+    *app.refused.lock().unwrap() = None;
+    announce(&handle);
+    Ok(status_of(&handle))
 }
 
-/// `/.well-known/lembas.json`: the same check `lembas login` makes first.
-fn discover(base: &str) -> Result<String, String> {
-    let url = format!("{base}/.well-known/lembas.json");
-    let res = ureq::get(&url)
-        .timeout(std::time::Duration::from_secs(10))
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(404, _) => format!("{base} answers, but is not a LLeMbas server."),
-            ureq::Error::Status(code, _) => format!("{base} answered {code}."),
-            ureq::Error::Transport(t) => format!("Could not reach {base}: {t}"),
-        })?;
-    let body: serde_json::Value = res
-        .into_json()
-        .map_err(|_| format!("{base} is not a LLeMbas server."))?;
-    if body.get("service").and_then(|s| s.as_str()) != Some("lembas") {
-        return Err(format!("{base} is not a LLeMbas server."));
-    }
-    Ok(body
-        .get("name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("LLeMbas")
-        .to_string())
+/// What the page hears while signing in: the code, then the outcome.
+#[derive(Clone, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum SignIn {
+    Code { code: server::Code },
+    Done,
+    Failed { message: String },
 }
+
+/// Sign the app in to the server: a device login for the `app` scope, approved in the browser.
+#[tauri::command]
+fn sign_in(handle: AppHandle) -> Result<(), String> {
+    let app = handle.state::<App>();
+    let Some(d) = app.server.lock().unwrap().clone() else {
+        return Err("Choose a LLeMbas 2.0 server first.".into());
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut busy = app.signing_in.lock().unwrap();
+        if let Some(old) = busy.take() {
+            old.store(true, Ordering::SeqCst);
+        }
+        *busy = Some(cancel.clone());
+    }
+    announce(&handle);
+    std::thread::spawn(move || {
+        let host = cli::hostname().unwrap_or_default();
+        let result = server::start_sign_in(&d, &host).and_then(|code| {
+            let _ = handle
+                .opener()
+                .open_url(&code.verification_uri_complete, None::<&str>);
+            let _ = handle.emit("signin", SignIn::Code { code: code.clone() });
+            server::await_sign_in(&d, &code, &cancel)
+        });
+        let app = handle.state::<App>();
+        {
+            let mut busy = app.signing_in.lock().unwrap();
+            if busy.as_ref().is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
+                *busy = None;
+            }
+        }
+        let outcome = match result {
+            Ok(account) => match server::save_account(&app.config_dir, &account) {
+                Ok(()) => {
+                    *app.account.lock().unwrap() = Some(account);
+                    app.watch.reset();
+                    SignIn::Done
+                }
+                Err(e) => SignIn::Failed {
+                    message: format!("The sign-in could not be saved: {e}"),
+                },
+            },
+            Err(message) => SignIn::Failed { message },
+        };
+        let _ = handle.emit("signin", outcome);
+        announce(&handle);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn sign_in_cancel(handle: AppHandle) {
+    if let Some(c) = handle.state::<App>().signing_in.lock().unwrap().take() {
+        c.store(true, Ordering::SeqCst);
+    }
+    announce(&handle);
+}
+
+/// Sign the app out: the token is given up on the server and forgotten here. The agent's own
+/// link (the CLI's) is not touched.
+#[tauri::command]
+fn sign_out(handle: AppHandle) {
+    let app = handle.state::<App>();
+    let account = app.account.lock().unwrap().take();
+    server::forget_account(&app.config_dir);
+    app.watch.reset();
+    if let Some(a) = account {
+        std::thread::spawn(move || server::sign_out(&a.server, &a.token));
+    }
+    announce(&handle);
+}
+
+/// The token was refused: it was revoked, or expired. Forget it, so the page asks to sign in.
+fn token_refused(handle: &AppHandle) {
+    let app = handle.state::<App>();
+    if app.account.lock().unwrap().take().is_some() {
+        server::forget_account(&app.config_dir);
+        announce(handle);
+    }
+}
+
+/// One request to the server's `/api/v2`, as the signed-in account: `path` from there on
+/// (`/chats?kind=agent`). The answer's JSON, or the server's error.
+#[tauri::command]
+async fn api(
+    handle: AppHandle,
+    method: String,
+    path: String,
+    body: Option<Value>,
+) -> Result<Value, ApiError> {
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        server::request(&app_url, &token, &method, &path, body.as_ref())
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(&handle);
+    }
+    result
+}
+
+/// A frame of a reply being written, as the page hears it.
+#[derive(Clone, Serialize)]
+struct Frame {
+    id: u64,
+    event: String,
+    data: Value,
+}
+
+/// Follow a reply as it is written: the frames come as `stream` events with this id, and a last
+/// one named `end` (its data the error, if it broke off).
+#[tauri::command]
+fn stream_open(handle: AppHandle, path: String) -> Result<u64, ApiError> {
+    let app = handle.state::<App>();
+    let Some((app_url, token)) = app.door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    server::checked_path(&path)?;
+    let id = app.next_stream.fetch_add(1, Ordering::SeqCst) + 1;
+    let stop = Arc::new(AtomicBool::new(false));
+    app.streams.lock().unwrap().insert(id, stop.clone());
+    std::thread::spawn(move || {
+        let emit = |event: &str, data: Value| {
+            let _ = handle.emit(
+                "stream",
+                Frame {
+                    id,
+                    event: event.to_string(),
+                    data,
+                },
+            );
+        };
+        let result = server::stream(&app_url, &token, &path, &stop, |event, data| {
+            let value = serde_json::from_str(data).unwrap_or(Value::String(data.to_string()));
+            emit(event, value);
+            !stop.load(Ordering::SeqCst)
+        });
+        let end = match result {
+            Ok(()) => Value::Null,
+            Err(e) => {
+                if e.status == 401 {
+                    token_refused(&handle);
+                }
+                serde_json::to_value(e).unwrap_or(Value::Null)
+            }
+        };
+        handle.state::<App>().streams.lock().unwrap().remove(&id);
+        emit("end", end);
+    });
+    Ok(id)
+}
+
+#[tauri::command]
+fn stream_close(app: tauri::State<'_, App>, id: u64) {
+    if let Some(stop) = app.streams.lock().unwrap().remove(&id) {
+        stop.store(true, Ordering::SeqCst);
+    }
+}
+
+// --- This computer's files ----------------------------------------------------------------------
+
+/// A folder of the agent's, for the explorer: `root` one of the agent's folders (or a folder
+/// inside one), `path` inside it.
+#[tauri::command]
+async fn local_list(
+    handle: AppHandle,
+    root: String,
+    path: String,
+) -> Result<files::Listing, String> {
+    let roots = handle.state::<App>().roots();
+    tauri::async_runtime::spawn_blocking(move || files::list(&roots, &root, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// A file of the agent's, for the viewer: as text, or why not.
+#[tauri::command]
+async fn local_read(
+    handle: AppHandle,
+    root: String,
+    path: String,
+) -> Result<files::Opened, String> {
+    let roots = handle.state::<App>().roots();
+    tauri::async_runtime::spawn_blocking(move || files::read(&roots, &root, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Hold HTML for the viewer's sealed frame; the address the frame loads.
+#[tauri::command]
+fn sealed_open(app: tauri::State<'_, App>, html: String) -> String {
+    sealed::url(&app.sealed.hold(html))
+}
+
+#[tauri::command]
+fn sealed_close(app: tauri::State<'_, App>, url: String) {
+    let path = Url::parse(&url)
+        .map(|u| u.path().to_string())
+        .unwrap_or_default();
+    app.sealed.forget(sealed::id_of(&path));
+}
+
+// --- The page's own settings ---------------------------------------------------------------------
+
+/// The account's theme, as the page read it from the server: the window is painted in it, and
+/// it is remembered for the next start.
+#[tauri::command]
+fn set_theme(handle: AppHandle, name: String) {
+    let Some(theme) = Theme::parse(&name) else {
+        return;
+    };
+    let app = handle.state::<App>();
+    {
+        let mut current = app.theme.lock().unwrap();
+        if *current == theme {
+            return;
+        }
+        *current = theme;
+    }
+    let _ = app.update(|s| s.theme = Some(theme.name().into()));
+    if let Some(w) = handle.get_webview_window(MAIN) {
+        let _ = w.set_background_color(Some(theme.background()));
+    }
+    announce(&handle);
+}
+
+#[tauri::command]
+fn set_notify(handle: AppHandle, on: bool) -> Result<(), String> {
+    handle.state::<App>().update(|s| s.notify = on)?;
+    announce(&handle);
+    Ok(())
+}
+
+/// Which chat the page shows (none: `null`), and what notifications say in its language.
+#[tauri::command]
+fn set_open_chat(app: tauri::State<'_, App>, chat: Option<String>) {
+    *app.watch.open.lock().unwrap() = chat;
+}
+
+#[tauri::command]
+fn set_words(app: tauri::State<'_, App>, words: watch::Words) {
+    *app.watch.words.lock().unwrap() = words;
+}
+
+/// A link the page was asked to follow: in the system's browser, and only a web or mail link.
+#[tauri::command]
+fn open_external(handle: AppHandle, url: String) -> Result<(), String> {
+    let parsed = Url::parse(&url).map_err(|_| format!("Not a link: {url}"))?;
+    if !matches!(parsed.scheme(), "http" | "https" | "mailto") {
+        return Err(format!("Not a web link: {url}"));
+    }
+    handle
+        .opener()
+        .open_url(parsed.as_str(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+// --- The agent ----------------------------------------------------------------------------------
 
 #[tauri::command]
 fn set_agent(handle: AppHandle, on: bool) -> Result<(), String> {
@@ -238,18 +563,7 @@ fn set_agent_wanted(handle: &AppHandle, on: bool) -> Result<(), String> {
             app.agent.start(server);
             let h = handle.clone();
             std::thread::spawn(move || {
-                // Connected but allowed into no folder is the state a new computer starts in:
-                // say so where the folders are chosen, rather than showing a green light.
-                if let Some(r) = refresh_remote(&h) {
-                    if !r.usable() {
-                        let _ = h.run_on_main_thread({
-                            let h = h.clone();
-                            move || {
-                                let _ = open_main(&h, None);
-                            }
-                        });
-                    }
-                }
+                refresh_remote(&h);
             });
         }
         _ => app.agent.stop(),
@@ -261,7 +575,7 @@ fn set_agent_wanted(handle: &AppHandle, on: bool) -> Result<(), String> {
 fn refresh_remote(handle: &AppHandle) -> Option<Remote> {
     let r = remote::run(&["list"]).ok();
     *handle.state::<App>().remote.lock().unwrap() = r.clone();
-    let _ = handle.emit("status", status_of(handle));
+    announce(handle);
     r
 }
 
@@ -275,7 +589,7 @@ fn remote_changed(handle: &AppHandle, r: Remote) {
             app.agent.start(server);
         }
     }
-    let _ = handle.emit("status", status_of(handle));
+    announce(handle);
 }
 
 /// Run a `lembas remote` change off the main thread; the page hears the outcome as `status`,
@@ -338,240 +652,17 @@ fn remote_terminal(handle: AppHandle, on: bool) {
     );
 }
 
-/// The server's pages are told they are in LLeMbas Desktop, and on which computer: it shows
-/// the device that is this computer as "Local". A label only — it grants nothing.
-fn user_agent() -> String {
-    let platform = if cfg!(target_os = "linux") {
-        "X11; Linux x86_64"
-    } else if cfg!(target_os = "macos") {
-        "Macintosh; Intel Mac OS X 10_15_7"
-    } else {
-        "Windows NT 10.0; Win64; x64"
-    };
-    let host = cli::hostname()
-        .filter(|h| {
-            h.len() <= 253
-                && h.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
-        })
-        .map(|h| format!(" (host={h})"))
-        .unwrap_or_default();
-    format!(
-        "Mozilla/5.0 ({platform}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15 LLeMbasDesktop/{}{host}",
-        env!("CARGO_PKG_VERSION")
-    )
+/// What the page hears while the computer is linked: the code, then the outcome.
+#[derive(Clone, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum Linking {
+    Code { user_code: String, uri: String },
+    Done,
+    Failed { message: String },
 }
 
-/// The app's own first-run page, as the webview addresses it on this platform.
-fn local_page() -> Url {
-    let base = if cfg!(windows) {
-        "http://tauri.localhost/index.html"
-    } else {
-        "tauri://localhost/index.html"
-    };
-    Url::parse(base).expect("a fixed URL")
-}
-
-fn content(handle: &AppHandle) -> Option<Webview> {
-    handle.get_webview(CONTENT)
-}
-
-fn main_window(handle: &AppHandle) -> Option<Window> {
-    handle.get_window(MAIN)
-}
-
-/// Show the main window on `server`, or on the first-run page; made when it does not exist.
-fn open_main(handle: &AppHandle, server: Option<&str>) -> Result<(), String> {
-    let target = match server {
-        Some(s) => Some(Url::parse(s).map_err(|e| format!("{s}: {e}"))?),
-        None => None,
-    };
-    if let (Some(w), Some(c)) = (main_window(handle), content(handle)) {
-        c.navigate(target.unwrap_or_else(local_page))
-            .map_err(|e| e.to_string())?;
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-        return Ok(());
-    }
-    build_main(handle, target).map_err(|e| e.to_string())
-}
-
-fn build_main(handle: &AppHandle, target: Option<Url>) -> tauri::Result<()> {
-    let theme = handle.state::<App>().theme();
-    let window = WindowBuilder::new(handle, MAIN)
-        .title("LLeMbas")
-        .inner_size(1280.0, 840.0)
-        .min_inner_size(420.0, 560.0)
-        .decorations(false)
-        // The frame's colour: the theme's border, as the pages draw theirs.
-        .background_color(theme.frame())
-        .build()?;
-    let size = window
-        .inner_size()?
-        .to_logical::<f64>(window.scale_factor()?);
-    window.add_child(
-        WebviewBuilder::new(TITLEBAR, WebviewUrl::App("titlebar.html".into()))
-            .background_color(theme.background()),
-        LogicalPosition::new(FRAME, FRAME),
-        LogicalSize::new(size.width - 2.0 * FRAME, TITLE_H),
-    )?;
-    let url = match target {
-        Some(u) => WebviewUrl::External(u),
-        None => WebviewUrl::App("index.html".into()),
-    };
-    #[cfg(target_os = "linux")]
-    if let Some(bar) = handle.get_webview(TITLEBAR) {
-        pin_titlebar(&bar);
-    }
-    let nav = handle.clone();
-    let perm = handle.clone();
-    window.add_child(
-        WebviewBuilder::new(CONTENT, url)
-            .user_agent(&user_agent())
-            .background_color(theme.background())
-            .initialization_script(THEME_SCRIPT)
-            .on_navigation(move |url| allowed(&nav, url))
-            .on_permission_request(move |view, kind| permission(&perm, &view, kind)),
-        LogicalPosition::new(FRAME, FRAME + TITLE_H),
-        LogicalSize::new(
-            size.width - 2.0 * FRAME,
-            (size.height - TITLE_H - 2.0 * FRAME).max(0.0),
-        ),
-    )?;
-    layout(&window);
-    Ok(())
-}
-
-/// The server's dictation asks for the microphone, and a webview answers a permission request
-/// only if its app does: WebKitGTK refuses anything it is not answered on, and has no prompt of
-/// its own -- so the microphone simply said "Permission may be blocked" with no way to allow it.
-/// Granted for the microphone, in the content view, once a server is chosen, and for nothing
-/// else (a camera or a screen gets the platform's default, which on Linux is no). The content view
-/// never shows another origin: `allowed` sends every other site to the system browser.
-fn permission(handle: &AppHandle, view: &Webview, kind: PermissionKind) -> PermissionResponse {
-    if kind != PermissionKind::Microphone || view.label() != CONTENT {
-        return PermissionResponse::Default;
-    }
-    if handle.state::<App>().settings().server.is_some() {
-        PermissionResponse::Allow
-    } else {
-        PermissionResponse::Deny
-    }
-}
-
-/// On Linux, Tauri packs every webview of a window into the window's GTK box, each with an equal
-/// share of the height, and positions and sizes set on a webview are not applied there. So the
-/// title bar is told directly: a fixed height, no share of what is left (the content takes it).
-#[cfg(target_os = "linux")]
-fn pin_titlebar(bar: &Webview) {
-    let _ = bar.with_webview(|pv| {
-        use gtk::prelude::*;
-        let view = pv.inner();
-        view.set_size_request(-1, TITLE_H as i32);
-        if let Some(parent) = view.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) {
-            parent.set_child_packing(&view, false, false, 0, gtk::PackType::Start);
-        }
-    });
-}
-
-/// Lay the two webviews out in the window: the title bar on top, the content under it, and the
-/// frame around both unless the window is maximized (then there is nothing to resize).
-fn layout(window: &Window) {
-    let framed =
-        !(window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false));
-    #[cfg(target_os = "linux")]
-    {
-        use gtk::prelude::*;
-        // The box's border is the frame: the window's own surface, which GTK resizes by.
-        if let Ok(vbox) = window.default_vbox() {
-            vbox.set_border_width(if framed { FRAME as u32 } else { 0 });
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    place(window, framed);
-}
-
-#[cfg(not(target_os = "linux"))]
-fn place(window: &Window, framed: bool) {
-    use tauri::{PhysicalPosition, PhysicalSize};
-    let handle = window.app_handle();
-    let (Some(bar), Some(body)) = (handle.get_webview(TITLEBAR), handle.get_webview(CONTENT))
-    else {
-        return;
-    };
-    let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) else {
-        return;
-    };
-    let frame = if window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false)
-    {
-        0
-    } else {
-        (FRAME * scale).round() as u32
-    };
-    let title = (TITLE_H * scale).round() as u32;
-    let width = size.width.saturating_sub(2 * frame);
-    let _ = bar.set_position(PhysicalPosition::new(frame, frame));
-    let _ = bar.set_size(PhysicalSize::new(width, title));
-    let _ = body.set_position(PhysicalPosition::new(frame, frame + title));
-    let _ = body.set_size(PhysicalSize::new(
-        width,
-        size.height.saturating_sub(title + 2 * frame),
-    ));
-}
-
-/// The window may show the app's own pages and the server; anything else opens in the browser.
-/// A `llembas-theme:` "navigation" is the content page reporting its theme: noted, never loaded.
-fn allowed(handle: &AppHandle, url: &Url) -> bool {
-    if url.scheme() == THEME_SCHEME {
-        if let Some(theme) = Theme::parse(url.path()) {
-            set_theme(handle, theme);
-        }
-        return false;
-    }
-    let local = matches!(url.scheme(), "tauri" | "asset")
-        || url.host_str() == Some("tauri.localhost")
-        || url.scheme() == "about"
-        || url.scheme() == "data";
-    if local {
-        return true;
-    }
-    let server = handle.state::<App>().settings().server;
-    let same = server
-        .as_deref()
-        .and_then(|s| Url::parse(s).ok())
-        .is_some_and(|s| s.origin() == url.origin());
-    if !same && matches!(url.scheme(), "http" | "https" | "mailto") {
-        let _ = handle.opener().open_url(url.as_str(), None::<&str>);
-    }
-    same
-}
-
-/// The server page shows `theme`: paint the frame and the webviews in it, remember it for the
-/// next start, and tell the app's own pages (they hear it as `status`).
-fn set_theme(handle: &AppHandle, theme: Theme) {
-    let app = handle.state::<App>();
-    {
-        let mut current = app.theme.lock().unwrap();
-        if *current == theme {
-            return;
-        }
-        *current = theme;
-    }
-    let _ = app.update(|s| s.theme = Some(theme.name().into()));
-    if let Some(w) = main_window(handle) {
-        let _ = w.set_background_color(Some(theme.frame()));
-    }
-    for label in [TITLEBAR, CONTENT] {
-        if let Some(v) = handle.get_webview(label) {
-            let _ = v.set_background_color(Some(theme.background()));
-        }
-    }
-    let _ = handle.emit("status", status_of(handle));
-}
-
-/// Link this computer: `lembas login <server> --json`, with the approval shown in the window
-/// (where the user is already signed in to the server), then the agent started.
+/// Link this computer: `lembas login <server> --json`, the approval opened in the system's
+/// browser (where the person is signed in to the server), then the agent started.
 fn start_link(handle: &AppHandle) -> Result<(), String> {
     let app = handle.state::<App>();
     let Some(server) = app.settings().server else {
@@ -605,28 +696,28 @@ fn start_link(handle: &AppHandle) -> Result<(), String> {
         let mut done = false;
         if let Some(out) = child.stdout.take() {
             for line in BufReader::new(out).lines().map_while(Result::ok) {
-                let Ok(ev) = serde_json::from_str::<serde_json::Value>(&line) else {
+                let Ok(ev) = serde_json::from_str::<Value>(&line) else {
                     continue;
                 };
-                match ev.get("event").and_then(|e| e.as_str()) {
+                match ev.get("event").and_then(Value::as_str) {
                     Some("code") => {
-                        let link = ev
-                            .get("verification_uri_complete")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if let Ok(url) = Url::parse(link) {
-                            if let Some(c) = content(&handle) {
-                                let _ = c.navigate(url);
-                            }
-                            if let Some(w) = main_window(&handle) {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
+                        let field =
+                            |k: &str| ev.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                        let uri = field("verification_uri_complete");
+                        if Url::parse(&uri).is_ok() {
+                            let _ = handle.opener().open_url(&uri, None::<&str>);
                         }
+                        let _ = handle.emit(
+                            "linking",
+                            Linking::Code {
+                                user_code: field("user_code"),
+                                uri,
+                            },
+                        );
                     }
                     Some("done") => done = true,
                     Some("error") => {
-                        failure = ev.get("message").and_then(|m| m.as_str()).map(String::from)
+                        failure = ev.get("message").and_then(Value::as_str).map(String::from)
                     }
                     _ => {}
                 }
@@ -644,40 +735,63 @@ fn start_link(handle: &AppHandle) -> Result<(), String> {
                 Err(e) => e.to_string(),
             });
         }
-        let app = handle.state::<App>();
-        *app.linking.lock().unwrap() = false;
+        *handle.state::<App>().linking.lock().unwrap() = false;
         match failure {
             None => {
-                let _ = open_main(&handle, Some(&server));
+                let _ = handle.emit("linking", Linking::Done);
                 let _ = set_agent_wanted(&handle, true);
             }
-            Some(why) => {
-                handle
-                    .dialog()
-                    .message(why)
-                    .title("LLeMbas: linking failed")
-                    .kind(MessageDialogKind::Error)
-                    .show(|_| {});
+            Some(message) => {
+                let _ = handle.emit("linking", Linking::Failed { message });
             }
         }
-        let _ = handle.emit("status", status_of(&handle));
+        announce(&handle);
     });
     Ok(())
 }
 
-fn status_of(handle: &AppHandle) -> Status {
-    status(&handle.state::<App>())
+// --- The window, the tray and the menu ------------------------------------------------------------
+
+fn main_window(handle: &AppHandle) -> Option<WebviewWindow> {
+    handle.get_webview_window(MAIN)
 }
 
+/// Bring the window to the front, made if it is not there.
 fn show(handle: &AppHandle) {
-    let server = handle.state::<App>().settings().server;
     if let Some(w) = main_window(handle) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
-    } else {
-        let _ = open_main(handle, server.as_deref());
+    } else if let Err(e) = build_main(handle) {
+        log::write(&format!("could not open the window: {e}"));
     }
+}
+
+fn build_main(handle: &AppHandle) -> tauri::Result<WebviewWindow> {
+    let theme = handle.state::<App>().theme();
+    WebviewWindowBuilder::new(handle, MAIN, WebviewUrl::App("index.html".into()))
+        .title("LLeMbas")
+        .inner_size(1280.0, 840.0)
+        .min_inner_size(360.0, 480.0)
+        // The app draws its own title bar; Tauri makes the edges resize an undecorated window.
+        .decorations(false)
+        .background_color(theme.background())
+        .on_navigation(allowed)
+        .build()
+}
+
+/// The window shows the app's own page, and the sealed frames inside it; nothing else, ever.
+/// A link the page wants followed goes to the system's browser through `open_external`; a
+/// navigation it did not ask for -- a link or a script in a sealed frame -- simply goes nowhere.
+fn allowed(url: &Url) -> bool {
+    let local_app = url.scheme() == "tauri"
+        || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"));
+    let sealed = url.scheme() == sealed::SCHEME
+        || (url.scheme() == "http"
+            && url
+                .host_str()
+                .is_some_and(|h| h == format!("{}.localhost", sealed::SCHEME)));
+    local_app || sealed || url.as_str() == "about:blank"
 }
 
 fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
@@ -691,7 +805,7 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
     )?;
     let toggle = MenuItem::with_id(handle, "toggle", "Start the agent", true, None::<&str>)?;
     let link = MenuItem::with_id(handle, "link", "Link this computer…", true, None::<&str>)?;
-    let server = MenuItem::with_id(handle, "server", "Settings…", true, None::<&str>)?;
+    let settings = MenuItem::with_id(handle, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(handle, "quit", "Quit LLeMbas", true, None::<&str>)?;
     let menu = Menu::with_items(
         handle,
@@ -702,7 +816,7 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
             &toggle,
             &link,
             &PredefinedMenuItem::separator(handle)?,
-            &server,
+            &settings,
             &quit,
         ],
     )?;
@@ -731,7 +845,7 @@ async fn check_update(handle: &AppHandle) -> Result<Option<String>, String> {
         .map_err(|e| e.to_string())?
         .map(|u| u.version);
     *handle.state::<App>().update.lock().unwrap() = found.clone();
-    let _ = handle.emit("status", status_of(handle));
+    announce(handle);
     Ok(found)
 }
 
@@ -834,6 +948,7 @@ fn on_menu(h: &AppHandle, id: &str) {
             }
         }
         "link" => {
+            show(h);
             if let Err(e) = start_link(h) {
                 h.dialog()
                     .message(e)
@@ -843,14 +958,13 @@ fn on_menu(h: &AppHandle, id: &str) {
         }
         "update" => offer_update(h),
         "reload" => {
-            if let Some(c) = content(h) {
-                if let Ok(url) = c.url() {
-                    let _ = c.navigate(url);
-                }
+            if let Some(w) = main_window(h) {
+                let _ = w.reload();
             }
         }
-        "server" => {
-            let _ = open_main(h, None);
+        "settings" => {
+            show(h);
+            let _ = h.emit("open-settings", ());
         }
         "quit" => {
             h.state::<App>().agent.stop();
@@ -860,11 +974,10 @@ fn on_menu(h: &AppHandle, id: &str) {
     }
 }
 
-/// The title bar's menu: the tray's items, where the window is (a desktop without a tray —
-/// GNOME without the AppIndicator extension — has no other way to reach them).
-/// The title bar's menu, opened under the button that asked for it: `x`, `y` are the button's
-/// bottom-left corner in the title bar page. (A plain popup opens at the pointer, which a Wayland
-/// compositor does not tell the app — it landed in the middle of the window.)
+/// The title bar's menu: the tray's items, where the window is (a desktop without a tray --
+/// GNOME without the AppIndicator extension -- has no other way to reach them). Opened under the
+/// button that asked for it: `x`, `y` are its bottom-left corner in the page. (A plain popup
+/// opens at the pointer, which a Wayland compositor does not tell the app.)
 #[tauri::command]
 fn titlebar_menu(window: Window, x: f64, y: f64) -> Result<(), String> {
     let h = window.app_handle();
@@ -887,7 +1000,7 @@ fn titlebar_menu(window: Window, x: f64, y: f64) -> Result<(), String> {
             None => m("update", "Check for updates…", true)?,
         };
         let reload = m("reload", "Reload", true)?;
-        let server = m("server", "Settings…", true)?;
+        let settings = m("settings", "Settings…", true)?;
         let quit = m("quit", "Quit LLeMbas", true)?;
         Menu::with_items(
             h,
@@ -898,19 +1011,15 @@ fn titlebar_menu(window: Window, x: f64, y: f64) -> Result<(), String> {
                 &PredefinedMenuItem::separator(h)?,
                 &reload,
                 &update,
-                &server,
+                &settings,
                 &PredefinedMenuItem::separator(h)?,
                 &quit,
             ],
         )
     };
     let menu = build().map_err(|e| e.to_string())?;
-    // The title bar sits inside the frame while the window is not maximized.
-    let framed =
-        !(window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false));
-    let inset = if framed { FRAME } else { 0.0 };
     window
-        .popup_menu_at(&menu, LogicalPosition::new(x + inset, y + inset))
+        .popup_menu_at(&menu, LogicalPosition::new(x, y))
         .map_err(|e| e.to_string())
 }
 
@@ -924,18 +1033,144 @@ fn on_agent_state(handle: &AppHandle, state: &AgentState) {
             "Start the agent"
         });
     }
-    let _ = handle.emit("status", status_of(handle));
+    announce(handle);
+}
+
+/// Look at the chat list every so often, and say when a reply finished out of sight.
+fn watch_chats(handle: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(watch::EVERY);
+        let app = handle.state::<App>();
+        let Some((app_url, token)) = app.door() else {
+            continue;
+        };
+        let list = match server::request(&app_url, &token, "GET", "/chats?limit=50", None) {
+            Ok(v) => v,
+            Err(e) => {
+                if e.status == 401 {
+                    token_refused(&handle);
+                }
+                continue;
+            }
+        };
+        let done = app.watch.look(&list);
+        if done.is_empty() || !app.settings().notify {
+            continue;
+        }
+        let in_front = main_window(&handle)
+            .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false));
+        let open = app.watch.open.lock().unwrap().clone();
+        let words = app.watch.words.lock().unwrap().clone();
+        for d in done {
+            if in_front && open.as_deref() == Some(d.id.as_str()) {
+                continue;
+            }
+            let title = if d.title.is_empty() {
+                "LLeMbas".to_string()
+            } else {
+                d.title.clone()
+            };
+            let _ = handle
+                .notification()
+                .builder()
+                .title(title)
+                .body(if d.agent { &words.agent } else { &words.reply })
+                .show();
+        }
+    });
+}
+
+/// Where the app writes what it could not show: a start that fails before the window is up
+/// leaves its reason here, not only on a terminal nobody sees.
+mod log {
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    /// The app's log directory as Tauri names it on Linux (`$XDG_DATA_HOME/<identifier>/logs`),
+    /// worked out without the app, which may not exist yet.
+    pub fn file() -> Option<PathBuf> {
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
+        Some(data.join("eu.llembas.desktop/logs/desktop.log"))
+    }
+
+    pub fn write(line: &str) {
+        eprintln!("llembas-desktop: {line}");
+        let Some(path) = file() else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[{secs}] {line}");
+        }
+    }
+
+    /// A panic -- the release build aborts on one -- is written down before it ends the app.
+    pub fn on_panic() {
+        let before = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            write(&format!("stopped: {info}"));
+            before(info);
+        }));
+    }
+}
+
+/// Settings for WebKitGTK that must be in place before it starts. A blank or crashing window
+/// with NVIDIA's own driver (on Wayland most of all) is WebKitGTK's DMA-BUF renderer; without it,
+/// the window draws. Only when that driver is loaded and the person has not chosen otherwise.
+#[cfg(target_os = "linux")]
+fn webkit_environment() {
+    let nvidia = std::path::Path::new("/proc/driver/nvidia/version").exists();
+    if nvidia && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    log::on_panic();
+    #[cfg(target_os = "linux")]
+    webkit_environment();
+    let built = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|h, _argv, _cwd| show(h)))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .register_uri_scheme_protocol(sealed::SCHEME, |ctx, request| {
+            sealed::respond(
+                &ctx.app_handle().state::<App>().sealed,
+                request.uri().path(),
+            )
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
+            recheck_server,
             set_server,
+            sign_in,
+            sign_in_cancel,
+            sign_out,
+            api,
+            stream_open,
+            stream_close,
+            local_list,
+            local_read,
+            sealed_open,
+            sealed_close,
+            set_theme,
+            set_notify,
+            set_open_chat,
+            set_words,
+            open_external,
             set_agent,
             link_computer,
             titlebar_menu,
@@ -953,16 +1188,16 @@ pub fn run() {
             if let Ok(dir) = app.path().resource_dir() {
                 cli::set_bundled(&dir);
             }
-            let log = app.path().app_log_dir()?.join("agent.log");
+            let agent_log = app.path().app_log_dir()?.join("agent.log");
             let notify_handle = handle.clone();
-            let agent = Agent::new(log, move |s| {
+            let agent = Agent::new(agent_log, move |s| {
                 // The notifier runs on the agent's thread; the tray is touched on the main one.
                 let h = notify_handle.clone();
                 let s = s.clone();
                 let _ = notify_handle.run_on_main_thread(move || on_agent_state(&h, &s));
             });
             let loaded = settings::load(&config_dir);
-            // Until a server page has said, the server's own default: Moria.
+            // Until the account has said, the server's own default: Moria.
             let theme = loaded
                 .theme
                 .as_deref()
@@ -977,14 +1212,28 @@ pub fn run() {
                 update: Mutex::new(None),
                 remote: Mutex::new(None),
                 theme: Mutex::new(theme),
+                server: Mutex::new(None),
+                refused: Mutex::new(None),
+                account: Mutex::new(None),
+                signing_in: Mutex::new(None),
+                streams: Mutex::new(HashMap::new()),
+                next_stream: AtomicU64::new(0),
+                sealed: sealed::Pages::default(),
+                watch: watch::Watch::default(),
             });
-            let items = build_tray(&handle)?;
-            *handle.state::<App>().tray.lock().unwrap() = Some(items);
-            open_main(&handle, loaded.server.as_deref())?;
+            // Without a tray (no AppIndicator library, no StatusNotifier host) the app still
+            // starts: the title bar's menu has every item the tray has.
+            match build_tray(&handle) {
+                Ok(items) => *handle.state::<App>().tray.lock().unwrap() = Some(items),
+                Err(e) => log::write(&format!("no tray icon: {e}")),
+            }
+            build_main(&handle)?;
             watch_updates(handle.clone());
+            watch_chats(handle.clone());
             {
                 let h = handle.clone();
                 std::thread::spawn(move || {
+                    check_server(&h);
                     refresh_remote(&h);
                 });
             }
@@ -999,25 +1248,24 @@ pub fn run() {
                 let _ = window.hide();
                 api.prevent_close();
             }
-            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
-                if window.label() == MAIN =>
-            {
-                layout(window);
-                let _ = window.emit_to(
-                    TITLEBAR,
-                    "maximized",
-                    window.is_maximized().unwrap_or(false),
-                );
+            WindowEvent::Resized(_) if window.label() == MAIN => {
+                let _ = window.emit("maximized", window.is_maximized().unwrap_or(false));
             }
             _ => {}
         })
-        .build(tauri::generate_context!())
-        .expect("LLeMbas Desktop could not start")
-        .run(|handle, event| {
-            if let RunEvent::Exit = event {
-                handle.state::<App>().agent.stop();
-            }
-        });
+        .build(tauri::generate_context!());
+    let app = match built {
+        Ok(app) => app,
+        Err(e) => {
+            log::write(&format!("could not start: {e}"));
+            std::process::exit(1);
+        }
+    };
+    app.run(|handle, event| {
+        if let RunEvent::Exit = event {
+            handle.state::<App>().agent.stop();
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1037,19 +1285,37 @@ mod tests {
 
     #[test]
     fn the_themes_come_out_of_tokens_css_as_two_different_looks() {
-        // build.rs read these out of ui/tokens.css: a light and a dark theme cannot share
-        // either colour, and the frame is not the page.
-        assert_ne!(Theme::Moria.frame(), Theme::Shire.frame());
+        // build.rs read these out of ui/tokens.css: a light and a dark theme cannot share a page
+        // colour.
         assert_ne!(Theme::Moria.background(), Theme::Shire.background());
-        assert_ne!(Theme::Moria.frame(), Theme::Moria.background());
-        assert_ne!(Theme::Shire.frame(), Theme::Shire.background());
     }
 
     #[test]
-    fn the_theme_report_is_a_navigation_the_handler_can_read() {
-        let url = Url::parse("llembas-theme:shire").unwrap();
-        assert_eq!(url.scheme(), THEME_SCHEME);
-        assert_eq!(Theme::parse(url.path()), Some(Theme::Shire));
-        assert!(THEME_SCRIPT.contains(THEME_SCHEME));
+    fn the_window_shows_the_app_and_its_sealed_frames_only() {
+        for ok in [
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/index.html",
+            "llembas-sealed://localhost/p1",
+            "http://llembas-sealed.localhost/p1",
+            "about:blank",
+        ] {
+            assert!(allowed(&Url::parse(ok).unwrap()), "{ok}");
+        }
+        for no in [
+            "https://ai.example/",
+            "http://localhost:8080/",
+            "http://tauri.localhost.evil.example/",
+            "file:///etc/passwd",
+            "data:text/html,<p>x</p>",
+            "javascript:alert(1)",
+        ] {
+            assert!(!allowed(&Url::parse(no).unwrap()), "{no}");
+        }
+    }
+
+    #[test]
+    fn the_log_lives_in_the_apps_own_directory() {
+        let f = log::file().unwrap();
+        assert!(f.ends_with("eu.llembas.desktop/logs/desktop.log"));
     }
 }
