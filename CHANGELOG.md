@@ -6,6 +6,62 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+LLeMbas Desktop 1.0 becomes an app of its own: the agent on this computer by default, your
+server's chats, two explorers and a viewer -- no longer a window onto the web interface. It needs a
+LLeMbas 2.0 server.
+
+### Changed
+
+- **The app's own interface replaces the server's web pages.** The window shows the app's page
+  (`ui/`, plain HTML, CSS and JavaScript modules, no build step): the chats, the transcript with
+  its steps and tool calls, the reply as it is written, the questions and approvals that wait for
+  an answer, and a composer. It talks to the server's `/api/v2`.
+- **Agent chats first.** The sidebar opens on agent chats, those on this computer above those on
+  your other devices; a new agent chat is started on this computer, in one of the agent's
+  folders, with its mode and model. Chats on the server are the second tab.
+- **The app signs in on its own**, with the server's device login for one permission: to read and
+  write your chats, as the web interface does. The approval opens in your browser. Linking this
+  computer for the agent stays a separate step, and its approval opens in the browser too.
+- The look is still the server's: its design tokens, now copied from the 2.0 server, and its
+  CodeMirror build for code (`scripts/fetch-vendor.sh`, pinned in `vendor.lock.json`). The
+  window takes the account's theme.
+- One window with one page: the second webview, and the Linux workaround it needed, are gone. The
+  window still has the app's own title bar, and its edges resize it.
+- The page's words, old and new, are in all nine of the server's languages.
+
+### Added
+
+- **Two explorers, kept apart**: this computer's -- the open agent chat's folder, or one of the
+  agent's folders -- read only inside the agent's folders, and the server's files.
+- **A viewer** beside the chat: Markdown drawn, code highlighted (read-only CodeMirror), text,
+  and HTML in a sealed frame on its own address, with no access to the app, no network and no way
+  to navigate. A file the agent shows (`show`) opens in it.
+- **Native notifications** when a reply or an agent chat finishes while you are elsewhere (on by
+  default; Settings, Notifications).
+- **A server older than LLeMbas 2.0 is refused** with a message saying which side to update, and so
+  is a server whose app interface is newer than this app knows.
+- **Settings in the app**: the server and the sign-in, the agent and its folders, notifications
+  and updates. There are no admin pages.
+- When the app cannot start, it says why in `desktop.log` in its log directory, not only on a
+  terminal nobody sees. A missing tray no longer stops it from starting.
+- With NVIDIA's own driver, WebKitGTK's DMA-BUF renderer is turned off before the window opens
+  (unless you have set `WEBKIT_DISABLE_DMABUF_RENDERER`): that renderer leaves the window blank or
+  ends the app there, on Wayland most of all.
+
+### Removed
+
+- The server's web interface in the window, the microphone permission it needed, and the theme
+  report the window read from it. The web interface stays in the browser, and as an installable
+  web app.
+
+### Fixed
+
+- A release can no longer be quietly replaced under the same version: installing the same version
+  again does nothing, so people with the broken copy never got the fix. The release workflow now
+  refuses a tag that has a release already, unless it is run by hand to replace it.
+- A beta's `.deb` sorts below the release that follows it (`1.0.0~beta.1` before `1.0.0`), so apt
+  does not keep a beta over its release.
+
 ## [0.7.2] — 2026-10-25
 
 Linking this computer again leaves one device, and LLeMbas CLI 1.5.2 inside.
