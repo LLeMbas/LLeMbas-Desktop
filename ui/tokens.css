@@ -1,4 +1,4 @@
-/* LLeMbas v1.3.0 (61cf4c267c98) static/css/tokens.css, copied by scripts/fetch-tokens.sh: do not edit.
+/* LLeMbas dev (f5b3dbb96582) static/css/tokens.css, copied by scripts/fetch-tokens.sh: do not edit.
    The font-face rules are left out; the app bundles no font. */
 /*
   Design tokens.
@@ -99,37 +99,6 @@
      re-wraps everything a program prints. */
   --terminal-width: 34rem;
   --terminal-width-min: 24rem;
-  /* Wider again: a source line is longer than eighty columns once nothing is
-     re-wrapping it, and this one holds prose as well. The minimum is 24rem =
-     384px and must equal both `data-resize-min` in chat/_canvas.html and the
-     lower bound in api/preferences.py:LAYOUT_BOUNDS -- a width outside those
-     bounds is silently dropped, so the three are pinned equal by a test. */
-  --canvas-width: 40rem;
-  --canvas-width-min: 24rem;
-  /* The prototype panel. The canvas's width, not wider: the page inside is not
-     laid out at the panel's width anyway (see --proto-desktop-width), so a wider
-     panel only buys a larger picture at the cost of the conversation beside it
-     -- at 52rem a 1280px window had 180px of chat left. The minimum is pinned to
-     `data-resize-min` and LAYOUT_BOUNDS exactly as the canvas's is. */
-  --prototype-width: 40rem;
-  --prototype-width-min: 24rem;
-  /* The two views are two viewports, each scaled to fit the panel rather than
-     squeezed into it. A desktop design shown at 640px is its tablet layout, and
-     the switch says "desktop". So the page is laid out at a desktop's width and
-     the picture is shrunk, the way a browser zoomed out would show it -- and a
-     phone is an iPhone-sized viewport, the width most designs are checked at.
-     A frame either way, not an emulation: the page's own media queries answer
-     to these numbers, which is the whole point of the switch. */
-  --proto-desktop-width: 80rem;
-  --proto-phone-width: 24.375rem;
-  --proto-phone-height: 52.75rem;
-  /* An inline prototype is as tall as the page it holds, within these. The
-     floor keeps a frame that has not reported yet from collapsing to nothing;
-     the ceiling is what the model is told ("under about 600 pixels"), with a
-     little room, so a page sized in `100vh` cannot grow a frame forever. */
-  --proto-inline-min: 6rem;
-  --proto-inline-start: 16rem;
-  --proto-inline-max: 40rem;
   --thread-max-width: 48rem;
   --header-height: 3.5rem;
 
@@ -352,6 +321,10 @@
   --accent-hover: #B4E6F1;
   --accent-ink: #061418;
   --accent-soft: rgba(143, 216, 232, 0.12);
+  /* Selected text where the glyphs are drawn by something other than the
+     selection -- the composer, whose visible text is its mirror. Stronger
+     than --accent-soft, which is a tint for a background nobody has to find. */
+  --selection: rgba(143, 216, 232, 0.32);
 
   /* Mallorn: the brand, the assistant's mark, the leaf badges -- phosphor
      green on the dark, the colour of an old terminal's text. */
@@ -495,6 +468,7 @@
   --accent-hover: #1F4D30;
   --accent-ink: #F8F3E5;
   --accent-soft: rgba(40, 95, 60, 0.1);
+  --selection: rgba(40, 95, 60, 0.24);
 
   /* The same mallorn as moss, dark enough to be text on parchment. */
   --leaf: #3D6B1C;

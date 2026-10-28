@@ -1,0 +1,23 @@
+{
+  "tag": "dev",
+  "commit": "f5b3dbb965823ade56d57bf5e1d09900eb5946f2",
+  "files": {
+    "cm-autocomplete.mjs": {"server": "26fe431a5f54e29952e094c93151f11473a80677bfb339711ecca08195a89df4", "copy": "fcb7fcbe4e2b072d031520ec898c81ac3f2f05fb4126e03003c9b5e60ffaa8de"},
+    "cm-codemirror.mjs": {"server": "dea86a106e13c9316dfedfd29209780b853bdb2b477edf3f7c90f497b592a223", "copy": "0b80ae1289a1dc3e6718727e78bc757caad657e907d0351597867d4f90c36bd2"},
+    "cm-commands.mjs": {"server": "e1868cd8ddb1cbcab5f8acedfaf1ab173d895c0b684b58af573e5991a0ab7dc3", "copy": "20e89b7bc60658df1c5da3b079d4a14f29fc115813062adbac2b16898b283cc8"},
+    "cm-lang-css.mjs": {"server": "2034378ea0d0ce561805bfae0c6b270e945302eedf2717410a750b59d26098fe", "copy": "f969b1b5d2a70deb60cbc1f6634bb9d403c7ab5b92d40713c19688e5be743163"},
+    "cm-lang-html.mjs": {"server": "c431ac565b0b38e77b4900f8e0786a48ad4c74fe3afb1a81253de358ba06ac18", "copy": "3c65a8328577b1604a64b22b161792434a7202b514649c7ddef360f9a1761890"},
+    "cm-lang-javascript.mjs": {"server": "97256d9ab7131a42529bb411fc5271837a215efddd63d4a0a6ddd6bd00d0820e", "copy": "b01ab6b30753bb59ba6ca32308aec293820050be43a9fb4446cfdd572c53ac19"},
+    "cm-lang-json.mjs": {"server": "b58f106e7c0e3d013e0f4a0bde86c4e39b9644576c4244e769271768c6c0af4f", "copy": "74b7041d6d25a3368e666a56312c5444a14180ea1bb10d1e670747b62fe254c5"},
+    "cm-lang-markdown.mjs": {"server": "5b77c954b306115cfda133d7d2535e45e90abcae0e8c4a9dec08fd4f83e16a65", "copy": "0254eafb658a3ed7e8d5eafb17996f5963855007d95c4dedf8a0e3e7c048c82d"},
+    "cm-lang-python.mjs": {"server": "8a9ed958f993dbf2c9cb52200383f7894096ef4b400726fc14ce9737077d1f75", "copy": "d53c16d58fa6c5a47a83ecd012d2cb6c8215996261de5f0cd668ec11273af9a1"},
+    "cm-language.mjs": {"server": "1400a75c21ad190b1fd2050f9d8cfdc948d8d2e4a9467b70ed3953b70498ef5d", "copy": "dfacb8f324365281a1faed43ce8b643f0b663a0e296e9a2e2057c1602b47d3e3"},
+    "cm-lint.mjs": {"server": "88f8d9f4ff305d3a32b6ca44ca78e901c24495b3def2fbb8dc1b351d746f962c", "copy": "5a6b78bd165fab1952d042d786f7fddd3ad229d553f8baedb59cfd119047a65a"},
+    "cm-search.mjs": {"server": "75a5bd0a92b1cda20ca075ae8ce3b42dcaa4847c7f7de3f7ef3e9ec6064157c1", "copy": "ee433bb77e124a717dffce54c9f1203b8838f9740d8ff7023da3ec5ec354fff3"},
+    "cm-state.mjs": {"server": "9db7c46f6be425dbea814af001692939d694b571b3d8df683b87abb635132d4c", "copy": "9db7c46f6be425dbea814af001692939d694b571b3d8df683b87abb635132d4c"},
+    "cm-view.mjs": {"server": "ae7c45442292a6cb1bff0c82b0493924489911ff4f239eb2067293180c0f1d5e", "copy": "7ecdf6913bff51de827d31d56641ccb82f7dfb3801dde0e40c32eadc98815226"},
+    "lezer-common.mjs": {"server": "b63d03ca460cc7a6ce09cbf0de24943fec22bcbe2359dc35978a57b875b2450f", "copy": "b63d03ca460cc7a6ce09cbf0de24943fec22bcbe2359dc35978a57b875b2450f"},
+    "lezer-highlight.mjs": {"server": "b74148d673103ae08330a045a464acddf4ee8b563b213ea26e50f2be01a6d19d", "copy": "df21a1741ae80f2ad2b6d25860cad9ff3cda246a4fba171535d9dc92df150c1a"},
+    "lezer-lr.mjs": {"server": "4c2dcc61b5c3aedb091dfd60ce8abaeb94704b58fa9036547b0b8d2c75f701e4", "copy": "78a97314ddeaa4ae5c251292dcccf0d731ebdca093a59c15793b52131cd50ab4"}
+  }
+}
