@@ -1,9 +1,11 @@
-# Checks on every push to main and every pull request: formatting, lints, tests, and the page's
-# JavaScript. The app is built for real only by release.yml, from a tag.
+# Checks on every push to main and dev and every pull request: formatting, lints, tests, the
+# page's scripts, the pins (tokens, CodeMirror), the public-repository hygiene -- and the app
+# started for real, on X11 and on Wayland, to prove it gets as far as its window. The packages
+# are built only by release.yml, from a tag.
 name: ci
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 permissions:
@@ -23,6 +25,8 @@ jobs:
         with:
           components: rustfmt, clippy
           cache-workspaces: src-tauri
+      - name: Nothing private in a public repository
+        run: scripts/hygiene.sh
       - name: The bundled LLeMbas CLI, verified
         run: scripts/fetch-cli.sh
       - name: Formatting
@@ -34,8 +38,37 @@ jobs:
       - name: Tests
         working-directory: src-tauri
         run: cargo test --locked
-      - name: The pages' JavaScript, and the script the content view runs
+      - name: The page's scripts parse, and none sets HTML
+        run: scripts/check-ui.sh
+      - name: The design tokens and CodeMirror are the server's, as pinned
         run: |
-          for f in ui/*.js src-tauri/src/*.js; do node --check "$f"; done
-      - name: The design tokens are the server's, as pinned
-        run: scripts/fetch-tokens.sh
+          scripts/fetch-tokens.sh
+          scripts/fetch-vendor.sh
+
+  # The app started for real: it must still be running after 25 seconds (timeout's 124), and its
+  # log must not say it stopped. Once under Xvfb (X11) and once under a headless Weston (Wayland,
+  # GTK's Wayland backend forced), each with a session bus (the tray and the notifications want
+  # one) and an empty home, so it starts at its first-run page. Built with the custom protocol on,
+  # as a release is, so the page is the bundled ui/ and not a development server.
+  start:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: System libraries, and an X server and a Wayland compositor without a screen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+            xvfb weston dbus libgl1-mesa-dri
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: src-tauri
+      - name: The bundled LLeMbas CLI, verified
+        run: scripts/fetch-cli.sh
+      - name: Build (debug, with the bundled page)
+        working-directory: src-tauri
+        run: cargo build --locked --features tauri/custom-protocol
+      - name: Starts on X11
+        run: scripts/ci-start.sh x11
+      - name: Starts on Wayland
+        run: scripts/ci-start.sh wayland

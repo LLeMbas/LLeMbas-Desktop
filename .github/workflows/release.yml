@@ -1,6 +1,6 @@
-# A release, from a signed tag vX.Y.Z on main: the Linux packages (.deb and AppImage) built with
-# the LLeMbas CLI inside, SHA256SUMS over them, and the GitHub Release with the tag message as its
-# notes. LLeMbas Desktop is developed on Gitea, which mirrors its commits and tags here; the builds
+# A release, from a signed tag vX.Y.Z (stable, main) or vX.Y.Z-beta.N (a beta, marked as a
+# pre-release): the Linux packages (.deb and AppImage) built with the LLeMbas CLI inside,
+# SHA256SUMS over them, and the GitHub Release with the tag message as its notes. LLeMbas Desktop is developed on Gitea, which mirrors its commits and tags here; the builds
 # happen here because they need a full Rust and WebKitGTK toolchain.
 name: release
 on:
@@ -11,6 +11,10 @@ on:
       tag:
         description: "The tag, e.g. v0.1.0"
         required: true
+      replace:
+        description: "Replace a release that already exists for this tag (people who installed it get no update)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -48,6 +52,26 @@ jobs:
         run: cargo install tauri-cli --version "^2" --locked
       - name: Build
         run: cargo tauri build --bundles deb,appimage
+      # Debian sorts 1.0.0-beta.1 *above* 1.0.0 (what follows the dash is a package revision), so a
+      # beta's package would make the release after it look like a downgrade, and apt would keep the
+      # beta. A beta's package version says ~beta, which sorts below.
+      - name: A beta's .deb sorts below its release
+        run: |
+          deb="$(ls src-tauri/target/release/bundle/deb/*.deb)"
+          have="$(dpkg-deb -f "$deb" Version)"
+          want="${VERSION/-/\~}"
+          if [ "$have" != "$want" ]; then
+            echo "repacking $deb: Version $have -> $want"
+            work="$(mktemp -d)"
+            dpkg-deb -R "$deb" "$work/pkg"
+            sed -i "s/^Version: .*/Version: $want/" "$work/pkg/DEBIAN/control"
+            dpkg-deb --root-owner-group -b "$work/pkg" "$deb"
+          fi
+          base="${VERSION%%-*}"
+          if [ "$VERSION" != "$base" ]; then
+            dpkg --compare-versions "$(dpkg-deb -f "$deb" Version)" lt "$base" \
+              || { echo "the beta's package does not sort below $base" >&2; exit 1; }
+          fi
       - name: Collect the files and SHA256SUMS
         run: |
           mkdir dist
@@ -62,8 +86,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           git tag -l --format='%(contents)' "$TAG" | sed '/-----BEGIN SSH SIGNATURE-----/,$d' > notes.md
-          # A tag moved to a fixed commit and pushed again replaces its release:
-          # the old one, and the files built from the old commit, go first.
-          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+          # A version is released once. Installing the same version again over a broken one is a
+          # no-op for apt ("already the newest version") and the updater offers nothing, so a fix
+          # is a new version -- never the old one re-released. Replacing is a deliberate act: a
+          # run by hand with `replace`.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ "${{ inputs.replace || false }}" != "true" ]; then
+              echo "A release for $TAG exists already. Release the fix as a new version." >&2
+              exit 1
+            fi
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+          pre=()
+          case "$VERSION" in *-*) pre=(--prerelease) ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag "${pre[@]}" \
             --title "LLeMbas Desktop $VERSION" --notes-file notes.md dist/*
