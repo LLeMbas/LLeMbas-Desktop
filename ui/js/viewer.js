@@ -48,8 +48,21 @@ export function closeViewer() {
 }
 
 /**
+ * Why a file has no text, in words: this computer's `withheld` is "binary" | "too_big"; the
+ * server's is { reason: "not_text" | "too_large", message } with the message in the person's
+ * language already.
+ */
+function withheldWords(withheld, size) {
+  if (typeof withheld === "object" && withheld.message) return String(withheld.message)
+  const reason = typeof withheld === "object" ? withheld.reason : withheld
+  return reason === "too_big" || reason === "too_large"
+    ? t("This file is too big to show here (%(size)s).", { size: bytes(size) })
+    : t("This is not a text file; it cannot be shown here.")
+}
+
+/**
  * Show a file. `file`: { name, path, where (words for its place), text, kind?, language?, line?,
- * withheld?: "binary" | "too_big", size?, error? }.
+ * withheld? (see withheldWords), size?, error? }.
  */
 export async function openViewer(file) {
   teardown()
@@ -68,15 +81,7 @@ export async function openViewer(file) {
     return
   }
   if (file.withheld) {
-    body.append(
-      h("p", {
-        class: "viewer__note",
-        text:
-          file.withheld === "too_big"
-            ? t("This file is too big to show here (%(size)s).", { size: bytes(file.size) })
-            : t("This is not a text file; it cannot be shown here."),
-      }),
-    )
+    body.append(h("p", { class: "viewer__note", text: withheldWords(file.withheld, file.size) }))
     return
   }
   const text = file.text ?? ""

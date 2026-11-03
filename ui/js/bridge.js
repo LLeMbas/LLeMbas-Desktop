@@ -15,6 +15,8 @@ export const get = (path) => api("GET", path)
 export const post = (path, body) => api("POST", path, body ?? {})
 export const patch = (path, body) => api("PATCH", path, body)
 export const del = (path) => api("DELETE", path)
+/** A `GET` on /api/v2 that answers plain text (a shown file). Rejects with {status, detail}. */
+export const getText = (path) => invoke("api_text", { path })
 
 /** An error's words, whatever shape it came in. */
 export function why(err) {

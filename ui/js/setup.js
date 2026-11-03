@@ -1,7 +1,8 @@
 // Before the app: which server, and the app's sign-in to it. A server older than LLeMbas 2.0 is
 // refused here, with the reason Rust gave (src-tauri/src/server.rs, `check`). Signing in is the
 // server's device login: the approval page opens in the system's browser; this page shows the
-// code to compare and waits.
+// code to compare and waits. Where the server offers it (`one_approval`) and this computer is not
+// linked yet, the same approval links it for the agent: there is no second one.
 
 import { $, h, clear } from "./dom.js"
 import { invoke, listen, why } from "./bridge.js"
@@ -60,7 +61,8 @@ export function renderSetup(s) {
 
   if (s.discovery && !s.account) {
     const sign = h("section", { "aria-labelledby": "setup-sign-h" }, h("h2", { id: "setup-sign-h", text: t("Sign in") }))
-    sign.append(h("p", { class: "muted", text: t("The app signs in to your server once, in your browser, as any device does. It may then read and write your chats, as the web interface does.") }))
+    const both = s.discovery.one_approval && !s.linked
+    sign.append(h("p", { class: "muted", text: both ? t("The app signs in to your server once, in your browser, as any device does. It may then read and write your chats, as the web interface does, and the same approval links this computer for the agent.") : t("The app signs in to your server once, in your browser, as any device does. It may then read and write your chats, as the web interface does.") }))
     if (s.signing_in && code) {
       sign.append(
         h("p", null, t("Approve this code in the page that opened in your browser:")),

@@ -2,22 +2,27 @@
 //! sign-in to it, and every request the app's pages make to it.
 //!
 //! - **Discovery** (`/.well-known/lembas.json`) decides first. LLeMbas Desktop 1.0 needs a
-//!   LLeMbas 2.0 server: one that speaks link protocol 3 and has the app's door (`/api/v2`) in a
-//!   version this app knows. An older server is refused with a sentence that says which side to
-//!   update, before anything is signed in.
+//!   LLeMbas 2.0 server: one that speaks link protocol 3 and has the app's door (`/api/v2`) in
+//!   version 2. That is checked by `app_api`, not by the server's version number, which says 2
+//!   only from its first 2.0 release on. An older server is refused with a sentence that says
+//!   which side to update, before anything is signed in.
 //! - **The app's sign-in** is the server's device login (RFC 8628), the same one `lembas login`
-//!   uses, for one scope: `app`, "read and write your chats, as the web interface does". The
+//!   uses, for `app models`: "read and write your chats, as the web interface does", and the
+//!   speech routes. **One approval, two tokens**: where discovery says
+//!   `login.device.agent_scope`, the same login asks for the agent's scopes too
+//!   (`models memory link`), and the approval answers with a second token, the agent's, which is
+//!   handed straight to the bundled CLI (`lembas login --token-stdin`) and never kept here. The
 //!   approval page opens in the system's browser, where the person is signed in already. The
-//!   token is kept in the app's config directory, readable by this user only.
+//!   app's token is kept in the app's config directory, readable by this user only.
 //! - **The token stays in Rust.** The pages ask for `/api/v2/...` through a command and get the
 //!   JSON back; they never hold the token, so no page -- and nothing a page shows -- can send it
 //!   anywhere. A request can only reach the server's `/api/v2`: the path is checked here.
 //!
-//! The agent's own link is a different token, the CLI's (`lembas login`), which this app never
-//! reads: a token that may accept work as a device is not one the chat window needs.
+//! The agent's own link is a different token, the CLI's, which this app never keeps or reads
+//! back: a token that may accept work as a device is not one the chat window needs.
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -27,11 +32,15 @@ use serde_json::Value;
 
 /// The link protocol a 2.0 server speaks (harness spec `acp.md`, *Versions*).
 pub const NEEDS_PROTOCOL: i64 = 3;
-/// The server's major version this app is written for.
-pub const NEEDS_MAJOR: u64 = 2;
-/// The `/api/v2` contract this app is written against: discovery's `app_api`. A higher number is
-/// a change an existing client would misread, so this app says it is too old rather than guess.
-pub const APP_API: i64 = 1;
+/// The `/api/v2` contract this app is written against: discovery's `app_api`. A lower number is
+/// a server before 2.0 (its chats carry what this app no longer reads, and it has no `show`
+/// card); a higher one is a change an existing client would misread, so this app says it is too
+/// old rather than guess.
+pub const APP_API: i64 = 2;
+/// The scopes the app's own token asks for: the chats, and the speech routes of `/v1`.
+pub const APP_SCOPE: &str = "app models";
+/// The scopes the agent's token asks for, in the same approval: what `lembas service` needs.
+pub const AGENT_SCOPE: &str = "models memory link";
 
 /// What discovery said, once it has passed every check.
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -46,6 +55,9 @@ pub struct Discovery {
     pub device_code: String,
     #[serde(skip)]
     pub device_token: String,
+    /// The server gives the agent's token from the app's own approval
+    /// (`login.device.agent_scope`): one approval, not two.
+    pub one_approval: bool,
 }
 
 fn agent(read: Duration) -> ureq::Agent {
@@ -113,18 +125,9 @@ pub fn discover(base: &str) -> Result<Discovery, String> {
     check(&body, base)
 }
 
-/// The leading number of a version: `2` of `2.0.0-beta.1`, `1` of `1.7.3`.
-fn major(version: &str) -> Option<u64> {
-    let digits: String = version
-        .trim_start_matches('v')
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse().ok()
-}
-
-/// The checks, on discovery's answer: a LLeMbas server, a 2.0 one (protocol 3, version 2 or
-/// later), with an app door whose version this app knows.
+/// The checks, on discovery's answer: a LLeMbas server, a 2.0 one (protocol 3, and the app
+/// door in version 2), with an app door whose version this app knows. The server's version
+/// number is not checked: a 2.0 server in the making still says 1.7 until its first beta.
 pub fn check(body: &Value, base: &str) -> Result<Discovery, String> {
     if body.get("service").and_then(Value::as_str) != Some("lembas") {
         return Err(format!("{base} is not a LLeMbas server."));
@@ -143,8 +146,8 @@ pub fn check(body: &Value, base: &str) -> Result<Discovery, String> {
             .into_iter()
             .collect(),
     };
-    let new_enough =
-        protocols.contains(&NEEDS_PROTOCOL) && major(&version).is_some_and(|m| m >= NEEDS_MAJOR);
+    let app_api = body.get("app_api").and_then(Value::as_i64).unwrap_or(0);
+    let new_enough = protocols.contains(&NEEDS_PROTOCOL) && app_api >= APP_API;
     if !new_enough {
         let runs = if version.is_empty() {
             "an older LLeMbas".to_string()
@@ -154,12 +157,6 @@ pub fn check(body: &Value, base: &str) -> Result<Discovery, String> {
         return Err(format!(
             "{base} runs {runs}. LLeMbas Desktop {} needs a LLeMbas 2.0 server or later: update the server, or keep using LLeMbas Desktop 0.7 with this one.",
             env!("CARGO_PKG_VERSION")
-        ));
-    }
-    let app_api = body.get("app_api").and_then(Value::as_i64).unwrap_or(0);
-    if app_api < 1 {
-        return Err(format!(
-            "{base} has no app interface (/api/v2). Update the server to LLeMbas 2.0 or later."
         ));
     }
     if app_api > APP_API {
@@ -195,6 +192,10 @@ pub fn check(body: &Value, base: &str) -> Result<Discovery, String> {
         app,
         device_code,
         device_token,
+        one_approval: device
+            .and_then(|d| d.get("agent_scope"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
@@ -268,25 +269,37 @@ pub struct Code {
     pub device_code: String,
 }
 
-/// Open a device login for the `app` scope.
-pub fn start_sign_in(d: &Discovery, host: &str) -> Result<Code, String> {
+/// What a device login asks the server for, as the form it posts.
+fn code_request(host: &str, with_agent: bool) -> Value {
     let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
     let device_name = if host.is_empty() {
         "LLeMbas Desktop".to_string()
     } else {
         format!("LLeMbas Desktop on {host}")
     };
+    let mut body = serde_json::json!({
+        "client_id": format!("llembas-desktop {}", env!("CARGO_PKG_VERSION")),
+        "device_name": device_name,
+        "device_platform": platform,
+        "scope": APP_SCOPE,
+    });
+    if with_agent {
+        // The agent's token is the device an agent chat runs on: it carries this computer's
+        // host, as `lembas login` sends it, so the app knows which device is this one. The
+        // app's own token alone names no host: it is not a device.
+        body["device_host"] = Value::String(host.to_string());
+        body["agent_scope"] = Value::String(AGENT_SCOPE.to_string());
+    }
+    body
+}
+
+/// Open a device login for the app's scopes, and the agent's too when `with_agent` (only where
+/// discovery offered it).
+pub fn start_sign_in(d: &Discovery, host: &str, with_agent: bool) -> Result<Code, String> {
     let res = agent(Duration::from_secs(15))
         .post(&d.device_code)
         .set("accept", "application/json")
-        .send_json(serde_json::json!({
-            "client_id": format!("llembas-desktop {}", env!("CARGO_PKG_VERSION")),
-            "device_name": device_name,
-            // No host on purpose: the host names the device an agent chat runs on, and that is
-            // the CLI's link, not this sign-in.
-            "device_platform": platform,
-            "scope": "app",
-        }))
+        .send_json(code_request(host, with_agent && d.one_approval))
         .map_err(|e| oauth_error(e, "The server refused to start a sign-in"))?;
     let v: Value = res
         .into_json()
@@ -327,12 +340,45 @@ fn oauth_error(e: ureq::Error, what: &str) -> String {
     }
 }
 
+/// What an approval gave: the app's sign-in, and the agent's token when the login asked for one.
+/// The agent's token is not kept: it goes to the CLI and is dropped.
+pub struct Granted {
+    pub account: Account,
+    pub agent_token: Option<String>,
+}
+
+/// The token endpoint's answer, once it carries a token.
+fn granted(v: &Value, server: &str) -> Option<Granted> {
+    let token = v.get("access_token").and_then(Value::as_str)?;
+    let account = v.get("account");
+    let field = |k: &str| {
+        account
+            .and_then(|a| a.get(k))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    Some(Granted {
+        account: Account {
+            server: server.to_string(),
+            token: token.to_string(),
+            email: field("email"),
+            name: field("name"),
+        },
+        agent_token: v
+            .get("agent_token")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(String::from),
+    })
+}
+
 /// Wait for the person to approve the code (or not), checking `cancelled` while waiting.
 pub fn await_sign_in(
     d: &Discovery,
     code: &Code,
     cancelled: &AtomicBool,
-) -> Result<Account, String> {
+) -> Result<Granted, String> {
     let deadline = Instant::now() + Duration::from_secs(code.expires_in.max(1));
     let mut interval = Duration::from_secs(code.interval);
     let http = agent(Duration::from_secs(15));
@@ -358,21 +404,8 @@ pub fn await_sign_in(
                 return Err(format!("Could not reach the server: {t}"))
             }
         };
-        if let Some(token) = v.get("access_token").and_then(Value::as_str) {
-            let account = v.get("account");
-            let field = |k: &str| {
-                account
-                    .and_then(|a| a.get(k))
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string()
-            };
-            return Ok(Account {
-                server: d.base.clone(),
-                token: token.to_string(),
-                email: field("email"),
-                name: field("name"),
-            });
+        if let Some(g) = granted(&v, &d.base) {
+            return Ok(g);
         }
         match v.get("error").and_then(Value::as_str) {
             Some("authorization_pending") => {}
@@ -388,8 +421,8 @@ pub fn await_sign_in(
     Err("The code expired before it was approved. Sign in again.".into())
 }
 
-/// Give the token up on the server (it is gone from the server's device list then). Best effort:
-/// the app forgets it either way.
+/// Give a token up on the server (the app's: gone from the account's apps then; the agent's:
+/// one the CLI did not take). Best effort: the app forgets it either way.
 pub fn sign_out(base: &str, token: &str) {
     let _ = agent(Duration::from_secs(10))
         .delete(&format!("{base}/api/v1/token"))
@@ -450,6 +483,28 @@ pub fn request(
     }
     serde_json::from_str(&text)
         .map_err(|_| ApiError::new(0, "The server's answer was not JSON.".to_string()))
+}
+
+/// The most a plain-text answer may be: the server's own limit for a shown file (1 MB), and a
+/// little room. Anything longer is not read to the end.
+pub const TEXT_LIMIT: u64 = 1024 * 1024 + 4096;
+
+/// One `GET` on `/api/v2` that answers plain text, not JSON: the file a `show` card names
+/// (`/chats/{chat}/show?…`). An error is still the server's JSON `detail` -- 404 when the file
+/// is no longer the chat's to show, 413 when it is too large, 415 when it is not text.
+pub fn request_text(app: &str, token: &str, path: &str) -> Result<String, ApiError> {
+    let path = checked_path(path)?;
+    let res = agent(Duration::from_secs(60))
+        .get(&format!("{app}{path}"))
+        .set("authorization", &format!("Bearer {token}"))
+        .set("accept", "text/plain")
+        .call()?;
+    let mut text = String::new();
+    res.into_reader()
+        .take(TEXT_LIMIT)
+        .read_to_string(&mut text)
+        .map_err(|e| ApiError::new(0, format!("The server's answer could not be read: {e}")))?;
+    Ok(text)
 }
 
 /// Server-sent events, a line at a time: what `stream` hands on, one `(event, data)` per frame.
@@ -537,11 +592,12 @@ mod tests {
             "name": "Example",
             "protocol": 3,
             "protocols": [3],
-            "app_api": 1,
+            "app_api": 2,
             "api": {"app": "https://ai.example/api/v2"},
             "login": {"device": {
                 "code": "https://ai.example/api/device/code",
-                "token": "https://ai.example/api/device/token"
+                "token": "https://ai.example/api/device/token",
+                "agent_scope": true
             }}
         })
     }
@@ -552,6 +608,54 @@ mod tests {
         assert_eq!(d.app, "https://ai.example/api/v2");
         assert_eq!(d.name, "Example");
         assert_eq!(d.device_token, "https://ai.example/api/device/token");
+        assert!(d.one_approval);
+        // A server in the making still says 1.7 until its first 2.0 beta: `app_api` decides.
+        let mut dev = two_oh();
+        dev["version"] = json!("1.7.2");
+        assert!(check(&dev, "https://ai.example").is_ok());
+    }
+
+    #[test]
+    fn without_agent_scope_in_discovery_there_are_two_approvals() {
+        let mut older = two_oh();
+        older["login"]["device"]
+            .as_object_mut()
+            .unwrap()
+            .remove("agent_scope");
+        assert!(!check(&older, "https://ai.example").unwrap().one_approval);
+    }
+
+    #[test]
+    fn one_approval_asks_for_both_tokens_and_only_then_names_the_host() {
+        let both = code_request("workbench", true);
+        assert_eq!(both["scope"], "app models");
+        assert_eq!(both["agent_scope"], "models memory link");
+        assert_eq!(both["device_host"], "workbench");
+        assert_eq!(both["device_name"], "LLeMbas Desktop on workbench");
+        let app_only = code_request("workbench", false);
+        assert_eq!(app_only["scope"], "app models");
+        assert!(app_only.get("agent_scope").is_none());
+        assert!(app_only.get("device_host").is_none());
+    }
+
+    #[test]
+    fn an_approval_gives_the_app_its_token_and_the_agent_its_own() {
+        let v = json!({
+            "access_token": "lmb_app", "token_type": "Bearer", "scope": "app models",
+            "account": {"email": "a@example.org", "name": "A"},
+            "base_url": "https://ai.example",
+            "agent_token": "lmb_agent", "agent_scope": "models memory link"
+        });
+        let g = granted(&v, "https://ai.example").unwrap();
+        assert_eq!(g.account.token, "lmb_app");
+        assert_eq!(g.account.email, "a@example.org");
+        assert_eq!(g.agent_token.as_deref(), Some("lmb_agent"));
+        let one = json!({"access_token": "lmb_app", "account": {}});
+        assert_eq!(
+            granted(&one, "https://ai.example").unwrap().agent_token,
+            None
+        );
+        assert!(granted(&json!({"error": "authorization_pending"}), "x").is_none());
     }
 
     #[test]
@@ -561,11 +665,13 @@ mod tests {
         let why = check(&old, "https://ai.example").unwrap_err();
         assert!(why.contains("LLeMbas 1.7.3"), "{why}");
         assert!(why.contains("needs a LLeMbas 2.0 server"), "{why}");
-        // Protocol 3 alone is not enough: the version must say 2.
+        // Protocol 3 alone is not enough: the app door must be version 2 (1.7 serves 1).
         let mut early = two_oh();
-        early["version"] = json!("1.7.2");
-        assert!(check(&early, "https://ai.example").is_err());
-        // Version 2 without protocol 3 is not one either.
+        early["version"] = json!("1.7.3");
+        early["app_api"] = json!(1);
+        let why = check(&early, "https://ai.example").unwrap_err();
+        assert!(why.contains("needs a LLeMbas 2.0 server"), "{why}");
+        // The app door without protocol 3 is not one either.
         let mut odd = two_oh();
         odd["protocols"] = json!([1, 2]);
         assert!(check(&odd, "https://ai.example").is_err());
@@ -583,14 +689,6 @@ mod tests {
         assert!(check(&none, "https://ai.example").is_err());
         let not_ours = json!({"service": "other"});
         assert!(check(&not_ours, "https://ai.example").is_err());
-    }
-
-    #[test]
-    fn versions_read_their_major() {
-        assert_eq!(major("2.0.0-beta.1"), Some(2));
-        assert_eq!(major("v10.1.0"), Some(10));
-        assert_eq!(major("1.7.3"), Some(1));
-        assert_eq!(major(""), None);
     }
 
     #[test]

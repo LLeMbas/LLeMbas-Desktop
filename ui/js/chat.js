@@ -7,10 +7,10 @@
 // thinking, text (markdown, model output), tool calls, messages taken in while it ran.
 
 import { $, h, clear, append } from "./dom.js"
-import { api, get, post, patch, follow, why, invoke } from "./bridge.js"
+import { api, get, getText, post, patch, follow, why, invoke } from "./bridge.js"
 import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
-import { readLocal, readServer } from "./explorer.js"
+import { readLocal } from "./explorer.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
@@ -101,8 +101,26 @@ function step(s, chat) {
   }
 }
 
-function shownPath(call) {
-  return call.show?.path || call.args?.path || call.path || ""
+/**
+ * Where the text of a file the agent showed comes from, or null when there is none to fetch:
+ * - an agent chat on this computer: the file itself, read here (the card's path, or the call's
+ *   own `args.path` for a step the card does not describe);
+ * - otherwise the server, through the card (`show`): `?node=&version=` for a file in the tree,
+ *   `?shown=` for the copy a device sent. The server checks the chat's access again then.
+ */
+function shownSource(call, chat) {
+  if (onThisComputer(chat) && chat.device.directory) {
+    const path = call.show?.path || call.args?.path || ""
+    return path ? { local: true, path } : null
+  }
+  const s = call.show
+  if (!s || !chat?.id) return null
+  const q = s.shown_id
+    ? `shown=${encodeURIComponent(s.shown_id)}`
+    : s.node_id && s.version_id
+      ? `node=${encodeURIComponent(s.node_id)}&version=${encodeURIComponent(s.version_id)}`
+      : ""
+  return q ? { local: false, path: s.path || "", url: `/chats/${encodeURIComponent(chat.id)}/show?${q}` } : null
 }
 
 function toolCall(c, chat) {
@@ -115,7 +133,7 @@ function toolCall(c, chat) {
   if (c.text) body.append(h("pre", { class: "call__pre", text: c.text }))
   if (c.error) body.append(h("p", { class: "msg__note is-error", text: typeof c.error === "string" ? c.error : JSON.stringify(c.error) }))
   if (c.truncated) body.append(h("p", { class: "muted", text: t("Cut short here; the whole of it is in the web interface.") }))
-  const isShow = c.name === "show" && !failed && shownPath(c)
+  const isShow = c.name === "show" && !failed && shownSource(c, chat)
   const summary = h(
     "summary",
     { class: "call__head" },
@@ -132,25 +150,23 @@ function toolCall(c, chat) {
 
 /** A file the agent showed: from this computer when the chat runs here, else from the server. */
 async function openShown(call, chat) {
-  const path = shownPath(call)
-  const kind = call.show?.kind
+  const src = shownSource(call, chat)
+  if (!src) return
+  const path = src.path
   const { language } = showKind(path)
-  const line = call.show?.line || call.args?.line || 0
-  const base = { name: path.split("/").pop(), path, kind, language: call.show?.language || language, line }
+  const line = call.show?.line || (src.local ? call.args?.line : 0) || 0
+  const base = { name: call.show?.name || path.split("/").pop(), path, kind: call.show?.kind, language: call.show?.language || language, line }
   try {
-    if (onThisComputer(chat) && chat.device.directory) {
+    if (src.local) {
       const dir = chat.device.directory.replace(/\/+$/, "")
       const rel = path.startsWith(`${dir}/`) ? path.slice(dir.length + 1) : path
       const f = await readLocal(dir, rel)
       openViewer({ ...base, where: `${t("Shown by the agent")} · ${t("This computer")}`, text: f.text, withheld: f.withheld, size: f.size })
-    } else if (call.show?.shown_id) {
-      // The copy a device sent (server: `GET /api/chats/{chat}/shown/{id}` is the web UI's; the
-      // app's door does not have it yet -- see SERVER_FILES in explorer.js).
-      const f = await get(`/chats/${encodeURIComponent(chat.id)}/shown/${encodeURIComponent(call.show.shown_id)}`)
-      openViewer({ ...base, where: t("Shown by the agent"), text: f.text })
     } else {
-      const f = await readServer(path)
-      openViewer({ ...base, where: `${t("Shown by the agent")} · ${t("Server")}`, text: f.text, withheld: f.withheld, size: f.size })
+      // Plain text, at most 1 MB; the server's 404 (no longer the chat's), 413 (too large) and
+      // 415 (not text) come back as its own words. HTML is its source: the viewer seals it.
+      const text = await getText(src.url)
+      openViewer({ ...base, where: `${t("Shown by the agent")} · ${t("Server")}`, text })
     }
   } catch (err) {
     openViewer({ ...base, where: t("Shown by the agent"), error: why(err) })

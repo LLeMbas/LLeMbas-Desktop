@@ -8,9 +8,10 @@
 //! - **Only that page gets the bridge.** The one capability names the `main` window and no remote
 //!   URL; the window refuses every navigation away from the app's page, and HTML the viewer shows
 //!   is a sealed frame on a scheme of its own with no IPC and no network (`sealed.rs`).
-//! - **The agent is the CLI's**: `lembas login --json` links this computer, and
-//!   `lembas service run` is the device (`agent.rs`). The app reads the CLI's state and runs its
-//!   commands; it never writes the CLI's files.
+//! - **The agent is the CLI's**: the app's own sign-in also gives the agent's token, in the same
+//!   approval, and `lembas login --token-stdin` takes it (a server without that: `lembas login
+//!   --json`, a second approval); `lembas service run` is the device (`agent.rs`). The app reads
+//!   the CLI's state and runs its commands; it never writes the CLI's files.
 //! - **A 2.0 server only.** Discovery is checked before anything else (`server::check`).
 
 mod agent;
@@ -23,7 +24,7 @@ mod settings;
 mod watch;
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -282,7 +283,10 @@ enum SignIn {
     Failed { message: String },
 }
 
-/// Sign the app in to the server: a device login for the `app` scope, approved in the browser.
+/// Sign the app in to the server: a device login for the app's scopes, approved in the browser.
+/// Where the server can (`one_approval`) and this computer is not linked to it yet, the same
+/// approval links it: the agent's token goes to the CLI. A computer linked already keeps its
+/// link; "Link again" is the way to replace it.
 #[tauri::command]
 fn sign_in(handle: AppHandle) -> Result<(), String> {
     let app = handle.state::<App>();
@@ -300,7 +304,8 @@ fn sign_in(handle: AppHandle) -> Result<(), String> {
     announce(&handle);
     std::thread::spawn(move || {
         let host = cli::hostname().unwrap_or_default();
-        let result = server::start_sign_in(&d, &host).and_then(|code| {
+        let with_agent = d.one_approval && !cli::linked_to(&d.base);
+        let result = server::start_sign_in(&d, &host, with_agent).and_then(|code| {
             let _ = handle
                 .opener()
                 .open_url(&code.verification_uri_complete, None::<&str>);
@@ -314,21 +319,36 @@ fn sign_in(handle: AppHandle) -> Result<(), String> {
                 *busy = None;
             }
         }
+        let mut agent_token = None;
         let outcome = match result {
-            Ok(account) => match server::save_account(&app.config_dir, &account) {
+            Ok(granted) => match server::save_account(&app.config_dir, &granted.account) {
                 Ok(()) => {
-                    *app.account.lock().unwrap() = Some(account);
+                    *app.account.lock().unwrap() = Some(granted.account);
                     app.watch.reset();
+                    agent_token = granted.agent_token;
                     SignIn::Done
                 }
-                Err(e) => SignIn::Failed {
-                    message: format!("The sign-in could not be saved: {e}"),
-                },
+                Err(e) => {
+                    // Nobody holds either token now: give both up.
+                    server::sign_out(&d.base, &granted.account.token);
+                    if let Some(t) = granted.agent_token {
+                        server::sign_out(&d.base, &t);
+                    }
+                    SignIn::Failed {
+                        message: format!("The sign-in could not be saved: {e}"),
+                    }
+                }
             },
             Err(message) => SignIn::Failed { message },
         };
         let _ = handle.emit("signin", outcome);
         announce(&handle);
+        if let Some(token) = agent_token {
+            if let Err(message) = hand_to_cli(&handle, &d.base, token) {
+                let _ = handle.emit("linking", Linking::Failed { message });
+                announce(&handle);
+            }
+        }
     });
     Ok(())
 }
@@ -381,6 +401,22 @@ async fn api(
     })
     .await
     .map_err(|e| ApiError::new(0, e.to_string()))?;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(&handle);
+    }
+    result
+}
+
+/// One request to `/api/v2` that answers plain text: the file a `show` card names.
+#[tauri::command]
+async fn api_text(handle: AppHandle, path: String) -> Result<String, ApiError> {
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let result =
+        tauri::async_runtime::spawn_blocking(move || server::request_text(&app_url, &token, &path))
+            .await
+            .map_err(|e| ApiError::new(0, e.to_string()))?;
     if matches!(&result, Err(e) if e.status == 401) {
         token_refused(&handle);
     }
@@ -662,20 +698,15 @@ enum Linking {
 }
 
 /// Link this computer: `lembas login <server> --json`, the approval opened in the system's
-/// browser (where the person is signed in to the server), then the agent started.
+/// browser (where the person is signed in to the server), then the agent started. The way to
+/// link again, and the only way on a server that gives no agent token with the app's sign-in.
 fn start_link(handle: &AppHandle) -> Result<(), String> {
     let app = handle.state::<App>();
     let Some(server) = app.settings().server else {
         return Err("Choose a server first.".into());
     };
-    {
-        let mut busy = app.linking.lock().unwrap();
-        if *busy {
-            return Err("Linking is already in progress.".into());
-        }
-        *busy = true;
-    }
-    let mut child = match Command::new(cli::binary())
+    claim_linking(&app)?;
+    let child = match Command::new(cli::binary())
         .arg("login")
         .arg(&server)
         .arg("--json")
@@ -690,6 +721,60 @@ fn start_link(handle: &AppHandle) -> Result<(), String> {
             return Err(format!("Could not start {}: {e}", cli::binary().display()));
         }
     };
+    follow_login(handle, child, None);
+    Ok(())
+}
+
+/// Hand the agent's token from the app's own approval to the bundled CLI:
+/// `lembas login --token-stdin --server <url> --json`. The token goes on the CLI's standard
+/// input and nowhere else -- not an argument, not the environment, not a file of the app's --
+/// and the CLI writes its own files, as `lembas login` does. If the CLI does not take it, the
+/// token is given up on the server, so no live token is left that nobody holds.
+fn hand_to_cli(handle: &AppHandle, base: &str, token: String) -> Result<(), String> {
+    let app = handle.state::<App>();
+    if let Err(e) = claim_linking(&app) {
+        server::sign_out(base, &token);
+        return Err(e);
+    }
+    let spawned = Command::new(cli::binary())
+        .args(["login", "--token-stdin", "--server", base, "--json"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) => {
+            *app.linking.lock().unwrap() = false;
+            server::sign_out(base, &token);
+            return Err(format!("Could not start {}: {e}", cli::binary().display()));
+        }
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        // Dropped at the end of this block: the CLI reads to the end of its input.
+        let _ = stdin.write_all(format!("{token}\n").as_bytes());
+    }
+    follow_login(handle, child, Some((base.to_string(), token)));
+    Ok(())
+}
+
+fn claim_linking(app: &App) -> Result<(), String> {
+    let mut busy = app.linking.lock().unwrap();
+    if *busy {
+        return Err("Linking is already in progress.".into());
+    }
+    *busy = true;
+    Ok(())
+}
+
+/// Read a `lembas login --json` to its end: a code to approve (opened in the browser), then
+/// `done` or `error`; the agent started on success. `revoke`: the server and the token to give
+/// up if the login fails (the agent's token from the app's approval).
+fn follow_login(
+    handle: &AppHandle,
+    mut child: std::process::Child,
+    mut revoke: Option<(String, String)>,
+) {
     let handle = handle.clone();
     std::thread::spawn(move || {
         let mut failure: Option<String> = None;
@@ -701,6 +786,12 @@ fn start_link(handle: &AppHandle) -> Result<(), String> {
                 };
                 match ev.get("event").and_then(Value::as_str) {
                     Some("code") => {
+                        // A CLI asking for an approval did not take the token it was handed
+                        // (one too old for `--token-stdin`): give that token up now, and let
+                        // this login go on as the two-step one.
+                        if let Some((base, token)) = revoke.take() {
+                            server::sign_out(&base, &token);
+                        }
                         let field =
                             |k: &str| ev.get(k).and_then(Value::as_str).unwrap_or("").to_string();
                         let uri = field("verification_uri_complete");
@@ -742,12 +833,14 @@ fn start_link(handle: &AppHandle) -> Result<(), String> {
                 let _ = set_agent_wanted(&handle, true);
             }
             Some(message) => {
+                if let Some((base, token)) = revoke {
+                    server::sign_out(&base, &token);
+                }
                 let _ = handle.emit("linking", Linking::Failed { message });
             }
         }
         announce(&handle);
     });
-    Ok(())
 }
 
 // --- The window, the tray and the menu ------------------------------------------------------------
@@ -1160,6 +1253,7 @@ pub fn run() {
             sign_in_cancel,
             sign_out,
             api,
+            api_text,
             stream_open,
             stream_close,
             local_list,

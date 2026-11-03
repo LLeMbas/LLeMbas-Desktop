@@ -6,15 +6,17 @@ import { $, h, clear, icon, ICONS, bytes } from "./dom.js"
 import { invoke, get, why } from "./bridge.js"
 import { openViewer } from "./viewer.js"
 
-// The server's tree as the app's door gives it. `/api/v2` has no file routes yet (the web UI's
-// /files pages take the session cookie and answer HTML); these are the routes this pane is written
-// against, and a 404 says "not on this server yet" instead of failing:
-//   GET /files?path=/a        -> { path, entries: [{ name, path, kind: "dir"|"file", size, mime }] }
-//   GET /files/content?path=  -> { path, name, size, text | null, withheld?: "binary"|"too_big" }
+// The server's tree as the app's door gives it, read as the person (their own access, no chat):
+//   GET /files?path=/a        -> { path, parent, entries: [{ name, path, kind: "dir"|"file"|"mount", size, mime, updated_at }] }
+//   GET /files/content?path=  -> { path, name, size, mime, kind, language, sha, text, withheld?: { reason, message } }
+// A path the person cannot read is the server's 404, in its words.
 export const SERVER_FILES = {
   list: (path) => `/files?path=${encodeURIComponent(path || "/")}`,
   read: (path) => `/files/content?path=${encodeURIComponent(path)}`,
 }
+
+/** A directory in either tree: the server's mounts open like its folders. */
+const isDir = (e) => e.kind === "dir" || e.kind === "mount"
 
 /** A lazily opened tree in `box`. `list(path)` -> entries; `open(entry)` for a file. */
 function tree(box, { list, open, rootPath }) {
@@ -33,15 +35,15 @@ function tree(box, { list, open, rootPath }) {
     for (const e of entries) {
       const row = h(
         "button",
-        { type: "button", class: "tree__row", title: e.path, "aria-expanded": e.kind === "dir" ? "false" : null },
-        h("span", { class: "tree__chevron" }, e.kind === "dir" ? icon(ICONS.chevron) : null),
-        icon(e.kind === "dir" ? ICONS.folder : ICONS.file),
+        { type: "button", class: "tree__row", title: e.path, "aria-expanded": isDir(e) ? "false" : null },
+        h("span", { class: "tree__chevron" }, isDir(e) ? icon(ICONS.chevron) : null),
+        icon(isDir(e) ? ICONS.folder : ICONS.file),
         h("span", { class: "tree__name", text: e.name }),
-        h("span", { class: "tree__size", text: e.kind === "dir" ? "" : bytes(e.size) }),
+        h("span", { class: "tree__size", text: isDir(e) ? "" : bytes(e.size) }),
       )
       row.style.setProperty("--depth", String(depth))
       const li = h("li", { role: "treeitem" }, row)
-      if (e.kind === "dir") {
+      if (isDir(e)) {
         let kids = null
         row.addEventListener("click", async () => {
           const opening = row.getAttribute("aria-expanded") !== "true"
@@ -127,22 +129,22 @@ export function renderServer() {
   const box = $("server-tree")
   tree(box, {
     rootPath: "/",
-    list: async (path) => {
-      try {
-        const r = await get(SERVER_FILES.list(path))
-        return r.entries || []
-      } catch (err) {
-        if (err && (err.status === 404 || err.status === 405)) {
-          throw { detail: t("This server does not offer its files to the app yet.") }
-        }
-        throw err
-      }
-    },
+    list: async (path) => (await get(SERVER_FILES.list(path))).entries || [],
     open: async (e) => {
       const where = t("Server")
       try {
         const f = await readServer(e.path)
-        openViewer({ name: f.name || e.name, path: f.path || e.path, where, text: f.text, withheld: f.withheld, size: f.size })
+        openViewer({
+          name: f.name || e.name,
+          path: f.path || e.path,
+          where,
+          text: f.text,
+          // The server's own kind and language: its table and the viewer's are the same one.
+          kind: ["markdown", "code", "text", "html"].includes(f.kind) ? f.kind : undefined,
+          language: f.language || undefined,
+          withheld: f.withheld,
+          size: f.size,
+        })
       } catch (err) {
         openViewer({ name: e.name, path: e.path, where, error: why(err) })
       }
