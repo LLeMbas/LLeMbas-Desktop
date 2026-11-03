@@ -6,9 +6,14 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.1] — 2026-11-03
+
 LLeMbas Desktop 1.0 becomes an app of its own: the agent on this computer by default, your
 server's chats, two explorers and a viewer -- no longer a window onto the web interface. It needs a
 LLeMbas 2.0 server.
+
+
+Carries LLeMbas CLI 2.0.0-beta.1. Needs a LLeMbas 2.0 server (2.0.0-beta.1 or later).
 
 ### Changed
 
