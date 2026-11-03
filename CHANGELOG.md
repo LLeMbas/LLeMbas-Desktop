@@ -19,9 +19,15 @@ LLeMbas 2.0 server.
 - **Agent chats first.** The sidebar opens on agent chats, those on this computer above those on
   your other devices; a new agent chat is started on this computer, in one of the agent's
   folders, with its mode and model. Chats on the server are the second tab.
-- **The app signs in on its own**, with the server's device login for one permission: to read and
-  write your chats, as the web interface does. The approval opens in your browser. Linking this
-  computer for the agent stays a separate step, and its approval opens in the browser too.
+- **One approval signs the app in and links this computer.** The app asks the server's device
+  login for its own token (your chats, as the web interface reads and writes them, and dictation)
+  and, in the same approval, for the agent's; the approval opens in your browser. The agent's
+  token goes straight to the built-in LLeMbas CLI on its standard input (`lembas login
+  --token-stdin`), which keeps it in its own configuration as `lembas login` does; the app never
+  stores it. A computer linked already keeps its link, and **Link again** under Settings is still
+  there. A server that cannot give both tokens from one approval gets the old two steps.
+- The app's own token is not a device: the server lists it under *Apps*, and only the agent's
+  link is among the devices an agent chat can start on.
 - The look is still the server's: its design tokens, now copied from the 2.0 server, and its
   CodeMirror build for code (`scripts/fetch-vendor.sh`, pinned in `vendor.lock.json`). The
   window takes the account's theme.
@@ -32,14 +38,19 @@ LLeMbas 2.0 server.
 ### Added
 
 - **Two explorers, kept apart**: this computer's -- the open agent chat's folder, or one of the
-  agent's folders -- read only inside the agent's folders, and the server's files.
+  agent's folders -- read only inside the agent's folders, and the server's files, through
+  `/api/v2/files` with your own access. A server file that is not text, or too large, says so in
+  your language instead of failing.
 - **A viewer** beside the chat: Markdown drawn, code highlighted (read-only CodeMirror), text,
   and HTML in a sealed frame on its own address, with no access to the app, no network and no way
-  to navigate. A file the agent shows (`show`) opens in it.
+  to navigate. A file the agent shows (`show`) opens in it: from this computer for an agent chat
+  running here, otherwise as the server keeps it (`/api/v2/chats/…/show`), checked against the
+  chat's access when it is opened. A file that is gone, too large or not text says so.
 - **Native notifications** when a reply or an agent chat finishes while you are elsewhere (on by
   default; Settings, Notifications).
 - **A server older than LLeMbas 2.0 is refused** with a message saying which side to update, and so
-  is a server whose app interface is newer than this app knows.
+  is a server whose app interface is newer than this app knows. What counts is the link protocol
+  (3) and the app interface (`app_api` 2), not the server's version number.
 - **Settings in the app**: the server and the sign-in, the agent and its folders, notifications
   and updates. There are no admin pages.
 - When the app cannot start, it says why in `desktop.log` in its log directory, not only on a

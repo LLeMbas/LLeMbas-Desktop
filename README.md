@@ -49,13 +49,15 @@ built into the app before anything is installed. Betas are not offered as update
 ## Use
 
 1. Start LLeMbas and enter your server's address. **Sign in**: the approval page opens in your
-   browser, where you are signed in already; approve the code shown in the app. This sign-in lets
-   the app read and write your chats, as the web interface does.
-2. Under **Settings**, **Link this computer**: a second approval, which makes this computer a
-   device the agent runs on. The agent starts.
-3. Choose the folders the agent may work in (Settings, *Add folder…*); a new computer allows none
+   browser, where you are signed in already; approve the code shown in the app. This one approval
+   lets the app read and write your chats, as the web interface does, and links this computer as
+   the device the agent runs on: the app hands the agent's token to its LLeMbas CLI, which keeps it
+   in its own configuration. The agent starts. (A computer linked already keeps its link; on a
+   server that cannot give both from one approval, **Link this computer** under **Settings** is a
+   second one.)
+2. Choose the folders the agent may work in (Settings, *Add folder…*); a new computer allows none
    until you do.
-4. **New agent chat**: pick one of those folders, a mode and a model, and write.
+3. **New agent chat**: pick one of those folders, a mode and a model, and write.
 
 The agent is the LLeMbas CLI's `lembas service`, using the CLI's own configuration
 (`~/.config/lembas`). The app's copy of the CLI lives in its own directory
