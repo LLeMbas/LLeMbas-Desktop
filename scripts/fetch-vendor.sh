@@ -13,7 +13,10 @@
 # The one change made to a copy: the server loads these modules through an import map
 # ("@codemirror/view" -> its file), which the app's pages do not have -- an inline import map is a
 # script the content security policy would have to allow. So the bare names in `import`/`from`
-# are rewritten to the sibling files ("./cm-view.mjs"), and nothing else is touched.
+# are rewritten to the sibling files ("./cm-view.mjs"), and nothing else is touched. esm.sh's
+# Node polyfill ("/node/process.mjs", which @lezer/lr imports to read process.env.LOG) becomes
+# "./node-process.mjs", the server's own one-line stub (static/js/node-process.mjs), copied too:
+# an absolute path is a 404 in the app, and a failed @lezer/lr takes every editor language with it.
 #
 # vendor.lock.json records the ref, the commit it resolved to, and for every file the server's
 # SHA-256 and the copy's, which is what verify checks. Like fetch-tokens.sh: the file in the tree
@@ -76,14 +79,19 @@ for name in $names; do
   [ -n "$pinned" ] || { echo "fetch-vendor: $name is not pinned in the server's $SERVER_LOCK" >&2; exit 1; }
   [ "$pinned" = "$have" ] || { echo "fetch-vendor: $name does not match the server's pin ($have, pinned $pinned)" >&2; exit 1; }
   # "@codemirror/view" -> "./cm-view.mjs", "@lezer/lr" -> "./lezer-lr.mjs", "codemirror" -> "./cm-codemirror.mjs".
-  perl -pe 's#\b(from|import)(\s*)"\@codemirror/([a-z-]+)"#$1$2"./cm-$3.mjs"#g; s#\b(from|import)(\s*)"\@lezer/([a-z-]+)"#$1$2"./lezer-$3.mjs"#g; s#\b(from|import)(\s*)"codemirror"#$1$2"./cm-codemirror.mjs"#g' \
+  perl -pe 's#\b(from|import)(\s*)"\@codemirror/([a-z-]+)"#$1$2"./cm-$3.mjs"#g; s#\b(from|import)(\s*)"\@lezer/([a-z-]+)"#$1$2"./lezer-$3.mjs"#g; s#\b(from|import)(\s*)"codemirror"#$1$2"./cm-codemirror.mjs"#g; s#\b(from|import)(\s*)"/node/process\.mjs"#$1$2"./node-process.mjs"#g' \
     "$work/$name" > "$work/out/$name"
-  if grep -E -q '(from|import)\s*"(@codemirror|@lezer)/' "$work/out/$name"; then
-    echo "fetch-vendor: a bare module name survived in $name; fix the script" >&2
+  if grep -E -q '(from|import)\s*"((@codemirror|@lezer)/|/)' "$work/out/$name"; then
+    echo "fetch-vendor: a bare module name or an absolute path survived in $name; fix the script" >&2
     exit 1
   fi
   entries+=("$(printf '    "%s": {"server": "%s", "copy": "%s"}' "$name" "$have" "$(sha "$work/out/$name")")")
 done
+# The polyfill stub, from the server's own scripts (it is not a download, so it has no pin there).
+stub="src/lembas/web/static/js/node-process.mjs"
+git -C "$SERVER" show "$commit:$stub" > "$work/out/node-process.mjs" \
+  || { echo "fetch-vendor: $stub is not in $SERVER at $REF" >&2; exit 1; }
+entries+=("$(printf '    "%s": {"server": "%s", "copy": "%s"}' node-process.mjs "$(sha "$work/out/node-process.mjs")" "$(sha "$work/out/node-process.mjs")")")
 # Every module a copy imports must be one of the copies.
 for f in "$work"/out/*.mjs; do
   while read -r dep; do
