@@ -1,6 +1,6 @@
 {
-  "tag": "v2.0.0-beta.1",
-  "commit": "a3b0e660cc4de3d25d75e560afd8441d0fa37a00",
+  "tag": "v2.0.0-beta.4",
+  "commit": "7969067f72605db0df7dd877b58d847156373f18",
   "files": {
     "cm-autocomplete.mjs": {"server": "26fe431a5f54e29952e094c93151f11473a80677bfb339711ecca08195a89df4", "copy": "fcb7fcbe4e2b072d031520ec898c81ac3f2f05fb4126e03003c9b5e60ffaa8de"},
     "cm-codemirror.mjs": {"server": "dea86a106e13c9316dfedfd29209780b853bdb2b477edf3f7c90f497b592a223", "copy": "0b80ae1289a1dc3e6718727e78bc757caad657e907d0351597867d4f90c36bd2"},
@@ -18,6 +18,7 @@
     "cm-view.mjs": {"server": "ae7c45442292a6cb1bff0c82b0493924489911ff4f239eb2067293180c0f1d5e", "copy": "7ecdf6913bff51de827d31d56641ccb82f7dfb3801dde0e40c32eadc98815226"},
     "lezer-common.mjs": {"server": "b63d03ca460cc7a6ce09cbf0de24943fec22bcbe2359dc35978a57b875b2450f", "copy": "b63d03ca460cc7a6ce09cbf0de24943fec22bcbe2359dc35978a57b875b2450f"},
     "lezer-highlight.mjs": {"server": "b74148d673103ae08330a045a464acddf4ee8b563b213ea26e50f2be01a6d19d", "copy": "df21a1741ae80f2ad2b6d25860cad9ff3cda246a4fba171535d9dc92df150c1a"},
-    "lezer-lr.mjs": {"server": "4c2dcc61b5c3aedb091dfd60ce8abaeb94704b58fa9036547b0b8d2c75f701e4", "copy": "78a97314ddeaa4ae5c251292dcccf0d731ebdca093a59c15793b52131cd50ab4"}
+    "lezer-lr.mjs": {"server": "4c2dcc61b5c3aedb091dfd60ce8abaeb94704b58fa9036547b0b8d2c75f701e4", "copy": "f41bc21dc3fd874132e1d9862aae57946ae2604d91330303924c03aecfd3bc21"},
+    "node-process.mjs": {"server": "0c7460cbd81d8427a882867726b6db43beff3399f045ad942f4a65fef4705981", "copy": "0c7460cbd81d8427a882867726b6db43beff3399f045ad942f4a65fef4705981"}
   }
 }

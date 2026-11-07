@@ -6,6 +6,23 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.2] — 2026-11-07
+
+Carries LLeMbas CLI 2.0.0-beta.2 and the look of LLeMbas 2.0.0-beta.4.
+
+### Changed
+
+- **The agent keeps what its model has read** (LLeMbas CLI 2.0.0-beta.2, harness spec 3.1.0): the
+  system prompt is made once per session and sent unchanged, so a local model's server reuses the
+  whole conversation instead of reading it again; the date and anything that changes during a
+  session come as a short note on your next message; the tools stay the same for the session;
+  compaction is the next turn of the same conversation.
+
+### Fixed
+
+- **The editor highlights code again.** One of the editor's modules imported a file the app does
+  not have, so every language that parses failed to load and files opened as plain text.
+
 ## [1.0.0-beta.1] — 2026-11-03
 
 LLeMbas Desktop 1.0 becomes an app of its own: the agent on this computer by default, your
