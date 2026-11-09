@@ -1368,7 +1368,8 @@ fn on_agent_state(handle: &AppHandle, state: &AgentState) {
     announce(handle);
 }
 
-/// Look at the chat list every so often, and say when a reply finished out of sight.
+/// Look at the chat list every so often, and say when a reply finished out of sight; and at the
+/// scheduled tasks, and say when one has a result the server tells of.
 fn watch_chats(handle: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(watch::EVERY);
@@ -1386,7 +1387,11 @@ fn watch_chats(handle: AppHandle) {
             }
         };
         let done = app.watch.look(&list);
-        if done.is_empty() || !app.settings().notify {
+        // Scheduled tasks: a server without the routes (404) has none to tell of.
+        let ran = server::request(&app_url, &token, "GET", "/schedules", None)
+            .map(|v| app.watch.look_schedules(&v))
+            .unwrap_or_default();
+        if (done.is_empty() && ran.is_empty()) || !app.settings().notify {
             continue;
         }
         let in_front = main_window(&handle)
@@ -1407,6 +1412,24 @@ fn watch_chats(handle: AppHandle) {
                 .builder()
                 .title(title)
                 .body(if d.agent { &words.agent } else { &words.reply })
+                .show();
+        }
+        // A scheduled result is said even with the window in front: it ran on its own.
+        for r in ran {
+            let title = if r.title.is_empty() {
+                "LLeMbas".to_string()
+            } else {
+                r.title
+            };
+            let _ = handle
+                .notification()
+                .builder()
+                .title(title)
+                .body(if r.failed {
+                    &words.scheduled_failed
+                } else {
+                    &words.scheduled
+                })
                 .show();
         }
     });

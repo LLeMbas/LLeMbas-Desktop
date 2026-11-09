@@ -539,22 +539,32 @@ pub fn request_text(app: &str, token: &str, path: &str) -> Result<String, ApiErr
 
 /// The most a model's picture may be: the server's own limit for one (2 MB), and a little room.
 pub const IMAGE_LIMIT: u64 = 2 * 1024 * 1024 + 4096;
+/// The most an attached picture shown as a thumbnail may be: a screenshot fits; a larger one
+/// shows as a file.
+pub const ATTACHMENT_IMAGE_LIMIT: u64 = 8 * 1024 * 1024;
 
 /// The pictures a model may have, by the type the server serves them as: the four it accepts on
 /// upload. Nothing else is shown, whatever the server says it is.
 const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
-/// A model's picture path as `/api/v2/models` names it (`/api/v2/models/images/<file>`), on the
-/// app's door: `/models/images/<file>`, or None for anything else. One plain file name, no more.
+/// A picture's path on the app's door, or None for anything else: a model's picture as
+/// `/api/v2/models` names it (`/models/images/<file>`), or a message's attached file
+/// (`/attachments/<id>`, shown as a thumbnail when the server serves it as a picture). One plain
+/// name after the prefix, no more.
 pub fn image_path(path: &str) -> Option<String> {
     let rest = path.strip_prefix("/api/v2").unwrap_or(path);
-    let name = rest.strip_prefix("/models/images/")?;
-    let plain = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-        && !name.starts_with('.');
-    plain.then(|| format!("/models/images/{name}"))
+    let plain = |name: &str| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            && !name.starts_with('.')
+    };
+    if let Some(name) = rest.strip_prefix("/models/images/") {
+        return plain(name).then(|| format!("/models/images/{name}"));
+    }
+    let id = rest.strip_prefix("/attachments/")?;
+    (plain(id) && !id.contains('.')).then(|| format!("/attachments/{id}"))
 }
 
 /// A model's picture, as a `data:` URL the page can show without a request of its own (its
@@ -562,7 +572,7 @@ pub fn image_path(path: &str) -> Option<String> {
 /// token, as the page reads nothing itself.
 pub fn request_image(app: &str, token: &str, path: &str) -> Result<String, ApiError> {
     let Some(path) = image_path(path) else {
-        return Err(ApiError::new(400, format!("Not a model's picture: {path}")));
+        return Err(ApiError::new(400, format!("Not a picture's path: {path}")));
     };
     let res = agent(Duration::from_secs(30))
         .get(&format!("{app}{path}"))
@@ -578,12 +588,17 @@ pub fn request_image(app: &str, token: &str, path: &str) -> Result<String, ApiEr
     if !IMAGE_TYPES.contains(&kind.as_str()) {
         return Err(ApiError::new(415, format!("Not a picture: {kind}")));
     }
+    let limit = if path.starts_with("/attachments/") {
+        ATTACHMENT_IMAGE_LIMIT
+    } else {
+        IMAGE_LIMIT
+    };
     let mut bytes = Vec::new();
     res.into_reader()
-        .take(IMAGE_LIMIT)
+        .take(limit)
         .read_to_end(&mut bytes)
         .map_err(|e| ApiError::new(0, format!("The server's answer could not be read: {e}")))?;
-    if bytes.len() as u64 >= IMAGE_LIMIT {
+    if bytes.len() as u64 >= limit {
         return Err(ApiError::new(413, "The picture is too large."));
     }
     Ok(format!("data:{kind};base64,{}", base64(&bytes)))
@@ -912,12 +927,19 @@ mod tests {
             image_path("/models/images/a-b_c.webp").as_deref(),
             Some("/models/images/a-b_c.webp")
         );
+        assert_eq!(
+            image_path("/api/v2/attachments/att_01x").as_deref(),
+            Some("/attachments/att_01x")
+        );
         for bad in [
             "/api/v2/models/images/",
             "/api/v2/models/images/../me",
             "/api/v2/models/images/a/b.png",
             "/api/v2/models/images/.hidden",
             "/api/v2/chats/x",
+            "/api/v2/attachments/",
+            "/api/v2/attachments/a/b",
+            "/api/v2/attachments/..",
             "/uploads/models/a.png",
             "https://elsewhere/models/images/a.png",
         ] {
