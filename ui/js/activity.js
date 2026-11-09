@@ -273,15 +273,16 @@ async function read(withContext) {
 
 function renderStrip() {
   const strip = $("activity-strip")
-  const text = chat && summary?.total ? summaryText(summary) : ""
+  // While something runs, as the server's strip: a chat whose helpers all finished long ago does
+  // not carry "12 finished" above its message box for ever (the panel still lists them).
+  const text = chat && summary?.active ? summaryText(summary) : ""
   strip.hidden = !text
   if (!text) return clear(strip)
-  const busy = summary.active > 0
   strip.replaceChildren(
     h(
       "button",
       { type: "button", class: "strip__btn", "aria-label": `${text} — ${t("Open the activity panel")}`, onclick: () => showPanel(true) },
-      h("span", { class: `dot${busy ? " is-busy" : " is-ok"}`, "aria-hidden": "true" }),
+      h("span", { class: "dot is-busy", "aria-hidden": "true" }),
       h("span", { class: "strip__text", text }),
       icon(ICONS.chevron),
     ),
