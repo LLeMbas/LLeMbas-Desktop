@@ -12,7 +12,7 @@ import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind } from "./chat.js"
+import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer } from "./chat.js"
 import { initAttach, allowAttach } from "./attach.js"
 import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
@@ -282,6 +282,9 @@ async function boot() {
     onLayout: (on) => {
       $("shell").dataset.activity = String(on)
     },
+    here: onThisComputer,
+    // The conversation as it now stands: the summary's divider, read again, if it is still open.
+    compacted: (id) => openChatId() === id && openChat(id),
   })
 
   $("new-chat-btn").prepend(icon(ICONS.plus))

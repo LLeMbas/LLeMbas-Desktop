@@ -341,7 +341,7 @@ async function drawTask(id) {
         fact(t("Last run"), statusChip(task.last_run, task.running)),
         fact(t("Model"), modelWords(models, task.model)),
         fact(t("Reasoning effort"), h("span", { text: task.effort ? levelWord(task.effort) : t("The model's own") })),
-        fact(t("Agents"), h("span", { text: task.agents ? t("A team of up to %(n)s", { n: task.agents }) : t("No team") })),
+        fact(t("Subagents"), h("span", { text: task.agents ? t("Up to %(n)s at once", { n: task.agents }) : t("None") })),
         fact(t("Tell me"), h("span", { text: NOTIFY[task.notify]?.() || NOTIFY.matters() })),
         fact(t("Runs"), h("span", { text: MODE[task.mode]?.() || MODE.fresh() })),
       ),
@@ -582,15 +582,15 @@ async function drawForm(task) {
     const agents = h(
       "select",
       { id: "sched-agents", onchange: (e) => (draft.agents = Number(e.target.value) || null) },
-      h("option", { value: "", text: t("No team"), selected: !draft.agents }),
-      Array.from({ length: MAX_AGENTS - 1 }, (_, i) => i + 2).map((n) => h("option", { value: String(n), text: t("A team of up to %(n)s", { n }), selected: draft.agents === n })),
+      h("option", { value: "", text: t("None"), selected: !draft.agents }),
+      Array.from({ length: MAX_AGENTS - 1 }, (_, i) => i + 2).map((n) => h("option", { value: String(n), text: t("Up to %(n)s at once", { n }), selected: draft.agents === n })),
     )
     settings.replaceChildren(
       field(t("Tell me"), select("sched-notify", NOTIFY, "notify", () => (settings.querySelector("#sched-notify-hint").textContent = NOTIFY_HINT[draft.notify]())), NOTIFY_HINT[draft.notify]?.() || "", "sched-notify", "sched-notify-hint"),
       field(t("Runs"), select("sched-mode", MODE, "mode"), draft.mode === "continue" ? t("Each run sees the ones before it.") : t("Each run starts with nothing but the instruction."), "sched-mode"),
       field(t("Model"), modelSelect, t("A busy model is waited for, then the next free one is used."), "sched-model"),
       field(t("Reasoning effort"), effort, levels.length ? "" : t("Choose a model to choose its effort."), "sched-effort"),
-      field(t("Agents"), agents, t("A team works on it together, its own agent included."), "sched-agents"),
+      field(t("Subagents"), agents, t("How many work on it at once, the run's own agent among them, on the same model."), "sched-agents"),
     )
     settings.querySelector("#sched-mode").addEventListener("change", drawSettings)
   }

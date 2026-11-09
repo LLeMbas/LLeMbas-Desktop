@@ -123,7 +123,7 @@ export function modelPicker({ id, models, value, onChange, label }) {
   return btn
 }
 
-// --- How hard a model thinks, and how many agents a chat may have --------------------------------
+// --- How hard a model thinks, and how many subagents a chat may have --------------------------------
 //
 // The levels are the harness spec's (3.2.0, `models/schema.json`), as /api/v2/models gives them:
 // `levels` in offering order (`off` first where the model can switch thinking off, then its
@@ -193,28 +193,45 @@ export function effortControl({ model, value, onChange, id, compact }) {
 }
 
 /**
- * Whether a new chat on `model` may have a team: a chat on the server (an agent chat's team runs
- * on its device), a model that calls tools and serves two requests at once (`parallel` null is a
- * hosted API with no stated limit). The server decides again; this only keeps the fields away
- * where they could never apply. An open chat asks the server (`GET /chats/{chat}/team`).
+ * Whether a new chat on `model` is offered subagents. The server says so where it can: a model's
+ * `subagents` in `/models` (a flag, or `{offered}`), true when subagents are on for the model and
+ * the instance and at least one model could serve as one -- the model itself with room for two
+ * requests at once, or a usable model outside its one-model-at-a-time server. A server that does
+ * not say it yet: a model that calls tools and serves two requests at once (`parallel` null is a
+ * hosted API with no stated limit). The server decides again; this only keeps the chip away where
+ * it could never apply. An open chat asks the server (`GET /chats/{chat}/team`).
  */
 export function teamPossible(model) {
+  const said = model?.subagents
+  if (said !== undefined && said !== null) return typeof said === "object" ? !!said.offered : !!said
   return !!model?.tools && (model.parallel === null || model.parallel === undefined || model.parallel >= 2)
 }
 
+/** The most subagents the instance allows a chat (`cap`), where the server says it; else 32. */
+export const SUBAGENTS_CAP = 32
+export const SUBAGENTS_HINT = () => t("The fewest and the most subagents this chat runs. They work on the same model unless you name another one in the chat.")
+export function subagentsCap(...sources) {
+  for (const s of sources) {
+    const n = Number(s?.cap ?? s?.subagents_cap ?? s?.subagents?.cap)
+    if (Number.isFinite(n) && n >= 1) return n
+  }
+  return SUBAGENTS_CAP
+}
+
 /**
- * The team's size: the fewest and the most agents, the chat's own agent included, as two number
- * fields on one shared track. `value` is { min, max } (empty fields for a new chat: the person's
- * default for new chats then stands); `onChange({ min, max })` once a field is changed, with the
- * empty one left out. The server checks the pair and says the bounds when it refuses one.
+ * The subagents a chat may run: the fewest and the most, as two number fields on one shared
+ * track. `value` is { min, max } (empty fields for a new chat: the server's defaults then stand);
+ * `cap` the instance's most; `onChange({ min, max })` once a field is changed, with the empty one
+ * left out. The server checks the pair and says the bounds when it refuses one.
  */
-export function agentsControl({ value, onChange, id, compact }) {
+export function agentsControl({ value, onChange, id, compact, cap = SUBAGENTS_CAP }) {
   const field = (which, v, label) =>
     h("input", {
       type: "number",
       class: "agents__input",
       id: which === "min" ? id : null,
       min: "1",
+      max: String(cap),
       step: "1",
       inputmode: "numeric",
       value: v === undefined || v === null ? "" : String(v),
@@ -226,8 +243,7 @@ export function agentsControl({ value, onChange, id, compact }) {
   const high = field("max", value?.max, t("Most"))
   const bounds = () => {
     high.min = low.value || "1"
-    if (high.value) low.max = high.value
-    else low.removeAttribute("max")
+    low.max = high.value || String(cap)
   }
   bounds()
   const read = () => {
@@ -244,8 +260,8 @@ export function agentsControl({ value, onChange, id, compact }) {
   }
   const el = h(
     "span",
-    { class: `agents${compact ? " agents--compact" : ""}`, role: "group", "aria-label": t("Agents"), title: t("Its own agent included. Above one, it can add members that do the work while it leads them.") },
-    compact ? h("span", { class: "agents__label", text: t("Agents") }) : null,
+    { class: `agents${compact ? " agents--compact" : ""}`, role: "group", "aria-label": t("Subagents"), title: SUBAGENTS_HINT() },
+    compact ? h("span", { class: "agents__label", text: t("Subagents") }) : null,
     low,
     h("span", { class: "agents__dash", "aria-hidden": "true", text: "–" }),
     high,

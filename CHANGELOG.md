@@ -6,6 +6,23 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Subagents**, by that name everywhere. The chip under the message box says **Subagents** with the
+  fewest and the most a chat runs, and opens the two fields under those words; it shows where the
+  server offers subagents for the chat (for a new chat, for its model), and the most is the
+  server's cap. Subagents work on the chat's own model unless you name another one in the chat --
+  there is no setting for a subagent's model. A scheduled task's field is **Subagents** too.
+- **The activity panel, reshaped.** A button in the chat's header opens it at any time, and the
+  line above the message box shows only while something runs ("3 running · 1 queued · 2
+  finished"). An agent chat's **Environment** (its folder, and where it is) comes first. **Context**
+  says how far it is to the automatic compaction ("80.6k until auto-compact") beside a **Compact**
+  button that summarises the earlier turns now. **Background tasks** lists subagents, a team's
+  members and background commands under **Running**, each with how long it has run and a stop
+  square, unfolding to what it is, its latest step, what it is writing and its conversation; the
+  tasks under one fold beneath it ("2 tasks"), and the finished ones fold away under **Finished**.
+  The team's **Room** and the **Plan** have sections of their own.
+
 ## [1.0.0-beta.4] — 2026-11-09
 
 Carries LLeMbas CLI 2.0.0-beta.3 and the look of LLeMbas 2.0.0-beta.6. Scheduled tasks need LLeMbas

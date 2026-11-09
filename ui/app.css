@@ -708,17 +708,19 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .toggle input:checked { background: var(--accent); border-color: var(--accent); }
 .toggle input:checked::after { background: var(--accent-ink); transform: translateX(var(--check-size)); }
-/* The team's size: two number fields of one width with a dash between them, and in the header
+/* The subagents, fewest and most: two number fields of one width with a dash between them, and in the header
    its word before them -- fixed tracks, so nothing moves when a number grows a digit. */
-.agents {
+.agents, .agents__heads {
   display: inline-grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) var(--sp-3) minmax(0, 1fr);
   gap: var(--sp-2);
   align-items: center;
   width: 100%;
   height: var(--control-h);
 }
-.agents__dash { color: var(--ink-muted); }
+.agents__dash { color: var(--ink-muted); text-align: center; }
+/* The words over the subagents' two fields, on the fields' own tracks. */
+.agents__heads { height: auto; font-size: var(--text-xs); color: var(--ink-muted); }
 .agents__input { width: 100%; min-width: 0; height: var(--control-h); padding: 0 var(--control-px-sm); }
 .agents--compact {
   grid-template-columns: auto calc(var(--w-field-xs) / 2) auto calc(var(--w-field-xs) / 2);
@@ -920,6 +922,14 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .ctx__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink-muted); }
 .ctx__num { font: var(--text-xs) var(--font-mono); text-align: right; color: var(--ink-muted); }
 .ctx__note { margin: 0; font-size: var(--text-xs); color: var(--ink-faint); }
+/* "41k until auto-compact" and the Compact button: the words give, the button keeps its size. */
+.ctx__compact { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-1) var(--sp-2); align-items: center; padding-top: var(--sp-2); border-top: var(--border-w) solid var(--border); }
+.ctx__until { color: var(--ink-muted); }
+.ctx__error { grid-column: 1 / -1; margin: 0; font-size: var(--text-xs); color: var(--warning); }
+/* Environment: an agent chat's folder and where it is. */
+.env { display: grid; grid-template-columns: var(--sp-4) minmax(0, auto) auto; justify-content: start; gap: var(--sp-2); align-items: center; margin: 0; }
+.env__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+.env__where { font: var(--text-xs) var(--font-mono); color: var(--ink-muted); }
 .ctx--messages { --ctx: var(--accent); }
 .ctx--system { --ctx: var(--ink-muted); }
 .ctx--memory { --ctx: var(--warning); }
@@ -943,15 +953,41 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
    track that gives, cut), elapsed time in a column of its own width, the stop button at its size
    (an empty box where there is none) -- so rows line up whatever each says. */
 .tasks { display: grid; gap: var(--sp-2); min-width: 0; }
-.tasks__summary, .tasks__team { margin: 0; color: var(--ink-muted); }
+.tasks__team { margin: 0; color: var(--ink-muted); }
 .tasks__goal { margin: 0; color: var(--ink); }
-.tasks__list { display: grid; gap: var(--sp-1); }
-.tasks__more > summary { cursor: pointer; padding: var(--sp-1) 0; color: var(--ink-muted); }
-.tasks__more[open] > summary { margin-bottom: var(--sp-1); }
+.tasks__group { display: grid; grid-template-columns: auto auto; justify-content: start; gap: var(--sp-2); align-items: baseline; margin: var(--sp-1) 0 0; color: var(--ink-muted); }
+.tasks__list { display: grid; gap: var(--sp-2); }
+/* A fold ("Show 3 more", "Finished 12", a task's own "2 tasks"): a chevron that turns, then the
+   words; nested ones step in by the depth of what is under them. */
+.tasks__more { margin-left: calc(var(--depth, 0) * var(--sp-4)); min-width: 0; }
+.tasks__more > summary {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: var(--row-h);
+  padding: 0 var(--sp-3);
+  color: var(--ink-muted);
+  cursor: pointer;
+  list-style: none;
+}
+.tasks__more > summary::-webkit-details-marker { display: none; }
+.tasks__more > summary:hover { color: var(--ink); }
+.tasks__more[open] > summary { margin-bottom: var(--sp-2); }
+.tasks__nested { margin-top: calc(-1 * var(--sp-1)); }
+.tasks__finished { padding-top: var(--sp-1); border-top: var(--border-w) solid var(--border); }
+.tasks__chev, .agent__chev { display: grid; place-items: center; width: 12px; height: 12px; color: var(--ink-faint); transition: transform var(--dur-1) var(--ease-out); }
+.tasks__chev .icon, .agent__chev .icon { width: 12px; height: 12px; }
+.tasks__more[open] > summary .tasks__chev, .agent[open] > .agent__row .agent__chev { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .tasks__chev, .agent__chev { transition: none; } }
+
+/* A task: one card, one row of known tracks -- the chevron, what it does (the one track that
+   gives, cut), the elapsed time in a column of its own width, the stop square at its size (an
+   empty box where it cannot be stopped) -- so the rows line up whatever each says. */
 .agent { margin-left: calc(var(--depth, 0) * var(--sp-4)); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-lg); min-width: 0; }
 .agent__row {
   display: grid;
-  grid-template-columns: var(--dot-size) minmax(0, 1fr) var(--time-col) var(--control-h-sm);
+  grid-template-columns: 12px minmax(0, 1fr) var(--time-col) var(--control-h-sm);
   gap: var(--sp-2);
   align-items: center;
   min-height: var(--control-h);
@@ -960,17 +996,21 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   list-style: none;
 }
 .agent__row::-webkit-details-marker { display: none; }
-.agent__dot { width: var(--dot-size); height: var(--dot-size); border-radius: var(--radius-full); background: var(--ink-faint); }
-.agent.is-working .agent__dot { background: var(--accent); }
-.agent.is-queued .agent__dot, .agent.is-waiting .agent__dot { background: var(--warning); }
-.agent.is-done .agent__dot { background: var(--leaf); }
-.agent.is-error .agent__dot { background: var(--danger); }
+.agent__row:hover { background: var(--surface-hover); border-radius: var(--radius-lg); }
 .agent__what { display: grid; min-width: 0; }
-.agent__name, .agent__role { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.agent__name { color: var(--ink); }
-.agent__role { font-size: var(--text-xs); color: var(--ink-muted); }
+.agent__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+.agent.is-done .agent__name, .agent.is-stopped .agent__name { color: var(--ink-muted); }
+.agent.is-error .agent__name { color: var(--danger); }
+.agent__role { margin: 0; color: var(--ink-muted); overflow-wrap: anywhere; }
 .agent__time { font: var(--text-xs) var(--font-mono); text-align: right; color: var(--ink-muted); }
-.agent__stop { width: var(--control-h-sm); height: var(--control-h-sm); }
+.agent.is-queued .agent__time, .agent.is-waiting .agent__time { color: var(--warning); }
+/* The stop square: a small filled square in a button the size of the others. */
+.agent__stop { display: grid; place-items: center; width: var(--control-h-sm); height: var(--control-h-sm); padding: 0; background: var(--surface-active); border: 0; border-radius: var(--radius-md); cursor: pointer; }
+.agent__stop:hover { background: var(--surface-hover); }
+.agent__stop.is-none { background: none; cursor: default; }
+.agent__square { width: var(--sp-3); height: var(--sp-3); background: var(--ink); border-radius: var(--radius-sm); }
+.agent__stop:hover .agent__square { background: var(--danger); }
+.agent__id { font: var(--text-xs) var(--font-mono); color: var(--ink-faint); overflow-wrap: anywhere; }
 .agent__body { display: grid; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3) var(--sp-3); border-top: var(--border-w) solid var(--border); min-width: 0; }
 .agent__body > .btn { justify-self: start; }
 .agent__facts { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin: 0; font-size: var(--text-xs); color: var(--ink-muted); }

@@ -1,14 +1,18 @@
-// The chat's activity panel, beside it: what is in its context, by category, against the model's
-// window; the files the chat and its agents wrote; every background agent -- a team's members as
-// a tree, helpers and commands -- with its state, how long it has run, its model, its latest step
-// and what it is writing, its whole conversation read-only and a button to stop it; the team's
-// room; and the plan. The strip above the message box sums the agents up and opens it. The same
-// facts as the server's own panel (`services/activity.py`), from /api/v2:
+// The chat's activity panel, beside it, opened from the header's button at any time: where an
+// agent chat works; what is in its context, by category, against the model's window, how far it
+// is to the automatic compaction and a button to compact now; the files the chat and its
+// subagents wrote; every background task -- subagents, a team's members as a tree under the one
+// that leads them, background commands -- with how long it has run and a stop square, unfolding
+// to its latest step, what it is writing and its whole conversation, read-only; the finished ones
+// folded; the team's room; and the plan. The line above the message box sums up what runs, while
+// anything does, and opens it. The same facts as the server's own panel (`services/activity.py`),
+// from /api/v2:
 //
 //   GET  /chats/{chat}/activity?since=&context=   everything, with a `version`
 //   GET  /chats/{chat}/activity/events            `activity` {version, summary} on each change
-//   GET  /chats/{chat}/agents/{kind}/{id}         one agent and its conversation
+//   GET  /chats/{chat}/agents/{kind}/{id}         one task and its conversation
 //   POST /chats/{chat}/agents/{kind}/{id}/stop
+//   POST /chats/{chat}/compact                    summarise the earlier turns now
 //
 // The events stream is followed for as long as a chat is open: it keeps the strip current, and
 // while the panel is open a new `version` reads the panel again. The context is the costly part
@@ -31,6 +35,8 @@ const SHOWN = 6
 const CONTEXT_EVERY = 15000
 
 let layout = () => {} // (on) -> the shell makes room for the panel
+let onThisComputer = () => false // (chat) -> whether an agent chat works on this computer
+let onCompacted = () => {} // (chat id) -> the conversation is read again
 let chat = null // the open chat: { id, kind, … }
 let stream = null // the events stream's handle
 let retry = 0 // the reconnect timer
@@ -69,12 +75,14 @@ export function compact(value) {
   return `${trim(n / 1000000, 2)}M`
 }
 
-/** "3 agents working · 1 queued · 2 finished", or "" for none (the server's `summary_text`). */
+/**
+ * "3 running · 1 queued · 2 finished", or "" for none: every background task -- a subagent, a
+ * team's member, a command -- counts the same, as the panel lists them together.
+ */
 export function summaryText(counts) {
   if (!counts) return ""
   const parts = []
-  if (counts.working === 1) parts.push(t("1 agent working"))
-  else if (counts.working) parts.push(t("%(n)s agents working", { n: counts.working }))
+  if (counts.working) parts.push(t("%(n)s running", { n: counts.working }))
   if (counts.queued) parts.push(t("%(n)s queued", { n: counts.queued }))
   if (counts.waiting) parts.push(t("%(n)s waiting", { n: counts.waiting }))
   if (counts.finished) parts.push(t("%(n)s finished", { n: counts.finished }))
@@ -141,9 +149,10 @@ export function watchActivity(next) {
   cursor = 0
   readAt = contextAt = 0
   view = null
+  compactError = ""
   openRows.clear()
   renderStrip()
-  $("activity-open")?.setAttribute("aria-expanded", String(panelOpen()))
+  markOpen()
   if (!chat) {
     if (panelOpen()) showPanel(false)
     return
@@ -269,33 +278,55 @@ async function read(withContext) {
   }
 }
 
-// --- The strip above the message box ---------------------------------------------------------------
+// --- The line above the message box, and the header's button ---------------------------------------
+
+/** Both ways into the panel say whether it is open. */
+function markOpen() {
+  for (const id of ["activity-open", "activity-strip-btn"]) $(id)?.setAttribute("aria-expanded", String(panelOpen()))
+}
 
 function renderStrip() {
   const strip = $("activity-strip")
-  // A chip for every open chat: what runs, while something does, as the server's strip says it (a
-  // chat whose helpers all finished long ago does not carry "12 finished" for ever: the panel
-  // still lists them); else only the way into the panel.
-  strip.hidden = !chat
-  if (!chat) return clear(strip)
-  const active = summary?.active ? summaryText(summary) : ""
-  const text = active || t("Activity")
+  // Only while something runs, as the server's own line: the header's button is the way into the
+  // panel at any other time (and a chat whose tasks all finished long ago does not carry
+  // "12 finished" for ever: the panel still lists them).
+  const active = chat && summary?.active ? summaryText(summary) : ""
+  strip.hidden = !active
+  if (!active) return clear(strip)
   strip.replaceChildren(
     h(
       "button",
       {
         type: "button",
-        id: "activity-open",
-        class: `strip__btn${active ? " is-active" : ""}`,
-        "aria-label": `${text} — ${panelOpen() ? t("Close the activity panel") : t("Open the activity panel")}`,
+        id: "activity-strip-btn",
+        class: "strip__btn is-active",
+        "aria-label": `${active} — ${panelOpen() ? t("Close the activity panel") : t("Open the activity panel")}`,
         "aria-controls": "activity",
         "aria-expanded": String(panelOpen()),
         onclick: togglePanel,
       },
       h("span", { class: "dot", "aria-hidden": "true" }),
-      h("span", { class: "strip__text", text }),
+      h("span", { class: "strip__text", text: active }),
       icon(ICONS.chevron),
     ),
+  )
+}
+
+/** The header's button: the panel, open or closed, for every open chat. */
+export function activityButton() {
+  return h(
+    "button",
+    {
+      type: "button",
+      class: "tool",
+      id: "activity-open",
+      "aria-label": t("Context and background tasks"),
+      title: t("Context and background tasks"),
+      "aria-controls": "activity",
+      "aria-expanded": String(panelOpen()),
+      onclick: togglePanel,
+    },
+    icon(ICONS.tasks),
   )
 }
 
@@ -306,14 +337,16 @@ export function showPanel(on) {
   if (on && !chat) return
   $("activity").hidden = !on
   layout(on)
-  $("activity-open")?.setAttribute("aria-expanded", String(on))
+  markOpen()
   clearInterval(ticker)
   ticker = 0
   if (!on) {
     view = null
+    renderStrip()
     return
   }
   ticker = setInterval(tick, 1000)
+  renderStrip()
   render()
   read(true)
   $("activity-close").focus()
@@ -359,13 +392,41 @@ function render() {
   }
   // Kept where the reader was: the panel is drawn again on every change.
   const scroll = body.scrollTop
-  body.replaceChildren(
+  const entries = data.agents || []
+  const parts = [
+    chat?.kind === "agent" && chat.device ? section("environment", t("Environment"), 0, environmentPart(chat)) : null,
     section("context", t("Context"), 0, contextPart(data.context)),
     section("outputs", t("Outputs"), (data.outputs || []).length, outputsPart(data.outputs || [])),
-    section("tasks", t("Background tasks"), 0, tasksPart()),
+    section("tasks", t("Background tasks"), 0, tasksPart(entries)),
+    data.team ? section("room", t("Room"), room.length, roomPart()) : null,
     data.plan ? section("plan", t("Plan"), 0, h("div", { class: "activity__plan" }, planList(data.plan))) : null,
-  )
+  ]
+  body.replaceChildren(...parts.filter(Boolean))
   body.scrollTop = scroll
+}
+
+/** How many tasks, nested ones included: those still at work, or those finished. */
+function count(list, active) {
+  let n = 0
+  for (const a of list) {
+    if (ACTIVE.includes(a.state) === active) n += 1
+    n += count(a.children || [], active)
+  }
+  return n
+}
+
+/** Where an agent chat works: its folder, on this computer or another device. */
+function environmentPart(c) {
+  const dir = c.device?.directory || ""
+  const name = dir.split(/[\\/]/).filter(Boolean).pop() || dir
+  const here = onThisComputer(c)
+  return h(
+    "p",
+    { class: "env", title: dir },
+    icon(ICONS.folder),
+    h("bdi", { class: "env__name", text: name }),
+    h("span", { class: "env__where", text: here ? t("This computer") : t("Another device") }),
+  )
 }
 
 function contextPart(c) {
@@ -410,7 +471,62 @@ function contextPart(c) {
     { class: "ctx__note" },
     `${c.measured ? t("Counted by the model at the last reply; the categories are estimated.") : t("Estimated: no reply has been counted yet.")} ${t("%(n)s tools offered.", { n: c.tools_count ?? 0 })}`,
   )
-  return h("div", { class: "ctx" }, used, bar, rows, note)
+  return h("div", { class: "ctx" }, used, bar, rows, compactRow(c), note)
+}
+
+/**
+ * How far it is to the automatic compaction -- the server compacts before a turn once the context
+ * would reach `threshold` % of the window; 0 is off -- and the button that compacts now.
+ */
+function compactRow(c) {
+  const limit = Number(c.limit) || 0
+  const threshold = Number(c.threshold)
+  let words
+  if (!(threshold > 0)) words = t("Automatic compaction is off.")
+  else if (!limit || threshold >= 100) words = t("Compacts by itself once the window is known.")
+  else {
+    const until = Math.floor((limit * threshold) / 100) - (Number(c.used) || 0)
+    words = until > 0 ? t("%(tokens)s until auto-compact", { tokens: compact(until) }) : t("Compacts before the next reply.")
+  }
+  const busy = compacting === chat?.id
+  return h(
+    "div",
+    { class: "ctx__compact" },
+    h("span", { class: "ctx__until", text: words }),
+    h("button", {
+      type: "button",
+      class: "btn btn--sm",
+      text: busy ? t("Compacting…") : t("Compact"),
+      disabled: busy,
+      title: t("Summarise the earlier turns now and send the summary in their place."),
+      onclick: compactNow,
+    }),
+    compactError ? h("p", { class: "ctx__error", role: "alert", text: compactError }) : null,
+  )
+}
+
+let compacting = null // the chat being compacted
+let compactError = ""
+
+async function compactNow() {
+  if (!chat || compacting) return
+  const id = chat.id
+  compacting = id
+  compactError = ""
+  render()
+  try {
+    await post(`/chats/${enc(id)}/compact`)
+    compacting = null
+    if (chat?.id !== id) return
+    onCompacted(id)
+    read(true)
+  } catch (err) {
+    compacting = null
+    if (chat?.id !== id) return
+    // A server without the route in its /api/v2 says 404 or 405: said as what it means.
+    compactError = err?.status === 404 || err?.status === 405 ? t("This server cannot compact a chat from the app yet; the web interface can.") : why(err)
+    render()
+  }
 }
 
 /** A category's key as a class name: the server's words, kept to letters and underscores. */
@@ -439,64 +555,71 @@ function outputsPart(outputs) {
   )
 }
 
-function tasksPart() {
-  const entries = data.agents || []
+function tasksPart(entries) {
   const team = data.team
   const box = h("div", { class: "tasks", "aria-live": "polite" })
   if (!entries.length && !team) {
-    box.append(h("p", { class: "activity__empty", text: t("Nothing runs in the background. Helpers, commands and a team's members show here while they work.") }))
+    box.append(h("p", { class: "activity__empty", text: t("Nothing runs in the background. Subagents, a team's members and background commands show here while they work.") }))
     return box
   }
-  box.append(h("p", { class: "tasks__summary", text: summaryText(data.summary) || t("Nothing running.") }))
   if (team) {
-    box.append(h("p", { class: "tasks__team", text: t("Team: %(size)s of %(max)s agents", { size: team.size, max: team.max }) }))
+    box.append(h("p", { class: "tasks__team", text: t("Team: %(size)s of at most %(max)s subagents", { size: team.size, max: team.max }) }))
     if (team.goal) box.append(h("p", { class: "tasks__goal", text: team.goal }))
   }
-  const live = entries.filter((e) => ACTIVE.includes(e.state))
-  const ended = entries.filter((e) => !ACTIVE.includes(e.state))
+  // At the top level, what still runs -- with its own tasks under it, finished or not -- and then
+  // what finished with nothing under it still at work, folded.
+  const live = entries.filter((e) => ACTIVE.includes(e.state) || count(e.children || [], true))
+  const ended = entries.filter((e) => !live.includes(e))
+  box.append(h("p", { class: "tasks__group" }, h("span", { text: t("Running") }), h("span", { class: "activity__count", text: String(count(entries, true)) })))
   if (live.length) {
     box.append(h("div", { class: "tasks__list" }, live.slice(0, SHOWN).map(agentRows)))
     if (live.length > SHOWN) box.append(fold("more", t("Show %(n)s more", { n: live.length - SHOWN }), live.slice(SHOWN)))
-  }
-  if (ended.length) box.append(fold("finished", t("%(n)s finished", { n: ended.length }), ended))
-  if (team) {
-    box.append(h("h3", { class: "activity__subheading", text: t("Room") }))
-    box.append(
-      room.length
-        ? h(
-            "ol",
-            { class: "room" },
-            room.map((m) =>
-              h(
-                "li",
-                { class: `room__entry${m.report ? " is-report" : ""}` },
-                h(
-                  "div",
-                  { class: "room__meta" },
-                  h("span", { class: "room__n", text: `#${m.n}` }),
-                  h("span", { class: "room__route", text: `${m.from} → ${(m.to || []).join(", ")}` }),
-                  m.report ? h("span", { class: "chip room__badge", text: t("report") }) : null,
-                ),
-                h("div", { class: "room__text md" }, markdown(String(m.text || ""))),
-              ),
-            ),
-          )
-        : h("p", { class: "activity__empty", text: t("Nothing has been said in the room yet.") }),
-    )
-  }
+  } else box.append(h("p", { class: "activity__empty", text: t("Nothing running.") }))
+  if (ended.length) box.append(fold("finished", t("Finished %(n)s", { n: count(ended, false) }), ended, "tasks__finished"))
   return box
 }
 
-/** A folded list of agents ("Show 3 more", "12 finished"), remembered open across redraws. */
-function fold(name, label, list) {
-  const el = h("details", { class: "tasks__more", open: openRows.has(`fold:${name}`) }, h("summary", { text: label }), h("div", { class: "tasks__list" }, list.map(agentRows)))
+function roomPart() {
+  if (!room.length) return h("p", { class: "activity__empty", text: t("Nothing has been said in the room yet.") })
+  return h(
+    "ol",
+    { class: "room" },
+    room.map((m) =>
+      h(
+        "li",
+        { class: `room__entry${m.report ? " is-report" : ""}` },
+        h(
+          "div",
+          { class: "room__meta" },
+          h("span", { class: "room__n", text: `#${m.n}` }),
+          h("span", { class: "room__route", text: `${m.from} → ${(m.to || []).join(", ")}` }),
+          m.report ? h("span", { class: "chip room__badge", text: t("report") }) : null,
+        ),
+        h("div", { class: "room__text md" }, markdown(String(m.text || ""))),
+      ),
+    ),
+  )
+}
+
+/** A folded list of tasks ("Show 3 more", "Finished 12", "2 tasks"), remembered across redraws. */
+function fold(name, label, list, cls = "") {
+  const el = h(
+    "details",
+    { class: `tasks__more ${cls}`, open: openRows.has(`fold:${name}`) },
+    h("summary", null, h("span", { class: "tasks__chev", "aria-hidden": "true" }, icon(ICONS.chevron)), h("span", { text: label })),
+    h("div", { class: "tasks__list" }, list.map(agentRows)),
+  )
   el.addEventListener("toggle", () => (el.open ? openRows.add(`fold:${name}`) : openRows.delete(`fold:${name}`)))
   return el
 }
 
-/** An agent and, under it, the agents it leads or started. */
+/** A task and, folded under it, the tasks it leads or started ("1 task", "3 tasks"). */
 function agentRows(a) {
-  return [agentRow(a), ...(a.children || []).map(agentRows)]
+  const kids = a.children || []
+  if (!kids.length) return agentRow(a)
+  const nested = fold(`under:${a.kind}:${a.id}`, kids.length === 1 ? t("1 task") : t("%(n)s tasks", { n: kids.length }), kids, "tasks__nested")
+  nested.style.setProperty("--depth", String(Math.max(0, Math.min(6, (Number(a.depth) || 0) + 1))))
+  return [agentRow(a), nested]
 }
 
 function agentRow(a) {
@@ -512,7 +635,7 @@ function agentRow(a) {
         "button",
         {
           type: "button",
-          class: "pane__btn agent__stop",
+          class: "agent__stop",
           "aria-label": t("Stop %(name)s", { name: a.name }),
           title: t("Stop %(name)s", { name: a.name }),
           onclick: (e) => {
@@ -521,13 +644,15 @@ function agentRow(a) {
             stopAgent(a)
           },
         },
-        icon(ICONS.stop),
+        h("span", { class: "agent__square", "aria-hidden": "true" }),
       )
-    : h("span", { class: "agent__stop", "aria-hidden": "true" })
+    : h("span", { class: "agent__stop is-none", "aria-hidden": "true" })
   const facts = h(
     "p",
     { class: "agent__facts" },
     h("span", { class: "agent__state", text: stateWord(a.state) }),
+    h("span", { text: kindWord(a) }),
+    a.kind !== "member" && a.role ? h("code", { class: "agent__id", text: a.name || a.id }) : null,
     a.agent ? h("span", { text: a.agent }) : null,
     a.model ? h("span", { class: "agent__model", text: a.model }) : null,
     a.steps ? h("span", { text: t("%(steps)s steps, %(tools)s tools", { steps: a.steps, tools: a.tools }) }) : null,
@@ -547,8 +672,8 @@ function agentRow(a) {
     h(
       "summary",
       { class: "agent__row" },
-      h("span", { class: "agent__dot", "aria-hidden": "true" }),
-      h("span", { class: "agent__what" }, h("span", { class: "agent__name", text: a.name || a.id }), a.role ? h("span", { class: "agent__role", text: a.role }) : null),
+      h("span", { class: "agent__chev", "aria-hidden": "true" }, icon(ICONS.chevron)),
+      h("span", { class: "agent__what", title: label(a) }, h("bdi", { class: "agent__name", text: label(a) })),
       time,
       stopBtn,
     ),
@@ -556,17 +681,32 @@ function agentRow(a) {
       "div",
       { class: "agent__body" },
       facts,
+      a.kind === "member" && a.role ? h("p", { class: "agent__role", text: a.role }) : null,
       a.brief ? h("p", { class: "agent__brief", text: a.brief }) : null,
       step,
       a.text ? h("p", { class: "agent__text", text: a.text }) : null,
-      a.transcript
-        ? h("button", { type: "button", class: "btn btn--sm", text: t("Open its conversation"), onclick: () => openAgent(a) })
-        : null,
+      a.transcript ? h("button", { type: "button", class: "btn btn--sm", text: t("Open its conversation"), onclick: () => openAgent(a) }) : null,
     ),
   )
   el.style.setProperty("--depth", String(Math.max(0, Math.min(6, Number(a.depth) || 0))))
   el.addEventListener("toggle", () => (el.open ? openRows.add(key) : openRows.delete(key)))
   return el
+}
+
+/**
+ * A task's line: a team's member by its name (it is how the room and the others call it); a
+ * subagent or a command by what it was given to do, its id only where there is nothing else.
+ */
+function label(a) {
+  if (a.kind === "member") return a.name || a.id
+  return a.role || a.brief || a.name || a.id
+}
+
+/** What a task is: a team's member, a subagent, or a background command. */
+function kindWord(a) {
+  if (a.kind === "member") return t("Team member")
+  if (a.type === "command") return t("Background command")
+  return t("Subagent")
 }
 
 async function stopAgent(a) {
@@ -667,8 +807,10 @@ async function readAgent() {
 
 // --- Start ------------------------------------------------------------------------------------------
 
-export function initActivity({ onLayout }) {
+export function initActivity({ onLayout, here, compacted }) {
   layout = onLayout || layout
+  onThisComputer = here || onThisComputer
+  onCompacted = compacted || onCompacted
   $("activity-close").replaceChildren(icon(ICONS.close))
   $("activity-close").addEventListener("click", () => showPanel(false))
   $("activity-back").replaceChildren(icon(ICONS.back))
