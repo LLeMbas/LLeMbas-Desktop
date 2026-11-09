@@ -9,9 +9,10 @@
 //!   URL; the window refuses every navigation away from the app's page, and HTML the viewer shows
 //!   is a sealed frame on a scheme of its own with no IPC and no network (`sealed.rs`).
 //! - **The agent is the CLI's**: the app's own sign-in also gives the agent's token, in the same
-//!   approval, and `lembas login --token-stdin` takes it (a server without that: `lembas login
-//!   --json`, a second approval); `lembas service run` is the device (`agent.rs`). The app reads
-//!   the CLI's state and runs its commands; it never writes the CLI's files.
+//!   approval, and `lembas login --token-stdin` takes it; *Link this computer* is a login for the
+//!   agent's token alone, handed over the same way. `lembas service run` is the device
+//!   (`agent.rs`). The app reads the CLI's state and runs its commands; it never writes the
+//!   CLI's files.
 //! - **A 2.0 server only.** Discovery is checked before anything else (`server::check`).
 
 mod agent;
@@ -97,6 +98,8 @@ struct App {
     agent: Agent,
     tray: Mutex<Option<TrayItems>>,
     linking: Mutex<bool>,
+    /// Set to stop waiting for the approval of a link in progress.
+    link_cancel: Mutex<Option<Arc<AtomicBool>>>,
     /// The newer release the last check found, if any.
     update: Mutex<Option<String>>,
     /// The agent's folders, as `lembas remote` last answered.
@@ -286,9 +289,12 @@ enum SignIn {
 }
 
 /// Sign the app in to the server: a device login for the app's scopes, approved in the browser.
-/// Where the server can (`one_approval`) and this computer is not linked to it yet, the same
-/// approval links it: the agent's token goes to the CLI. A computer linked already keeps its
-/// link; "Link again" is the way to replace it.
+/// Where the server can (`one_approval`), the same approval asks for the agent's token too, unless
+/// the agent's link works right now (the CLI says it is linked). Whether the CLI has a login for
+/// this server on file is not asked: a login the server refuses is a file all the same, and
+/// asking that left a computer with a refused link and no way to a new one from the sign-in.
+/// After the approval the agent's token goes to the CLI -- whose `--token-stdin` login replaces
+/// the one it had for this server -- or, when the link came up meanwhile, is given up.
 #[tauri::command]
 fn sign_in(handle: AppHandle) -> Result<(), String> {
     let app = handle.state::<App>();
@@ -306,7 +312,7 @@ fn sign_in(handle: AppHandle) -> Result<(), String> {
     announce(&handle);
     std::thread::spawn(move || {
         let host = cli::hostname().unwrap_or_default();
-        let with_agent = d.one_approval && !cli::linked_to(&d.base);
+        let with_agent = d.one_approval && !link_works(&handle.state::<App>());
         let result = server::start_sign_in(&d, &host, with_agent).and_then(|code| {
             let _ = handle
                 .opener()
@@ -346,7 +352,10 @@ fn sign_in(handle: AppHandle) -> Result<(), String> {
         let _ = handle.emit("signin", outcome);
         announce(&handle);
         if let Some(token) = agent_token {
-            if let Err(message) = hand_to_cli(&handle, &d.base, token) {
+            if link_works(&app) {
+                // Linked meanwhile (a service started by hand, say): this token is nobody's.
+                server::sign_out(&d.base, &token);
+            } else if let Err(message) = hand_to_cli(&handle, &d.base, token) {
                 let _ = handle.emit("linking", Linking::Failed { message });
                 announce(&handle);
             }
@@ -779,6 +788,24 @@ fn link_computer(handle: AppHandle) -> Result<(), String> {
     start_link(&handle)
 }
 
+/// Stop waiting for the approval of a link in progress.
+#[tauri::command]
+fn link_cancel(handle: AppHandle) {
+    if let Some(c) = handle.state::<App>().link_cancel.lock().unwrap().take() {
+        c.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Whether the agent's link works right now: the CLI says it is linked -- the app's own service,
+/// or one started by hand. A login on file is not a link that works.
+fn link_works(app: &App) -> bool {
+    match app.agent.state() {
+        AgentState::Running => true,
+        AgentState::Elsewhere(e) => e.linked,
+        _ => false,
+    }
+}
+
 fn set_agent_wanted(handle: &AppHandle, on: bool) -> Result<(), String> {
     let app = handle.state::<App>();
     let s = app.update(|s| s.agent = on)?;
@@ -885,31 +912,49 @@ enum Linking {
     Failed { message: String },
 }
 
-/// Link this computer: `lembas login <server> --json`, the approval opened in the system's
-/// browser (where the person is signed in to the server), then the agent started. The way to
-/// link again, and the only way on a server that gives no agent token with the app's sign-in.
+/// Link this computer (again): a device login for the agent's scopes alone, the approval opened
+/// in the system's browser (where the person is signed in to the server), the token handed to
+/// the CLI (`lembas login --token-stdin`, which replaces a login it had for this server), then the
+/// agent started. Not `lembas login <server>`: for a server the CLI is logged in to already, that
+/// only refreshes the login it has, so a token the server refused would stay refused.
 fn start_link(handle: &AppHandle) -> Result<(), String> {
     let app = handle.state::<App>();
-    let Some(server) = app.settings().server else {
-        return Err("Choose a server first.".into());
+    let Some(d) = app.server.lock().unwrap().clone() else {
+        return Err("Choose a LLeMbas 2.0 server first.".into());
     };
     claim_linking(&app)?;
-    let child = match Command::new(cli::binary())
-        .arg("login")
-        .arg(&server)
-        .arg("--json")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            *app.linking.lock().unwrap() = false;
-            return Err(format!("Could not start {}: {e}", cli::binary().display()));
+    let cancel = Arc::new(AtomicBool::new(false));
+    *app.link_cancel.lock().unwrap() = Some(cancel.clone());
+    let handle = handle.clone();
+    std::thread::spawn(move || {
+        let host = cli::hostname().unwrap_or_default();
+        let result = server::start_link(&d, &host).and_then(|code| {
+            let _ = handle
+                .opener()
+                .open_url(&code.verification_uri_complete, None::<&str>);
+            let _ = handle.emit(
+                "linking",
+                Linking::Code {
+                    user_code: code.user_code.clone(),
+                    uri: code.verification_uri_complete.clone(),
+                },
+            );
+            server::await_sign_in(&d, &code, &cancel)
+        });
+        let app = handle.state::<App>();
+        app.link_cancel.lock().unwrap().take();
+        let given = match result {
+            Ok(granted) => give_to_cli(&handle, &d.base, granted.account.token),
+            Err(message) => {
+                *app.linking.lock().unwrap() = false;
+                Err(message)
+            }
+        };
+        if let Err(message) = given {
+            let _ = handle.emit("linking", Linking::Failed { message });
         }
-    };
-    follow_login(handle, child, None);
+        announce(&handle);
+    });
     Ok(())
 }
 
@@ -924,6 +969,12 @@ fn hand_to_cli(handle: &AppHandle, base: &str, token: String) -> Result<(), Stri
         server::sign_out(base, &token);
         return Err(e);
     }
+    give_to_cli(handle, base, token)
+}
+
+/// `hand_to_cli` once linking is claimed: the CLI takes the token, or it is given up.
+fn give_to_cli(handle: &AppHandle, base: &str, token: String) -> Result<(), String> {
+    let app = handle.state::<App>();
     let spawned = Command::new(cli::binary())
         .args(["login", "--token-stdin", "--server", base, "--json"])
         .stdin(Stdio::piped())
@@ -1460,6 +1511,7 @@ pub fn run() {
             open_external,
             set_agent,
             link_computer,
+            link_cancel,
             titlebar_menu,
             update_app,
             remote_refresh,
@@ -1496,6 +1548,7 @@ pub fn run() {
                 agent,
                 tray: Mutex::new(None),
                 linking: Mutex::new(false),
+                link_cancel: Mutex::new(None),
                 update: Mutex::new(None),
                 remote: Mutex::new(None),
                 theme: Mutex::new(theme),

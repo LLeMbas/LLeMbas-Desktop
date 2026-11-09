@@ -271,6 +271,18 @@ pub struct Code {
 
 /// What a device login asks the server for, as the form it posts.
 fn code_request(host: &str, with_agent: bool) -> Value {
+    code_request_for(host, Ask::App { with_agent })
+}
+
+/// Which login: the app's own (and the agent's beside it, in the same approval), or the agent's
+/// alone -- linking this computer again, which needs no second token for the app.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ask {
+    App { with_agent: bool },
+    Agent,
+}
+
+fn code_request_for(host: &str, ask: Ask) -> Value {
     let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
     let device_name = if host.is_empty() {
         "LLeMbas Desktop".to_string()
@@ -283,7 +295,13 @@ fn code_request(host: &str, with_agent: bool) -> Value {
         "device_platform": platform,
         "scope": APP_SCOPE,
     });
-    if with_agent {
+    if ask == Ask::Agent {
+        // The agent's token alone: the device an agent chat runs on, named by its host.
+        body["scope"] = Value::String(AGENT_SCOPE.to_string());
+        body["device_host"] = Value::String(host.to_string());
+        return body;
+    }
+    if matches!(ask, Ask::App { with_agent: true }) {
         // The agent's token is the device an agent chat runs on: it carries this computer's
         // host, as `lembas login` sends it, so the app knows which device is this one. The
         // app's own token alone names no host: it is not a device.
@@ -296,10 +314,22 @@ fn code_request(host: &str, with_agent: bool) -> Value {
 /// Open a device login for the app's scopes, and the agent's too when `with_agent` (only where
 /// discovery offered it).
 pub fn start_sign_in(d: &Discovery, host: &str, with_agent: bool) -> Result<Code, String> {
+    start_code(d, code_request(host, with_agent && d.one_approval))
+}
+
+/// Open a device login for the agent's scopes alone: linking this computer (again), with the
+/// token handed to the CLI as the app's own approval hands it. A login the CLI made itself
+/// (`lembas login <server>`) would not do here: for a server it is logged in to already, that
+/// only refreshes the login it has -- a token the server refuses stays refused.
+pub fn start_link(d: &Discovery, host: &str) -> Result<Code, String> {
+    start_code(d, code_request_for(host, Ask::Agent))
+}
+
+fn start_code(d: &Discovery, form: Value) -> Result<Code, String> {
     let res = agent(Duration::from_secs(15))
         .post(&d.device_code)
         .set("accept", "application/json")
-        .send_json(code_request(host, with_agent && d.one_approval))
+        .send_json(form)
         .map_err(|e| oauth_error(e, "The server refused to start a sign-in"))?;
     let v: Value = res
         .into_json()
@@ -791,6 +821,14 @@ mod tests {
         assert_eq!(app_only["scope"], "app models");
         assert!(app_only.get("agent_scope").is_none());
         assert!(app_only.get("device_host").is_none());
+    }
+
+    #[test]
+    fn linking_again_asks_for_the_agents_token_alone_and_names_the_host() {
+        let link = code_request_for("box", Ask::Agent);
+        assert_eq!(link["scope"], "models memory link");
+        assert_eq!(link["device_host"], "box");
+        assert!(link.get("agent_scope").is_none());
     }
 
     #[test]

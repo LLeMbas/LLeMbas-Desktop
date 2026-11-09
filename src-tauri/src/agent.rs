@@ -45,8 +45,9 @@ pub enum State {
     /// Not linked right now, and trying again: the CLI's own reason (a terminal holds the link,
     /// the server cannot be reached, the link dropped).
     Waiting(String),
-    /// The CLI will not try again by itself: the server refused this computer's token, or the
-    /// login is missing. Linking again is the way out.
+    /// The server refused this computer's link, in its words (a token it no longer takes, or a
+    /// protocol it does not speak). The CLI will not try again by itself; linking again is the
+    /// way out. Only the server's refusal: a missing login is `NotLinked`.
     Refused(String),
     /// Another `lembas service` on this computer holds the link.
     Elsewhere(Elsewhere),
@@ -106,6 +107,32 @@ pub fn from_link(link: &cli::Link, before: &State) -> State {
         "stopped" => State::Refused(why),
         _ => State::Starting,
     }
+}
+
+/// What a service that ended cleanly (exit 0) said: the server's refusal (`stopped` in its status
+/// file, with the server's reason) is `Refused`; no login for the server is `NotLinked`; any
+/// other reason it gave (a configuration that cannot work) is `Failed` -- never "refused", which
+/// is the server's word only. None when it said nothing.
+fn ended_cleanly(stopped: Option<&cli::Link>, said: Option<&str>) -> Option<State> {
+    if let Some(link) = stopped {
+        let why = link.detail.clone().unwrap_or_default();
+        // The CLI's advice to its terminal user ("sign in again: lembas login") is the app's
+        // Link button here.
+        let why = why
+            .split(" — sign in again")
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !why.is_empty() && why != "stopped" {
+            return Some(State::Refused(why));
+        }
+    }
+    let said = strip_prefix(said?);
+    if said.starts_with("not logged in") {
+        return Some(State::NotLinked);
+    }
+    Some(State::Failed(said))
 }
 
 /// What a running process has said before its status file says anything: the one line the
@@ -252,15 +279,12 @@ impl Agent {
                 Some(RESTART_FOR_UPDATE) => continue,
                 Some(0) => {
                     // It ended by itself without an error: the CLI's word for "starting again
-                    // will not help" -- the server refused the token, or there is no login.
-                    // Waiting a long while (linking again starts it at once).
-                    let why = cli::link_of(pid)
-                        .filter(|l| l.state == "stopped")
-                        .and_then(|l| l.detail)
-                        .or_else(|| said.map(|s| strip_prefix(&s)));
-                    match why {
-                        Some(why) => {
-                            if !self.set(generation, State::Refused(why)) {
+                    // will not help". Waiting a long while (linking again starts it at once).
+                    let stopped = cli::link_of(pid).filter(|l| l.state == "stopped");
+                    let next = ended_cleanly(stopped.as_ref(), said.as_deref());
+                    match next {
+                        Some(state) => {
+                            if !self.set(generation, state) {
                                 return;
                             }
                             self.pause(generation, REFUSED_WAIT);
@@ -435,6 +459,31 @@ fn strip_prefix(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refused_is_only_the_servers_word() {
+        let refused = link(
+            "stopped",
+            Some("not allowed to link — sign in again: lembas login"),
+            1,
+        );
+        assert_eq!(
+            ended_cleanly(Some(&refused), None),
+            Some(State::Refused("not allowed to link".into()))
+        );
+        assert_eq!(
+            ended_cleanly(
+                None,
+                Some("lembas service: not logged in to any LLeMbas instance — lembas login <address>")
+            ),
+            Some(State::NotLinked)
+        );
+        assert_eq!(
+            ended_cleanly(None, Some("lembas service: logged in to several instances")),
+            Some(State::Failed("logged in to several instances".into()))
+        );
+        assert_eq!(ended_cleanly(None, None), None);
+    }
 
     fn link(state: &str, detail: Option<&str>, attempts: u32) -> cli::Link {
         cli::Link {
