@@ -47,13 +47,24 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ### Added
 
-- **Scheduled tasks** (with a server that has them): the list with each task's next run, how its
-  last run went and a switch to pause it; a task's page with what it does, when, how it tells you,
-  the next runs, its history (each run's status, time, model and its result to open) and **Run
-  now**; and a new task said in your own words -- the server reads them into a rule and an
-  instruction and shows the next five runs before you save. While the app runs, a scheduled task's
-  result the server decides to tell of comes as a system notification (never a run with nothing
-  to report). A server without scheduled tasks says so.
+- **Scheduled tasks** (with a server that has them, LLeMbas 2.0.0-beta.6 or later): the list
+  with each task's next run, how its last run went and a switch to pause it, kept up to date as
+  the server runs them; a task's page with what it does, when (and in which time zone), its
+  model, effort, team and how it tells you, the next runs, and its history -- each run's status,
+  time, whether it was late, caught up or run by hand, the model it ran on (and that it switched
+  from a busy one), and its result to unfold in place, with its chat to open; earlier runs on
+  request. **Run now**, **Edit**, pause and resume, and delete. A new task is said in your own
+  words: the server reads them into a rule, a title and an instruction and shows the next five
+  runs before you save; the title and instruction can be changed, and where the words give no
+  time the days and the time can be set by hand. Each task's settings: when to tell you
+  (*when it matters*, *always*, *never*), a new chat for each run or one that grows, its model
+  (or the first free one of the scheduling models), its effort and its team. **Models** on the
+  list chooses which models scheduled tasks may run on, each shown free or busy.
+- **A scheduled task's result comes as a system notification** while the app runs, by the
+  task's own setting: a result, never a run with nothing to report unless the task says
+  *always*, nothing for *never*; a failure the first time, and on the third in a row the
+  question whether to pause it. The app follows the server's event stream for this rather than
+  asking every few seconds.
 
 ## [1.0.0-beta.3] — 2026-11-09
 

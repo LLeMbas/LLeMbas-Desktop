@@ -332,7 +332,7 @@ async function boot() {
     }
   })
 
-  invoke("set_words", { words: { reply: t("The reply is ready."), agent: t("The agent has finished."), scheduled: t("A scheduled task has a result."), scheduled_failed: t("A scheduled task failed.") } })
+  invoke("set_words", { words: { reply: t("The reply is ready."), agent: t("The agent has finished."), scheduled: t("A scheduled task has a result."), scheduled_failed: t("A scheduled task failed."), scheduled_pause: t("A scheduled task failed 3 times in a row. Pause it?") } })
   listen("status", (e) => {
     const before = status
     status = e.payload

@@ -108,7 +108,7 @@ bdi { unicode-bidi: isolate; }
 .tool:hover, .pane__btn:hover { color: var(--ink); background: var(--surface-hover); }
 .tool:disabled { opacity: var(--opacity-dim); cursor: default; }
 
-input[type="text"], input[type="search"], input[type="number"], select, textarea {
+input[type="text"], input[type="search"], input[type="number"], input[type="time"], select, textarea {
   min-width: 0;
   font: var(--text-sm) var(--font-body);
   color: var(--ink);
@@ -116,7 +116,7 @@ input[type="text"], input[type="search"], input[type="number"], select, textarea
   border: var(--border-w) solid var(--border-strong);
   border-radius: var(--radius-lg);
 }
-input[type="text"], input[type="search"], input[type="number"], select { height: var(--control-h); padding: 0 var(--control-px-sm); }
+input[type="text"], input[type="search"], input[type="number"], input[type="time"], select { height: var(--control-h); padding: 0 var(--control-px-sm); }
 textarea { padding: var(--sp-2) var(--control-px-sm); resize: none; line-height: var(--leading-normal); }
 :focus-visible { outline: var(--outline-w) solid var(--accent); outline-offset: var(--outline-offset); }
 
@@ -1380,16 +1380,47 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   font-size: var(--text-sm);
   border-bottom: var(--border-w) solid var(--border);
 }
-.run__when { display: flex; gap: var(--sp-2); align-items: center; min-width: 0; }
+.run__when { display: flex; gap: var(--sp-2); align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
 .run__late { font: var(--text-xs) var(--font-ui); color: var(--warning); }
 .run__model { display: inline-grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; min-width: 0; color: var(--ink-muted); }
 .run__model > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.run__error { max-width: var(--w-field); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--warning); font-size: var(--text-xs); }
+.run__error { max-width: var(--w-field-sm); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--warning); font-size: var(--text-xs); }
 .sched--new { gap: var(--sp-3); }
 .sched__words { width: 100%; font-size: var(--text-base); border-radius: var(--radius-soft); padding: var(--sp-3) var(--sp-4); }
 .sched__preview { margin-top: var(--sp-3); }
 .sched__card { display: grid; gap: var(--sp-4); padding: var(--sp-4); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
 .sched__title { font: 600 var(--text-md) / var(--leading-tight) var(--font-body); }
+/* A run's row opens its result under it, across every track. */
+.run__open { justify-self: end; }
+.run__switched { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
+.run__detail { grid-column: 1 / -1; display: grid; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
+.run__detail[hidden] { display: none; }
+.run__report { font: var(--text-xs) var(--font-ui); color: var(--ink-muted); overflow-wrap: anywhere; }
+.sched__more { justify-self: start; }
+.sched + .sched__history { margin-top: var(--sp-6); }
+.sched__trouble { padding: var(--sp-3) var(--sp-4); color: var(--warning); background: var(--warning-soft); border-radius: var(--radius-soft); overflow-wrap: anywhere; }
+.fact__hint { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
+/* The form: the When field's words on the control's track, one line, the time zone as its hint. */
+.sched__desc { align-self: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-sm); }
+.sched__desc.is-error { color: var(--warning); }
+/* The rule by hand: seven day toggles on equal tracks, and a time. */
+.sched__manual[hidden] { display: none; }
+.sdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--sp-1); }
+.sday { position: relative; display: grid; place-items: center; min-width: 0; height: var(--control-h); border: var(--border-w) solid var(--border); border-radius: var(--radius-lg); cursor: pointer; font: var(--text-xs) var(--font-ui); color: var(--ink-muted); overflow: hidden; }
+.sday input { position: absolute; opacity: 0; pointer-events: none; }
+.sday:has(input:checked) { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.sday:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sched__manual-open { justify-self: start; }
+.sched__manual-open[hidden] { display: none; }
+.sched__settings { padding-top: var(--sp-3); border-top: var(--border-w) solid var(--border); }
+/* The scheduling models: a tick, the avatar, the name, free or busy -- on fixed tracks. */
+.smodels { width: 100%; }
+.smodels__hint { font-size: var(--text-xs); color: var(--ink-muted); }
+.smodels__list { list-style: none; margin: 0; padding: 0; display: grid; }
+.smodel { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; min-height: var(--control-h); color: var(--ink); cursor: pointer; }
+.smodel__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-sm); }
+.smodel__state { font: var(--text-xs) var(--font-ui); color: var(--warning); }
+.smodel__state.is-free { color: var(--success); }
 /* A page's way back, before its title: "Scheduled ›". */
 .crumb { display: inline-flex; gap: var(--sp-1); align-items: center; padding: 0; font: inherit; color: var(--ink-muted); background: none; border: 0; cursor: pointer; }
 .crumb:hover { color: var(--ink); }
