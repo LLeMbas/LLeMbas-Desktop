@@ -652,7 +652,7 @@ function effortChip(model, value, onChange) {
 }
 
 /**
- * The subagents a chat may run: a chip saying the fewest and the most, opening the two fields.
+ * The subagents a chat may run: a chip saying Min–Max, opening one range with two handles.
  * `value` { min, max } or empty; `cap` the instance's most, where the server says it.
  */
 function agentsChip(value, onChange, { cap, own } = {}) {
@@ -669,8 +669,7 @@ function agentsChip(value, onChange, { cap, own } = {}) {
         h(
           "div",
           { class: "pop__body" },
-          h("label", { class: "pop__title", for: "agents-min", text: t("Subagents") }),
-          h("div", { class: "agents__heads", "aria-hidden": "true" }, h("span", { text: t("Fewest") }), h("span"), h("span", { text: t("Most") })),
+          h("p", { class: "pop__title", text: t("Subagents") }),
           fields,
           own ? h("p", { class: "hint is-warn", text: SUBAGENTS_OWN() }) : null,
           h("p", { class: "hint", text: SUBAGENTS_HINT() }),

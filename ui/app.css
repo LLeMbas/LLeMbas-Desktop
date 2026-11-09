@@ -709,28 +709,75 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .toggle input:checked { background: var(--accent); border-color: var(--accent); }
 .toggle input:checked::after { background: var(--accent-ink); transform: translateX(var(--check-size)); }
-/* The subagents, fewest and most: two number fields of one width with a dash between them, and in the header
-   its word before them -- fixed tracks, so nothing moves when a number grows a digit. */
-.agents, .agents__heads {
-  display: inline-grid;
-  grid-template-columns: minmax(0, 1fr) var(--sp-3) minmax(0, 1fr);
-  gap: var(--sp-2);
-  align-items: center;
+/* The subagents, Min and Max: one range with two handles. Three rows of known height -- the
+   values said on one line, the track box (one control high), the two ends -- and in the box two
+   range inputs laid over one track, the span between the handles filled. The inputs let only
+   their handles take the pointer, so either can be grabbed wherever the other is. */
+.range2 { display: grid; grid-template-rows: auto var(--control-h) auto; gap: var(--sp-1); width: 100%; }
+.range2__said { font: 600 var(--text-sm) / var(--leading-tight) var(--font-ui); color: var(--ink); font-variant-numeric: tabular-nums; }
+.range2__box { position: relative; display: block; height: var(--control-h); --lo: 0%; --hi: 100%; }
+.range2__track {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--check-size) / 2);
+  right: calc(var(--check-size) / 2);
+  height: var(--sp-1);
+  transform: translateY(-50%);
+  background: var(--border);
+  border-radius: var(--radius-full);
+}
+.range2__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--lo);
+  right: calc(100% - var(--hi));
+  background: var(--accent);
+  border-radius: var(--radius-full);
+}
+.range2__input {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: var(--control-h);
+  height: 100%;
+  margin: 0;
+  background: none;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
 }
-.agents__dash { color: var(--ink-muted); text-align: center; }
-/* The words over the subagents' two fields, on the fields' own tracks. */
-.agents__heads { height: auto; font-size: var(--text-xs); color: var(--ink-muted); }
-.agents__input { width: 100%; min-width: 0; height: var(--control-h); padding: 0 var(--control-px-sm); }
-.agents--compact {
-  grid-template-columns: auto calc(var(--w-field-xs) / 2) auto calc(var(--w-field-xs) / 2);
-  width: auto;
-  height: var(--control-h-sm);
-  font: var(--text-sm) var(--font-ui);
+.range2__input.is-top { z-index: 1; }
+.range2__input::-webkit-slider-runnable-track { height: 100%; background: none; border: 0; }
+.range2__input::-moz-range-track { height: 100%; background: none; border: 0; }
+.range2__input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--check-size);
+  height: var(--check-size);
+  margin-top: calc((var(--control-h) - var(--check-size)) / 2);
+  background: var(--surface-raised);
+  border: var(--border-w-thick) solid var(--accent);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+  pointer-events: auto;
 }
-.agents--compact .agents__input { height: var(--control-h-sm); }
-.agents__label { color: var(--ink-muted); white-space: nowrap; }
+.range2__input::-moz-range-thumb {
+  width: var(--check-size);
+  height: var(--check-size);
+  background: var(--surface-raised);
+  border: var(--border-w-thick) solid var(--accent);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+  pointer-events: auto;
+}
+.range2__input:focus-visible { outline: none; }
+.range2__input:focus-visible::-webkit-slider-thumb { box-shadow: var(--ring); }
+.range2__input:focus-visible::-moz-range-thumb { box-shadow: var(--ring); }
+/* The two ends, each one handle wide, so each number sits centred under its handle at that end. */
+.range2__ends { display: flex; justify-content: space-between; font-size: var(--text-xs); color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.range2__ends > span { width: var(--check-size); text-align: center; white-space: nowrap; }
 /* Markdown, drawn by markdown.js from model output (never as HTML). */
 .md { overflow-wrap: anywhere; min-width: 0; }
 .md > * + * { margin-top: var(--sp-3); }

@@ -9,7 +9,10 @@ All notable changes to LLeMbas Desktop. The format follows
 ### Changed
 
 - **Subagents**, by that name everywhere. The chip under the message box says **Subagents** with the
-  fewest and the most a chat runs, and opens the two fields under those words; it shows where the
+  least and the most agents a chat runs ("Subagents 1–4"), and opens one slider with two handles,
+  **Min** and **Max**, from 1 to the server's cap -- Min never passes Max, and both move with the
+  arrow keys as well. The numbers count the chat's own agent: **1 is the agent alone**, with no
+  subagents; Max 4 is the agent and up to 3 subagents. The chip shows where the
   server offers subagents for the chat (for a new chat, for its model), and the most is the
   server's cap. Where the chat's model serves one request at a time, it says that subagents need
   another model, on another server, named in the chat. Subagents work on the chat's own model

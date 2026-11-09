@@ -226,64 +226,87 @@ export function subagentsCap(...sources) {
   }
   return knownCap || SUBAGENTS_CAP
 }
-export const SUBAGENTS_HINT = () => t("Counted with the chat's own agent. A subagent runs on the chat's model, or on another only when you name it in the chat.")
+// The numbers count the chat's own agent: 1 is the agent alone.
+export const SUBAGENTS_HINT = () => t("The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.")
 // The spec's `subagents.setting.own`: beside the setting where the chat's model cannot serve them.
 export const SUBAGENTS_OWN = () => t("This model serves one request at a time: subagents need another model, on another server, named in the chat.")
 
+// A new chat's setting as the harness spec seeds it (`loop.json` agents): 1 to 4.
+export const AGENTS_DEFAULT = { min: 1, max: 4 }
+
 /**
- * The subagents a chat may run: the fewest and the most, as two number fields on one shared
- * track. `value` is { min, max } (empty fields for a new chat: the server's defaults then stand);
- * `cap` the instance's most; `onChange({ min, max })` once a field is changed, with the empty one
- * left out. The server checks the pair and says the bounds when it refuses one.
+ * The agents a chat may run, its own agent counted: one range from 1 to `cap` with two handles,
+ * Min and Max -- two range inputs overlaid on one track, the span between them filled. Each is a
+ * real slider (arrow keys, Home/End, Page Up/Down), and Min never passes Max. `value` is
+ * { min, max } (empty for a new chat: the spec's defaults are shown, and left to the server
+ * unless a handle moves); `el.value` the pair. The server checks it again.
  */
-export function agentsControl({ value, onChange, id, compact, cap = SUBAGENTS_CAP }) {
-  const field = (which, v, label) =>
+export function agentsControl({ value, onChange, id, cap = SUBAGENTS_CAP }) {
+  const top = Math.max(1, Number(cap) || SUBAGENTS_CAP)
+  const clamp = (n, d) => Math.min(top, Math.max(1, Number.isFinite(Number(n)) && n !== null && n !== "" ? Number(n) : d))
+  let given = value || {}
+  let touched = false
+  const handle = (which, label) =>
     h("input", {
-      type: "number",
-      class: "agents__input",
+      type: "range",
+      class: `range2__input range2__input--${which}`,
       id: which === "min" ? id : null,
       min: "1",
-      max: String(cap),
+      max: String(top),
       step: "1",
-      inputmode: "numeric",
-      value: v === undefined || v === null ? "" : String(v),
-      placeholder: compact ? null : t("default"),
       "aria-label": label,
       title: label,
     })
-  const low = field("min", value?.min, t("Fewest"))
-  const high = field("max", value?.max, t("Most"))
-  const bounds = () => {
-    high.min = low.value || "1"
-    low.max = high.value || String(cap)
+  const low = handle("min", t("Min"))
+  const high = handle("max", t("Max"))
+  const said = h("output", { class: "range2__said", "aria-live": "polite", for: id || null })
+  const fill = h("span", { class: "range2__fill", "aria-hidden": "true" })
+  const box = h("span", { class: "range2__box" }, h("span", { class: "range2__track", "aria-hidden": "true" }, fill), low, high)
+  const draw = () => {
+    const lo = Number(low.value)
+    const hi = Number(high.value)
+    const at = (n) => (top > 1 ? ((n - 1) / (top - 1)) * 100 : 0)
+    box.style.setProperty("--lo", `${at(lo)}%`)
+    box.style.setProperty("--hi", `${at(hi)}%`)
+    // Where the two meet, the one that can still move is on top: Min at the far end, else Max.
+    low.classList.toggle("is-top", lo === hi && hi === top)
+    low.setAttribute("aria-valuetext", `${t("Min")} ${lo}`)
+    high.setAttribute("aria-valuetext", `${t("Max")} ${hi}`)
+    said.textContent = `${t("Min")} ${lo} · ${t("Max")} ${hi}`
   }
-  bounds()
-  const read = () => {
-    const out = {}
-    if (low.value) out.min = Number(low.value)
-    if (high.value) out.max = Number(high.value)
-    return out
+  const set = (v) => {
+    const hi = clamp(v?.max, Math.min(AGENTS_DEFAULT.max, top))
+    const lo = Math.min(hi, clamp(v?.min, AGENTS_DEFAULT.min))
+    high.value = String(hi)
+    low.value = String(lo)
+    draw()
   }
-  for (const input of [low, high]) {
-    input.addEventListener("change", () => {
-      bounds()
-      onChange?.(read())
-    })
-  }
+  low.addEventListener("input", () => {
+    if (Number(low.value) > Number(high.value)) low.value = high.value
+    touched = true
+    draw()
+  })
+  high.addEventListener("input", () => {
+    if (Number(high.value) < Number(low.value)) high.value = low.value
+    touched = true
+    draw()
+  })
+  for (const input of [low, high]) input.addEventListener("change", () => onChange?.(read()))
+  const read = () => (touched || given.min || given.max ? { min: Number(low.value), max: Number(high.value) } : {})
+  set(given)
   const el = h(
     "span",
-    { class: `agents${compact ? " agents--compact" : ""}`, role: "group", "aria-label": t("Subagents"), title: SUBAGENTS_HINT() },
-    compact ? h("span", { class: "agents__label", text: t("Subagents") }) : null,
-    low,
-    h("span", { class: "agents__dash", "aria-hidden": "true", text: "–" }),
-    high,
+    { class: "range2", role: "group", "aria-label": t("Subagents") },
+    said,
+    box,
+    h("span", { class: "range2__ends", "aria-hidden": "true" }, h("span", { text: "1" }), h("span", { text: String(top) })),
   )
   Object.defineProperty(el, "value", {
     get: read,
     set: (v) => {
-      low.value = v?.min ?? ""
-      high.value = v?.max ?? ""
-      bounds()
+      given = v || {}
+      touched = false
+      set(given)
     },
   })
   return el
