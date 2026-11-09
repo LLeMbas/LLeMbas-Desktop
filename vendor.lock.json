@@ -1,6 +1,6 @@
 {
-  "tag": "v2.0.0-beta.6",
-  "commit": "a71e9b4bdb8acb6e9949e978253a72c347cc67f3",
+  "tag": "v2.0.0-beta.7",
+  "commit": "e3bd54f4d210cff6adb4586199caed4f41987f5e",
   "files": {
     "cm-autocomplete.mjs": {"server": "26fe431a5f54e29952e094c93151f11473a80677bfb339711ecca08195a89df4", "copy": "fcb7fcbe4e2b072d031520ec898c81ac3f2f05fb4126e03003c9b5e60ffaa8de"},
     "cm-codemirror.mjs": {"server": "dea86a106e13c9316dfedfd29209780b853bdb2b477edf3f7c90f497b592a223", "copy": "0b80ae1289a1dc3e6718727e78bc757caad657e907d0351597867d4f90c36bd2"},

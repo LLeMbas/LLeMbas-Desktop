@@ -6,6 +6,11 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.5] — 2026-11-09
+
+Carries LLeMbas CLI 2.0.0-beta.5 and the look of LLeMbas 2.0.0-beta.7, which the Subagents
+setting and the panel's compaction need.
+
 ### Changed
 
 - **Subagents**, by that name everywhere. The chip under the message box says **Subagents** with the
