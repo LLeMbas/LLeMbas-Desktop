@@ -12,7 +12,7 @@ import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
 import { menu, ask } from "./popup.js"
-import { avatar, modelPicker } from "./models.js"
+import { avatar, modelPicker, effortControl, agentsControl, teamPossible, levelsOf } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
@@ -544,8 +544,21 @@ async function chatModels(chat) {
   }
 }
 
-/** The chat's model, and its effort where the model offers more than one. */
-function headModel(slot, chat, models) {
+/** Whether this chat may have a team (`GET /chats/{chat}/team`): only a chat on the server. */
+async function teamOffered(chat) {
+  if (chat.kind !== "chat") return false
+  try {
+    return !!(await get(`/chats/${encodeURIComponent(chat.id)}/team`)).team?.offered
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The chat's model; how hard it thinks, drawn as the model offers it (nothing for one level, the
+ * Thinking switch, or the selector); and the team's size where a team is offered.
+ */
+async function headModel(slot, chat, models) {
   const mayPick = ctx.me()?.permissions?.["chat.model_select"] !== false
   const current = models.find((m) => m.id === chat.model) || { id: chat.model, name: chat.model, efforts: [] }
   const parts = []
@@ -572,23 +585,38 @@ function headModel(slot, chat, models) {
   } else if (chat.model) {
     parts.push(h("span", { class: "chip chip--model", title: current.id }, avatar(current), h("span", { text: current.name })))
   }
-  const efforts = current.efforts || []
-  if (efforts.length > 1) {
-    parts.push(
-      h(
-        "select",
-        {
-          class: "head__mode",
-          "aria-label": t("Reasoning effort"),
-          title: t("Reasoning effort"),
-          onchange: (e) => patch(`/chats/${encodeURIComponent(chat.id)}`, { effort: e.target.value }).catch((err) => alertIn(why(err))),
-        },
-        chat.effort ? null : h("option", { value: "", text: "—", selected: true }),
-        efforts.map((x) => h("option", { value: x, text: x, selected: chat.effort === x })),
-      ),
-    )
-  }
+  const level = effortControl({
+    model: current,
+    value: chat.effort || levelsOf(current).start,
+    compact: true,
+    onChange: async (value) => {
+      try {
+        const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, { effort: value })
+        if (open?.chat?.id === chat.id) open.chat = r.chat
+      } catch (err) {
+        alertIn(why(err))
+        level.value = open?.chat?.effort || levelsOf(current).start
+      }
+    },
+  })
+  if (level) parts.push(level)
   slot.replaceChildren(...parts)
+  if (!(await teamOffered(chat)) || open?.chat?.id !== chat.id || !slot.isConnected) return
+  const team = agentsControl({
+    value: open.chat.agents || chat.agents,
+    compact: true,
+    onChange: async (wanted) => {
+      try {
+        const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, { agents: wanted })
+        if (open?.chat?.id === chat.id) open.chat = r.chat
+        alertIn("")
+      } catch (err) {
+        alertIn(why(err))
+        team.value = open?.chat?.agents || chat.agents
+      }
+    },
+  })
+  slot.append(team)
 }
 
 /** The chat's own menu, under its ⋯ button or a row of the sidebar: `chat` as the list has it. */
@@ -728,7 +756,7 @@ export function closeChat() {
 
 // --- A new chat ------------------------------------------------------------------------------------
 
-let draft = null // { kind }
+let draft = null // { kind, level (the effort control), agents (the team's size) }
 
 /** The form a new chat starts from: `agent` (on this computer) or `chat` (on the server). */
 export function newChat(kind) {
@@ -746,19 +774,31 @@ export function newChat(kind) {
   const s = ctx.status()
   const models = ctx.models()
   const start = (models.find((m) => m.default) || models[0])?.id || ""
-  const effort = h("select", { id: "new-effort" })
-  const effortField = field(t("Reasoning effort"), effort, "")
-  const showEfforts = (id) => {
-    const efforts = models.find((m) => m.id === id)?.efforts || []
-    effort.replaceChildren(h("option", { value: "", text: "—" }), ...efforts.map((x) => h("option", { value: x, text: x })))
-    effortField.hidden = efforts.length < 2
+  // How hard it thinks, and the team's size: drawn for the chosen model, again when it changes.
+  // Each slot is a field of its own (label, control, hint), so the row lines up whichever is shown.
+  const effortField = field(t("Reasoning effort"), h("span"), "")
+  const agentsField = field(t("Agents"), h("span"), t("Its own agent included. Above one, it can add members that do the work while it leads them."))
+  const showLevels = (id) => {
+    const model = models.find((m) => m.id === id)
+    const control = effortControl({ model, value: levelsOf(model).start, id: "new-effort" })
+    const switchOnly = levelsOf(model).control === "switch"
+    effortField.children[0].textContent = switchOnly ? t("Thinking") : t("Reasoning effort")
+    effortField.children[0].htmlFor = "new-effort"
+    effortField.children[1].replaceWith(control || h("span", { id: "new-effort" }))
+    effortField.hidden = !control
+    draft.level = control
+    const team = kind === "chat" && teamPossible(model)
+    draft.agents = team ? agentsControl({ value: null, id: "new-agents" }) : null
+    agentsField.children[1].replaceWith(draft.agents || h("span", { id: "new-agents" }))
+    agentsField.children[0].htmlFor = "new-agents"
+    agentsField.hidden = !team
   }
   const modelField = field(
     t("Model"),
-    modelPicker({ id: "new-model", models, value: start, label: t("Model"), onChange: showEfforts }),
+    modelPicker({ id: "new-model", models, value: start, label: t("Model"), onChange: showLevels }),
     models.length ? "" : t("No model is available to this account."),
   )
-  showEfforts(start)
+  showLevels(start)
   if (kind === "agent") {
     const roots = s.remote?.enabled ? s.remote.roots : []
     const devices = ctx.thisDevices()
@@ -793,7 +833,7 @@ export function newChat(kind) {
       ),
     )
   } else {
-    form.append(h("div", { class: "fields" }, modelField, effortField))
+    form.append(h("div", { class: "fields" }, modelField, effortField, agentsField))
   }
   showComposer(true)
   setRunning(false)
@@ -813,8 +853,10 @@ async function createChat(text, attachments) {
   if (attachments.length) body.attachments = attachments
   const model = $("new-model")?.value
   if (model) body.model = model
-  const effort = $("new-effort")?.value
-  if (effort) body.effort = effort
+  const effort = draft.level?.value
+  if (typeof effort === "string" && effort) body.effort = effort
+  const agents = draft.agents?.value
+  if (agents && (agents.min || agents.max)) body.agents = agents
   if (draft.kind === "agent") {
     const device = ctx.thisDevices()[0]
     const dir = $("new-dir")?.value

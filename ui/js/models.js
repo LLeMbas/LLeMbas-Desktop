@@ -122,3 +122,142 @@ export function modelPicker({ id, models, value, onChange, label }) {
   draw()
   return btn
 }
+
+// --- How hard a model thinks, and how many agents a chat may have --------------------------------
+//
+// The levels are the harness spec's (3.2.0, `models/schema.json`), as /api/v2/models gives them:
+// `levels` in offering order (`off` first where the model can switch thinking off, then its
+// efforts, or the one level `default`), `effort` the start level and `control` how a chat draws
+// them -- `none` (one level: nothing to choose), `switch` (off and one effort: thinking on or
+// off) or `slider` (more: a choice of each). The chat says the level in force as its `effort`.
+
+/** A model's levels: { levels, start, control }, read the server's way when a field is missing. */
+export function levelsOf(model) {
+  const given = Array.isArray(model?.levels) && model.levels.length ? model.levels : null
+  const levels = given || (model?.efforts?.length ? model.efforts : ["default"])
+  const control =
+    ["none", "switch", "slider"].includes(model?.control) ? model.control
+    : levels.length < 2 ? "none"
+    : levels.length === 2 && levels.includes("off") ? "switch"
+    : "slider"
+  const start = levels.includes(model?.effort) ? model.effort : levels[0]
+  return { levels, start, control }
+}
+
+/** A level as the person reads it: `off` and `default` in their language, an effort as it is. */
+export function levelWord(level) {
+  return level === "off" ? t("off") : level === "default" ? t("default") : String(level)
+}
+
+/**
+ * The control for a model's levels, or null where it has one level: the Thinking switch (a real
+ * checkbox with the switch role, the label its tap target) or the selector. `value` is the level
+ * in force; `onChange(level)` when the person changes it. The element's `value` is the level.
+ */
+export function effortControl({ model, value, onChange, id, compact }) {
+  const { levels, start, control } = levelsOf(model)
+  if (control === "none") return null
+  let current = levels.includes(value) ? value : start
+  if (control === "switch") {
+    const on = levels.find((l) => l !== "off") || start
+    const box = h("input", { type: "checkbox", role: "switch", id, checked: current !== "off" })
+    const el = h(
+      "label",
+      { class: `toggle${compact ? " toggle--compact" : ""}`, title: t("Think before answering") },
+      box,
+      h("span", { class: "toggle__label", text: compact ? t("Thinking") : t("Think before answering") }),
+    )
+    if (compact) box.setAttribute("aria-label", t("Think before answering"))
+    box.addEventListener("change", () => {
+      current = box.checked ? on : "off"
+      onChange?.(current)
+    })
+    Object.defineProperty(el, "value", {
+      get: () => current,
+      set: (v) => {
+        current = v
+        box.checked = v !== "off"
+      },
+    })
+    return el
+  }
+  const el = h(
+    "select",
+    { id, class: compact ? "head__mode" : null, "aria-label": t("Reasoning effort"), title: t("Reasoning effort") },
+    levels.map((l) => h("option", { value: l, text: levelWord(l), selected: l === current })),
+  )
+  el.addEventListener("change", () => {
+    current = el.value
+    onChange?.(current)
+  })
+  return el
+}
+
+/**
+ * Whether a new chat on `model` may have a team: a chat on the server (an agent chat's team runs
+ * on its device), a model that calls tools and serves two requests at once (`parallel` null is a
+ * hosted API with no stated limit). The server decides again; this only keeps the fields away
+ * where they could never apply. An open chat asks the server (`GET /chats/{chat}/team`).
+ */
+export function teamPossible(model) {
+  return !!model?.tools && (model.parallel === null || model.parallel === undefined || model.parallel >= 2)
+}
+
+/**
+ * The team's size: the fewest and the most agents, the chat's own agent included, as two number
+ * fields on one shared track. `value` is { min, max } (empty fields for a new chat: the person's
+ * default for new chats then stands); `onChange({ min, max })` once a field is changed, with the
+ * empty one left out. The server checks the pair and says the bounds when it refuses one.
+ */
+export function agentsControl({ value, onChange, id, compact }) {
+  const field = (which, v, label) =>
+    h("input", {
+      type: "number",
+      class: "agents__input",
+      id: which === "min" ? id : null,
+      min: "1",
+      step: "1",
+      inputmode: "numeric",
+      value: v === undefined || v === null ? "" : String(v),
+      placeholder: compact ? null : t("default"),
+      "aria-label": label,
+      title: label,
+    })
+  const low = field("min", value?.min, t("Fewest"))
+  const high = field("max", value?.max, t("Most"))
+  const bounds = () => {
+    high.min = low.value || "1"
+    if (high.value) low.max = high.value
+    else low.removeAttribute("max")
+  }
+  bounds()
+  const read = () => {
+    const out = {}
+    if (low.value) out.min = Number(low.value)
+    if (high.value) out.max = Number(high.value)
+    return out
+  }
+  for (const input of [low, high]) {
+    input.addEventListener("change", () => {
+      bounds()
+      onChange?.(read())
+    })
+  }
+  const el = h(
+    "span",
+    { class: `agents${compact ? " agents--compact" : ""}`, role: "group", "aria-label": t("Agents"), title: t("Its own agent included. Above one, it can add members that do the work while it leads them.") },
+    compact ? h("span", { class: "agents__label", text: t("Agents") }) : null,
+    low,
+    h("span", { class: "agents__dash", "aria-hidden": "true", text: "–" }),
+    high,
+  )
+  Object.defineProperty(el, "value", {
+    get: read,
+    set: (v) => {
+      low.value = v?.min ?? ""
+      high.value = v?.max ?? ""
+      bounds()
+    },
+  })
+  return el
+}
