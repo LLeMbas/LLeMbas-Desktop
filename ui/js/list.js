@@ -5,7 +5,7 @@
 import { $, h, clear, when, append } from "./dom.js"
 import { get, why } from "./bridge.js"
 
-let ctx = null // { kind(), thisDevices(), open(id), current() }
+let ctx = null // { kind(), thisDevices(), open(id), current(), menu(anchor, chat) }
 let rows = []
 let more = false
 
@@ -49,6 +49,11 @@ function row(c) {
     c.device?.directory ? h("span", { class: "row__sub", title: c.device.directory }, h("bdi", { text: c.device.directory })) : null,
   )
   b.addEventListener("click", () => ctx.open(c.id))
+  // The chat's own menu (rename, archive, delete…) on a right click, or the context-menu key.
+  b.addEventListener("contextmenu", (e) => {
+    e.preventDefault()
+    ctx.menu(e.clientX || e.clientY ? { x: e.clientX, y: e.clientY } : b, c)
+  })
   return h("li", null, b)
 }
 

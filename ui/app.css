@@ -64,6 +64,8 @@ bdi { unicode-bidi: isolate; }
 .btn--primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .btn--primary:hover { background: var(--accent-hover); }
 .btn--sm { height: var(--control-h-sm); padding: 0 var(--sp-3); box-shadow: none; }
+.btn--danger { color: var(--ink-inverse); background: var(--danger); border-color: var(--danger); }
+.btn--danger:hover { background: var(--danger-hover); }
 
 input[type="text"], select, textarea {
   min-width: 0;
@@ -180,8 +182,9 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
 .bar__side { overflow: hidden; visibility: hidden; }
 .bar__agent { display: grid; grid-template-columns: var(--dot-size) auto; gap: var(--sp-2); align-items: center; padding: 0 var(--sp-3) !important; font-weight: 400 !important; }
 .bar__agent[data-state="running"] .dot, .bar__agent[data-state="elsewhere"] .dot { background: var(--leaf); }
-.bar__agent[data-state="starting"] .dot { background: var(--accent); }
-.bar__agent[data-state="failed"] .dot, .bar__agent[data-state="not_linked"] .dot, .bar__agent[data-state="no_folders"] .dot { background: var(--warning); }
+.bar__agent[data-state="starting"] .dot, .bar__agent[data-state="connecting"] .dot { background: var(--accent); }
+.bar__agent[data-state="failed"] .dot, .bar__agent[data-state="not_linked"] .dot, .bar__agent[data-state="no_folders"] .dot,
+.bar__agent[data-state="waiting"] .dot, .bar__agent[data-state="refused"] .dot, .bar__agent[data-state="elsewhere_waiting"] .dot { background: var(--warning); }
 .bar__update { padding: 0 var(--sp-3) !important; color: var(--accent-ink) !important; background: var(--accent) !important; }
 .bar__update:hover { background: var(--accent-hover) !important; }
 /* Hidden keeps its grid track (auto, so zero wide): the slots after it never move. */
@@ -417,6 +420,56 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
 .msg__files { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--sp-1); font-size: var(--text-xs); }
 .msg__note { font-size: var(--text-sm); color: var(--ink-muted); }
 .msg__foot { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.msg__files .chip { max-width: var(--w-chip); overflow: hidden; text-overflow: ellipsis; }
+/* Under a message: small icon buttons, all one size. */
+.msg__actions { display: grid; grid-auto-flow: column; grid-auto-columns: var(--control-h-sm); justify-content: start; }
+.msg--user .msg__actions { justify-content: end; margin-top: calc(-1 * var(--sp-2)); }
+.msg__act { display: grid; place-items: center; width: var(--control-h-sm); height: var(--control-h-sm); padding: 0; color: var(--ink-faint); background: none; border: 0; border-radius: var(--radius); cursor: pointer; }
+.msg__act:hover, .msg__act:focus-visible { color: var(--ink); background: var(--surface-hover); }
+/* Regenerate: on the last reply only, and not while it is being written. */
+.msg__regen { display: none; }
+.messages > .msg--assistant:last-child:not(.is-live) .msg__regen { display: grid; }
+.msg__editor { display: grid; gap: var(--sp-2); }
+.msg__edit { width: 100%; min-height: var(--control-h); font: var(--text-base) / var(--leading-normal) var(--font-body); resize: vertical; }
+.msg__editbar { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(min(100%, 6rem), auto); gap: var(--sp-2); justify-content: end; }
+.chip--model { display: inline-grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-1); align-items: center; max-width: var(--w-chip); padding-left: var(--sp-1); }
+.chip--model > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+
+/* A model's avatar: its initial on its own colour. Only the hue is the model's (models.js, the
+   server's stable_hue); how strong it is comes from the theme, by mixing it into the surface. */
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  font: 700 var(--text-xs) / 1 var(--font-ui);
+  color: var(--ink);
+  background: color-mix(in oklab, hsl(var(--avatar-hue, 40) 100% 50%) 32%, var(--surface));
+  border-radius: var(--radius-sm);
+  flex: none;
+}
+.avatar--none { background: var(--surface-active); }
+/* The model picker: a button the height of a control, avatar · name · chevron. */
+.picker {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  height: var(--control-h);
+  max-width: 100%;
+  padding: 0 var(--control-px-sm);
+  font: var(--text-sm) var(--font-ui);
+  color: var(--ink);
+  text-align: left;
+  background: var(--bg);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.picker__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.head__model { display: flex; gap: var(--sp-2); align-items: center; min-width: 0; }
+.head__model .picker { height: var(--control-h-sm); max-width: var(--w-chip); }
+.new .picker { width: 100%; }
 .msg__metrics { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
 .msg__steps { display: grid; gap: var(--sp-3); min-width: 0; }
 .msg__status, .msg__thinking { font: var(--text-xs) var(--font-ui); }
@@ -548,17 +601,57 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
 .plan__phase { font-weight: 600; }
 .plan__task.is-done { text-decoration: line-through; color: var(--ink-muted); }
 
-/* The composer: the text and its buttons, on two tracks; the buttons hold their own row. */
+/* The composer: the files it carries on a row of their own, then three tracks -- the attach
+   button, the text, the send buttons. The buttons are one control high and sit at the foot of
+   the row the text sets the height of: their size is known, the text's is not. */
 .composer {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--sp-2);
-  align-items: end;
+  grid-template-columns: var(--control-h) minmax(0, 1fr) auto;
+  grid-template-areas: "files files files" "attach text actions";
+  /* No gap between the rows: the files' row has its own margin, and none while it is empty. */
+  gap: 0 var(--sp-2);
   padding: var(--sp-3) var(--sp-4) var(--sp-4);
 }
+.composer[data-attach="false"] { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "files files" "text actions"; }
 .composer > * { min-width: 0; }
-.composer textarea { width: 100%; min-height: var(--control-h); max-height: 40vh; font: var(--text-base) / var(--leading-normal) var(--font-body); }
-.composer__actions { display: grid; grid-auto-flow: column; gap: var(--sp-2); }
+.composer textarea { grid-area: text; width: 100%; min-height: var(--control-h); max-height: 40vh; font: var(--text-base) / var(--leading-normal) var(--font-body); }
+.composer__attach { grid-area: attach; align-self: end; width: var(--control-h); padding: 0; }
+.composer__actions { grid-area: actions; align-self: end; display: grid; grid-auto-flow: column; gap: var(--sp-2); }
+.composer__files { grid-area: files; margin: 0 0 var(--sp-2); padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--w-chip)), 1fr)); gap: var(--sp-2); }
+/* One file: name · size or state · remove, the same tracks on every row. */
+.file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto var(--control-h-sm);
+  gap: var(--sp-2);
+  align-items: center;
+  height: var(--control-h-sm);
+  padding-left: var(--sp-2);
+  font: var(--text-xs) var(--font-ui);
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius);
+}
+.file__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+.file__state { color: var(--ink-muted); max-width: var(--w-chip); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.file.is-failed { border-color: var(--warning); }
+.file.is-failed .file__state { color: var(--warning); }
+.file__remove { display: grid; place-items: center; height: 100%; padding: 0; color: var(--ink-muted); background: none; border: 0; border-left: var(--border-w) solid var(--border); cursor: pointer; }
+.file__remove:hover { color: var(--ink); background: var(--surface-hover); }
+/* Files dragged over the window: where they will go, over the whole composer. */
+.composer__drop { display: none; }
+.composer[data-drag="true"] .composer__drop {
+  display: grid;
+  place-items: center;
+  position: absolute;
+  inset: var(--sp-2) var(--sp-4);
+  z-index: var(--z-raised);
+  font: 600 var(--text-sm) var(--font-ui);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: var(--border-w-thick) dashed var(--accent);
+  border-radius: var(--radius);
+}
 
 /* --- Settings ------------------------------------------------------------------------------ */
 
@@ -625,6 +718,83 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
 .viewer__note { padding: var(--sp-4); font-size: var(--text-sm); color: var(--ink-muted); }
 .viewer__note.is-error { color: var(--warning); }
 
+/* --- Menus, dialogs and the palette ----------------------------------------------------------- */
+
+.menu {
+  position: fixed;
+  z-index: var(--z-dropdown);
+  min-width: 12rem;
+  max-width: min(var(--w-menu), calc(100vw - 2 * var(--sp-2)));
+  max-height: min(var(--h-list), calc(100vh - 2 * var(--sp-2)));
+  overflow: auto;
+  padding: var(--sp-1) 0;
+  background: var(--surface-raised);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+/* Every item: lead · label · check, on the same tracks, so labels line up with or without a lead. */
+.menu__item {
+  display: grid;
+  grid-template-columns: 1.25rem minmax(0, 1fr) 1rem;
+  gap: var(--sp-2);
+  align-items: center;
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 var(--sp-3);
+  font: var(--text-sm) var(--font-ui);
+  color: var(--ink);
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+/* A menu where no item has a lead: no lead track either. */
+.menu--plain .menu__item { grid-template-columns: minmax(0, 1fr) 1rem; }
+.menu--plain .menu__lead { display: none; }
+.menu__item:hover, .menu__item:focus-visible { background: var(--surface-hover); outline: none; }
+.menu__item:disabled { opacity: var(--opacity-dim); cursor: default; }
+.menu__item.is-danger { color: var(--danger); }
+.menu__label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.menu__check { color: var(--accent); }
+.menu__sep { height: var(--border-w); margin: var(--sp-1) 0; background: var(--border); }
+
+.dialog {
+  width: min(var(--w-dialog), calc(100vw - 2 * var(--sp-4)));
+  padding: 0;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.dialog::backdrop { background: var(--scrim); }
+.dialog__body { display: grid; gap: var(--sp-3); padding: var(--sp-4); }
+.dialog__title { font: 600 var(--text-md) / var(--leading-tight) var(--font-ui); }
+.dialog__input { width: 100%; }
+.dialog__actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
+
+.palette { align-self: start; margin-top: 12vh; }
+.palette__line { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; padding: 0 var(--sp-3); border-bottom: var(--border-w) solid var(--border); color: var(--ink-muted); }
+.palette__input { height: var(--control-h-lg) !important; border: 0 !important; background: none !important; outline: none; font-size: var(--text-base); }
+.palette__list { list-style: none; margin: 0; padding: var(--sp-1) 0; max-height: var(--h-list); overflow: auto; }
+/* A result: icon · label · hint, the same tracks on every row. */
+.palette__item {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  align-items: center;
+  min-height: var(--row-h);
+  padding: 0 var(--sp-3);
+  font: var(--text-sm) var(--font-ui);
+  cursor: pointer;
+}
+.palette__item[aria-selected="true"] { background: var(--surface-active); }
+.palette__icon { display: grid; place-items: center; color: var(--ink-muted); }
+.palette__label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.palette__hint { font-size: var(--text-xs); color: var(--ink-faint); white-space: nowrap; }
+.palette__none { padding: var(--sp-3); font-size: var(--text-sm); color: var(--ink-muted); }
+
 /* --- Narrower windows ---------------------------------------------------------------------- */
 
 /* 64rem (--bp-wide): the viewer goes over the chat instead of beside it. */
@@ -651,13 +821,19 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
   .shell[data-side="true"] .side { transform: none; }
   .shell[data-side="true"] .scrim { display: block; position: absolute; inset: 0; z-index: calc(var(--z-panel) - 1); background: var(--scrim); }
   .viewer { z-index: var(--z-panel); }
-  .head { padding: 0 var(--sp-3); grid-template-columns: minmax(0, 1fr) auto; }
+  .head { padding: var(--sp-2) var(--sp-3) 0; grid-template-columns: minmax(0, 1fr) auto; }
   .head__place { grid-column: 1 / -1; grid-row: 2; padding-bottom: var(--sp-2); }
+  /* The chat's controls get a row of their own: beside the title they would squeeze it out. */
+  .head__tools { grid-column: 1 / -1; grid-row: 3; flex-wrap: wrap; padding-bottom: var(--sp-2); }
+  .head__tools:empty { display: none; }
   .thread { padding: var(--sp-3); }
   .composer { padding: var(--sp-2) var(--sp-3) var(--sp-3); }
   .cards { padding: var(--sp-2) var(--sp-3) 0; }
   .card { padding: var(--sp-4); gap: var(--sp-4); }
   .msg--user { max-width: 100%; }
+  .palette__hint { display: none; }
+  .palette__item { grid-template-columns: 1rem minmax(0, 1fr); }
+  .head__model .picker { max-width: 8rem; }
 }
 
 /* Very narrow: the agent's words go, its dot stays; the row's button goes under its field. */

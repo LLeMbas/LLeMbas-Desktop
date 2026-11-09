@@ -36,8 +36,8 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::window::Color;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, RunEvent, Url, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, Window, WindowEvent, Wry,
+    AppHandle, DragDropEvent, Emitter, LogicalPosition, Manager, RunEvent, Url, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, Window, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
@@ -114,6 +114,8 @@ struct App {
     next_stream: AtomicU64,
     sealed: sealed::Pages,
     watch: watch::Watch,
+    /// The files last dropped on the window: what `attach_dropped` may send, and nothing else.
+    dropped: Mutex<Vec<PathBuf>>,
 }
 
 struct TrayItems {
@@ -479,6 +481,173 @@ fn stream_close(app: tauri::State<'_, App>, id: u64) {
     if let Some(stop) = app.streams.lock().unwrap().remove(&id) {
         stop.store(true, Ordering::SeqCst);
     }
+}
+
+// --- Attachments ----------------------------------------------------------------------------------
+
+/// What became of one file sent as an attachment: the server's attachment, or why not. `reason`
+/// names the refusals made here, so the page can say them in its language; the server's own
+/// refusals come in the account's language already.
+#[derive(Clone, Serialize)]
+struct Uploaded {
+    name: String,
+    size: u64,
+    attachment: Option<Value>,
+    error: Option<String>,
+    reason: Option<&'static str>,
+}
+
+fn read_for_upload(path: &std::path::Path) -> Result<Vec<u8>, (&'static str, String)> {
+    let meta = std::fs::metadata(path).map_err(|e| ("unreadable", e.to_string()))?;
+    if meta.is_dir() {
+        return Err(("folder", "This is a folder.".into()));
+    }
+    if meta.len() > server::UPLOAD_LIMIT {
+        return Err(("too_large", "This file is too large to send.".into()));
+    }
+    std::fs::read(path).map_err(|e| ("unreadable", e.to_string()))
+}
+
+/// Send these files, one by one, as attachments for `chat` ("" for a chat not made yet). Only
+/// ever called with paths the person chose: in the file dialog, or by dropping them on the window.
+fn upload_paths(
+    handle: &AppHandle,
+    paths: Vec<PathBuf>,
+    chat: &str,
+) -> Result<Vec<Uploaded>, ApiError> {
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let mut out = Vec::new();
+    for path in paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let sent = match read_for_upload(&path) {
+            Ok(bytes) => server::upload(&app_url, &token, chat, &name, &bytes).map_err(|e| {
+                if e.status == 401 {
+                    token_refused(handle);
+                }
+                (None, e.detail)
+            }),
+            Err((reason, message)) => Err((Some(reason), message)),
+        };
+        out.push(match sent {
+            Ok(a) => Uploaded {
+                name,
+                size,
+                attachment: Some(a),
+                error: None,
+                reason: None,
+            },
+            Err((reason, message)) => Uploaded {
+                name,
+                size,
+                attachment: None,
+                error: Some(message),
+                reason,
+            },
+        });
+    }
+    Ok(out)
+}
+
+/// Choose files with the system's dialog and send them as attachments for `chat`.
+#[tauri::command]
+async fn attach_pick(
+    handle: AppHandle,
+    chat: Option<String>,
+    title: String,
+) -> Result<Vec<Uploaded>, ApiError> {
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let picked = h.dialog().file().set_title(title).blocking_pick_files();
+        let paths: Vec<PathBuf> = picked
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| p.into_path().ok())
+            .collect();
+        upload_paths(&h, paths, chat.as_deref().unwrap_or(""))
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// Send the files just dropped on the window as attachments for `chat`. Each drop can be sent
+/// once.
+#[tauri::command]
+async fn attach_dropped(
+    handle: AppHandle,
+    chat: Option<String>,
+) -> Result<Vec<Uploaded>, ApiError> {
+    let paths = std::mem::take(&mut *handle.state::<App>().dropped.lock().unwrap());
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        upload_paths(&h, paths, chat.as_deref().unwrap_or(""))
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// `%XX` escapes undone (the page sends a file's name as `encodeURIComponent` gives it).
+fn percent_decode(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(hi), Some(lo)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A file pasted into the composer (an image from the clipboard): its bytes as the raw body of
+/// the call, its name in `x-name` and the chat in `x-chat`. The page has these bytes only because
+/// the person pasted them.
+#[tauri::command]
+async fn attach_bytes(
+    handle: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, ApiError> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(ApiError::new(400, "No file."));
+    };
+    if bytes.len() as u64 > server::UPLOAD_LIMIT {
+        return Err(ApiError::new(413, "This file is too large to send."));
+    }
+    let header = |k: &str| {
+        request
+            .headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    let name = percent_decode(&header("x-name"));
+    let chat = header("x-chat");
+    let bytes = bytes.clone();
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        server::upload(&app_url, &token, &chat, &name, &bytes)
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(&handle);
+    }
+    result
 }
 
 // --- This computer's files ----------------------------------------------------------------------
@@ -1260,6 +1429,9 @@ pub fn run() {
             local_read,
             sealed_open,
             sealed_close,
+            attach_pick,
+            attach_dropped,
+            attach_bytes,
             set_theme,
             set_notify,
             set_open_chat,
@@ -1314,6 +1486,7 @@ pub fn run() {
                 next_stream: AtomicU64::new(0),
                 sealed: sealed::Pages::default(),
                 watch: watch::Watch::default(),
+                dropped: Mutex::new(Vec::new()),
             });
             // Without a tray (no AppIndicator library, no StatusNotifier host) the app still
             // starts: the title bar's menu has every item the tray has.
@@ -1345,6 +1518,30 @@ pub fn run() {
             WindowEvent::Resized(_) if window.label() == MAIN => {
                 let _ = window.emit("maximized", window.is_maximized().unwrap_or(false));
             }
+            // Files dragged onto the window: the page shows where they go, and a drop is held
+            // here for `attach_dropped` -- the page itself never names a path to send.
+            WindowEvent::DragDrop(ev) if window.label() == MAIN => match ev {
+                DragDropEvent::Enter { .. } => {
+                    let _ = window.emit("drag", true);
+                }
+                DragDropEvent::Leave => {
+                    let _ = window.emit("drag", false);
+                }
+                DragDropEvent::Drop { paths, .. } => {
+                    let names: Vec<String> = paths
+                        .iter()
+                        .map(|p| {
+                            p.file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    *window.state::<App>().dropped.lock().unwrap() = paths.clone();
+                    let _ = window.emit("drag", false);
+                    let _ = window.emit("drop", names);
+                }
+                _ => {}
+            },
             _ => {}
         })
         .build(tauri::generate_context!());
@@ -1405,6 +1602,14 @@ mod tests {
         ] {
             assert!(!allowed(&Url::parse(no).unwrap()), "{no}");
         }
+    }
+
+    #[test]
+    fn a_pasted_files_name_comes_back_whole() {
+        assert_eq!(percent_decode("Sch%C3%B6n%20bild.png"), "Schön bild.png");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("a%zzb%4"), "a%zzb%4");
+        assert_eq!(percent_decode("ž%41"), "žA");
     }
 
     #[test]

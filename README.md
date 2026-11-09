@@ -12,6 +12,11 @@ an app of its own.
   on the server.
 - **A viewer** for what you open and for what the agent shows you: Markdown drawn, code
   highlighted, text, and HTML in a sealed frame that can reach neither the app nor the network.
+- **Attachments** from the file dialog, a drop on the window or a paste; **edit** a message,
+  **regenerate** a reply, rename, archive or delete a chat, and open it in the web interface.
+- **A command palette** (Ctrl+K) for commands and every chat by its title.
+- **The agent's real status**: what the built-in CLI says of its link -- connecting, running,
+  waiting and why -- not whether a process runs.
 - **Notifications** when a reply or an agent's work finishes while you are elsewhere.
 - **Its own window and tray**: close the window and the agent keeps running in the tray.
 
@@ -73,6 +78,8 @@ device.
   directory, readable by you only); the page asks for the server's `/api/v2` through it and never
   holds the token.
 - The explorer reads only inside the agent's folders.
+- A file goes to the server as an attachment only when you choose it in the file dialog, drop it
+  on the window or paste it: the page cannot name a path for the app to send.
 - HTML is shown in a sealed frame on an address of its own: scripts in it run, but it has no
   access to the app, no network and no way to navigate anywhere.
 - Links in a reply open in your browser, and only web and mail links.

@@ -6,6 +6,44 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Attachments.** A message can carry files: the attach button beside the composer (the
+  system's file dialog), files dropped anywhere on the window, or an image pasted into the
+  composer. Each is sent to the server at once and shown above the composer with its size, or
+  with the server's reason when it refused it; one taken off before sending is deleted on the
+  server. The app sends only files you chose, dropped or pasted -- the page never names a path.
+  Agent chats get them too.
+- **Edit a message, regenerate a reply, copy either.** Under your messages, *Edit message*
+  rewrites one in place and starts the reply again from there (everything after it is dropped,
+  as the app says before you save; on the agent's device too); under the last reply,
+  *Regenerate reply*. *Copy* puts a message, or a reply's text as Markdown, on the clipboard.
+- **The chat's own menu** (⋯ in its header, or a right click on it in the sidebar): rename it,
+  open it in the web interface in your browser, archive it, delete it (asked first).
+- **Change a chat's model** from its header, and its reasoning effort where the model offers
+  more than one level; a new chat can choose its effort too.
+- **Model avatars**: every model in the pickers and under each reply shows its initial on a
+  colour of its own -- the same colour the web interface gives it.
+- **A command palette** (Ctrl+K): new chats, settings, the agent and updates by name, and every
+  chat of both kinds by its title (accents optional). Ctrl+N starts a new chat of the tab you are
+  on; Ctrl+, opens the settings.
+
+### Changed
+
+- **The agent's status is the CLI's own word.** The title bar and Settings no longer say
+  *running* because a process runs: they say what the built-in LLeMbas CLI says of its link to
+  the server -- connecting, running (linked), waiting and why (the server cannot be reached, the
+  link dropped, a terminal on this computer holds the link), or refused and why. The same for a
+  `lembas service` you run yourself. When the CLI says trying again will not help (the server
+  refused this computer's token), the app no longer restarts it every second: it waits until you
+  link the computer again. When the agent stops with an error, its last words are the reason
+  shown, not just an exit status.
+
+### Fixed
+
+- A Czech sentence in the viewer was in Slovak; "Server files" and the composer's placeholder
+  were not translated.
+
 ## [1.0.0-beta.2] — 2026-11-07
 
 Carries LLeMbas CLI 2.0.0-beta.2 and the look of LLeMbas 2.0.0-beta.4.

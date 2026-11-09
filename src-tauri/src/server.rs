@@ -507,6 +507,85 @@ pub fn request_text(app: &str, token: &str, path: &str) -> Result<String, ApiErr
     Ok(text)
 }
 
+/// The most a file sent as an attachment may be here. The server has its own limit (20 MB by
+/// default, an administrator may change it) and says so in its words; this one only keeps a
+/// file far beyond any server's limit from being read into memory at all.
+pub const UPLOAD_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// A file's name as it may stand in a multipart header: no quotes, backslashes or line breaks.
+fn header_name(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    if clean.trim().is_empty() {
+        "file".into()
+    } else {
+        clean
+    }
+}
+
+/// The body of a `multipart/form-data` request with one file in the field `file`.
+fn multipart(boundary: &str, name: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(bytes.len() + 256);
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+            header_name(name)
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+/// Send one file to `/api/v2/attachments` (for the chat `chat`, or a chat not made yet): stored
+/// now, bound to the message that names it when that is sent. The server's attachment, as JSON.
+pub fn upload(
+    app: &str,
+    token: &str,
+    chat: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<Value, ApiError> {
+    if !chat
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(ApiError::new(400, format!("Not a chat: {chat}")));
+    }
+    let path = if chat.is_empty() {
+        "/attachments".to_string()
+    } else {
+        format!("/attachments?chat={chat}")
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let boundary = format!("llembas-desktop-{nanos:x}");
+    let res = agent(Duration::from_secs(300))
+        .post(&format!("{app}{path}"))
+        .set("authorization", &format!("Bearer {token}"))
+        .set("accept", "application/json")
+        .set(
+            "content-type",
+            &format!("multipart/form-data; boundary={boundary}"),
+        )
+        .send_bytes(&multipart(&boundary, name, bytes))?;
+    let v: Value = res
+        .into_json()
+        .map_err(|_| ApiError::new(0, "The server's answer was not JSON.".to_string()))?;
+    v.get("attachment")
+        .cloned()
+        .ok_or_else(|| ApiError::new(0, "The server's answer was not understood.".to_string()))
+}
+
 /// Server-sent events, a line at a time: what `stream` hands on, one `(event, data)` per frame.
 #[derive(Default)]
 pub struct Sse {
@@ -707,6 +786,18 @@ mod tests {
         ] {
             assert!(checked_path(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_file_goes_as_one_multipart_field() {
+        let body = multipart("XYZ", "a\"b\r\n.txt", b"hello");
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.starts_with(
+            "--XYZ\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a_b__.txt\"\r\n"
+        ));
+        assert!(text.contains("\r\n\r\nhello\r\n--XYZ--\r\n"));
+        assert_eq!(header_name("  "), "file");
+        assert_eq!(header_name("Schöne Grüße.pdf"), "Schöne Grüße.pdf");
     }
 
     #[test]

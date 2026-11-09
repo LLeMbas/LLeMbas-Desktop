@@ -87,8 +87,11 @@
         <div class="messages" id="messages"></div>
       </div>
       <div class="cards" id="cards" hidden></div>
-      <form class="composer" id="composer" hidden data-running="false">
+      <form class="composer" id="composer" hidden data-running="false" data-drag="false">
+        <ul class="composer__files" id="composer-files" hidden></ul>
+        <button type="button" class="btn composer__attach" id="attach" aria-label="Attach files" title="Attach files" data-i18n-aria-label data-i18n-title></button>
         <textarea id="composer-text" rows="1" placeholder="Message" aria-label="Message" data-i18n-placeholder data-i18n-aria-label></textarea>
+        <p class="composer__drop" aria-hidden="true" data-i18n>Drop the files to attach them</p>
         <div class="composer__actions">
           <button type="button" class="btn" id="stop" hidden data-i18n>Stop</button>
           <button type="submit" class="btn btn--primary" id="send" data-i18n>Send</button>

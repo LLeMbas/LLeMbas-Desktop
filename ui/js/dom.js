@@ -74,6 +74,12 @@ export const ICONS = {
   min: "M4 10h8v1.5H4z",
   max: "M4 4h8v8H4zM5.5 5.5v5h5v-5z",
   restore: "M5.5 3h7.5v7.5h-2.5V13H3V5.5h2.5zM7 4.5v1h3.5V9h1V4.5zM4.5 7v4.5H9V7z",
+  chevronDown: "M3.5 6L8 10.5 12.5 6 11.4 4.9 8 8.3 4.6 4.9z",
+  more: "M2.5 6.75h2.5v2.5H2.5zM6.75 6.75h2.5v2.5h-2.5zM11 6.75h2.5v2.5H11z",
+  edit: "M10.75 1.75l3.5 3.5-8.5 8.5h-3.5v-3.5zM3.75 10.87v1.38h1.38l6.62-6.62-1.38-1.38z",
+  copy: "M5 1.5h8.5V11H5zM6.5 3v6.5H12V3zM2.5 5H4v8.5h6.5V15h-8z",
+  attach: "M7.25 2.5h1.5v4.75h4.75v1.5H8.75v4.75h-1.5V8.75H2.5v-1.5h4.75z",
+  search: "M7 2a5 5 0 013.95 8.07l3.24 3.24-1.06 1.06-3.24-3.24A5 5 0 117 2zm0 1.5a3.5 3.5 0 100 7 3.5 3.5 0 000-7z",
 }
 
 /** "3 min ago"-style, in the system's language, for a stamp the server sent. */

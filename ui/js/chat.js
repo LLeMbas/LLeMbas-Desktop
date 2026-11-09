@@ -6,15 +6,18 @@
 // repository is the contract): a person's message is their text as typed; a reply is its steps --
 // thinking, text (markdown, model output), tool calls, messages taken in while it ran.
 
-import { $, h, clear, append } from "./dom.js"
-import { api, get, getText, post, patch, follow, why, invoke } from "./bridge.js"
+import { $, h, clear, append, icon, ICONS, bytes } from "./dom.js"
+import { api, get, getText, post, patch, del, follow, why, invoke, openLink } from "./bridge.js"
 import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
+import { menu, ask } from "./popup.js"
+import { avatar, modelPicker } from "./models.js"
+import { readyIds, sending, sent, discard } from "./attach.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
-let ctx = null // set by initChat: { status(), thisDevices(), models(), me(), changed(chat) }
+let ctx = null // set by initChat: { status(), thisDevices(), models(), me(), changed(chat), opened(chat), gone(chat) }
 let open = null // { chat, live, more, first }
 
 export function openChatId() {
@@ -37,14 +40,101 @@ function toBottom(force) {
   if (force || nearBottom()) th.scrollTop = th.scrollHeight
 }
 
+/** A small icon button under a message. */
+function action(ico, label, onclick, cls = "") {
+  return h("button", { type: "button", class: `msg__act ${cls}`, "aria-label": label, title: label, onclick }, icon(ico))
+}
+
+function copyText(text) {
+  navigator.clipboard?.writeText(text).catch(() => {})
+}
+
 function userMessage(m) {
-  return h(
+  const el = h(
     "article",
     { class: `msg msg--user${m.queued ? " is-queued" : ""}${m.machine ? " is-machine" : ""}`, dataset: { id: m.id } },
     h("div", { class: "msg__text", text: m.text || "" }),
-    m.attachments?.length ? h("ul", { class: "msg__files" }, m.attachments.map((a) => h("li", { text: a.name }))) : null,
+    m.attachments?.length
+      ? h(
+          "ul",
+          { class: "msg__files" },
+          m.attachments.map((a) => h("li", { class: "chip", title: a.name }, h("bdi", { text: a.name }), a.size ? ` · ${bytes(a.size)}` : "")),
+        )
+      : null,
     m.queued ? h("p", { class: "msg__note", text: t("Waiting for the reply before it") }) : null,
   )
+  // A background job's report is not the person's to rewrite (the server refuses it too).
+  if (!m.machine) {
+    el.append(
+      h(
+        "div",
+        { class: "msg__actions" },
+        action(ICONS.edit, t("Edit message"), () => startEdit(el, m)),
+        action(ICONS.copy, t("Copy"), () => copyText(m.text || "")),
+      ),
+    )
+  }
+  return el
+}
+
+/**
+ * Edit one of the person's messages in place. Saving rewrites it, drops everything after it and
+ * starts the reply again (on the device too, for an agent chat): the server's rule, said first.
+ */
+function startEdit(el, m) {
+  if (!open?.chat?.id || el.querySelector(".msg__edit")) return
+  const box = h("textarea", { class: "msg__edit", rows: "3", value: m.text || "", "aria-label": t("Edit message") })
+  const note = h("p", { class: "hint", text: t("Saving starts the reply again; everything after this message is dropped.") })
+  const said = h("p", { class: "msg__note is-error", hidden: true })
+  const save = h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Save") })
+  const cancel = h("button", { type: "button", class: "btn btn--sm", text: t("Cancel") })
+  const form = h("div", { class: "msg__editor" }, box, note, said, h("div", { class: "msg__editbar" }, cancel, save))
+  const parts = [...el.children]
+  for (const c of parts) c.hidden = true
+  el.append(form)
+  const close = () => {
+    form.remove()
+    for (const c of parts) c.hidden = false
+  }
+  cancel.addEventListener("click", close)
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") close()
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) save.click()
+  })
+  save.addEventListener("click", async () => {
+    const text = box.value.trim()
+    if (!text && !m.attachments?.length) return box.focus()
+    save.disabled = cancel.disabled = true
+    try {
+      await post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/edit`, { text })
+      reload()
+    } catch (err) {
+      said.textContent = why(err)
+      said.hidden = false
+      save.disabled = cancel.disabled = false
+    }
+  })
+  box.focus()
+  box.setSelectionRange(box.value.length, box.value.length)
+}
+
+/** The reply's words, as Markdown: what Copy puts on the clipboard. */
+function replyText(m) {
+  return (m.steps || [])
+    .filter((s) => s.kind === "text")
+    .map((s) => s.markdown || "")
+    .join("\n\n")
+}
+
+async function regenerate(m) {
+  if (!open?.chat?.id) return
+  alertIn("")
+  try {
+    await post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/regenerate`)
+    reload()
+  } catch (err) {
+    alertIn(why(err))
+  }
 }
 
 function metricsLine(x) {
@@ -65,9 +155,22 @@ function assistantMessage(m, chat) {
   if (m.error) el.append(h("p", { class: "msg__note is-error", text: m.error }))
   if (m.stopped) el.append(h("p", { class: "msg__note", text: t("Stopped.") }))
   const meta = metricsLine(m.metrics)
-  if (meta || m.model) {
-    el.append(h("footer", { class: "msg__foot" }, m.model ? h("span", { class: "chip", text: m.model }) : null, meta))
-  }
+  const model = m.model ? ctx.models().find((x) => x.id === m.model) || { id: m.model, name: m.model } : null
+  el.append(
+    h(
+      "footer",
+      { class: "msg__foot" },
+      h(
+        "div",
+        { class: "msg__actions" },
+        action(ICONS.copy, t("Copy"), () => copyText(replyText(m))),
+        // Only the last reply: CSS shows it there and nowhere else (app.css, .msg__regen).
+        action(ICONS.refresh, t("Regenerate reply"), () => regenerate(m), "msg__regen"),
+      ),
+      model ? h("span", { class: "chip chip--model", title: model.id }, avatar(model), h("span", { text: model.name })) : null,
+      meta,
+    ),
+  )
   return el
 }
 
@@ -423,8 +526,120 @@ function renderHead(chat) {
       MODES.map((m) => h("option", { value: m, text: modeName(m), selected: chat.mode === m })),
     )
     tools.append(mode)
+  }
+  const slot = h("span", { class: "head__model" })
+  tools.append(slot)
+  chatModels(chat).then((models) => {
+    if (open?.chat?.id === chat.id) headModel(slot, chat, models)
+  })
+  tools.append(h("button", { type: "button", class: "pane__btn", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)))
+}
+
+/** The models this chat may switch to (its data group's), or the account's when that fails. */
+async function chatModels(chat) {
+  try {
+    return (await get(`/models?chat=${encodeURIComponent(chat.id)}`)).models || []
+  } catch {
+    return ctx.models()
+  }
+}
+
+/** The chat's model, and its effort where the model offers more than one. */
+function headModel(slot, chat, models) {
+  const mayPick = ctx.me()?.permissions?.["chat.model_select"] !== false
+  const current = models.find((m) => m.id === chat.model) || { id: chat.model, name: chat.model, efforts: [] }
+  const parts = []
+  if (mayPick && models.length > 1) {
+    parts.push(
+      modelPicker({
+        models,
+        value: chat.model,
+        label: t("Model"),
+        onChange: async (id) => {
+          try {
+            const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, { model: id })
+            if (open?.chat?.id === chat.id) {
+              open.chat = r.chat
+              headModel(slot, r.chat, models)
+            }
+          } catch (err) {
+            alertIn(why(err))
+            headModel(slot, chat, models)
+          }
+        },
+      }),
+    )
   } else if (chat.model) {
-    place.append(h("span", { class: "chip", text: chat.model }))
+    parts.push(h("span", { class: "chip chip--model", title: current.id }, avatar(current), h("span", { text: current.name })))
+  }
+  const efforts = current.efforts || []
+  if (efforts.length > 1) {
+    parts.push(
+      h(
+        "select",
+        {
+          class: "head__mode",
+          "aria-label": t("Reasoning effort"),
+          title: t("Reasoning effort"),
+          onchange: (e) => patch(`/chats/${encodeURIComponent(chat.id)}`, { effort: e.target.value }).catch((err) => alertIn(why(err))),
+        },
+        chat.effort ? null : h("option", { value: "", text: "—", selected: true }),
+        efforts.map((x) => h("option", { value: x, text: x, selected: chat.effort === x })),
+      ),
+    )
+  }
+  slot.replaceChildren(...parts)
+}
+
+/** The chat's own menu, under its ⋯ button or a row of the sidebar: `chat` as the list has it. */
+export function chatMenu(anchor, chat) {
+  const base = ctx.status()?.server
+  const mayDelete = ctx.me()?.permissions?.["chat.delete"] !== false
+  const items = [{ label: t("Rename…"), run: () => renameChat(chat) }]
+  if (base) items.push({ label: t("Open in the web interface"), run: () => openLink(`${base}/chat/${encodeURIComponent(chat.id)}`) })
+  items.push(null, { label: t("Archive chat"), run: () => archiveChat(chat) })
+  if (mayDelete) items.push({ label: t("Delete chat"), danger: true, run: () => deleteChat(chat) })
+  menu(anchor, items)
+}
+
+async function renameChat(chat) {
+  const title = await ask({ title: t("Rename chat"), value: chat.title || "", ok: t("Rename"), cancel: t("Cancel") })
+  if (!title || title === chat.title) return
+  try {
+    const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, { title })
+    if (open?.chat?.id === chat.id) {
+      open.chat = r.chat
+      setTitle(r.chat.title)
+    }
+    ctx.changed(r.chat)
+  } catch (err) {
+    alertIn(why(err))
+  }
+}
+
+async function archiveChat(chat) {
+  try {
+    await patch(`/chats/${encodeURIComponent(chat.id)}`, { archived: true })
+    ctx.gone(chat)
+  } catch (err) {
+    alertIn(why(err))
+  }
+}
+
+async function deleteChat(chat) {
+  const yes = await ask({
+    title: t("Delete this chat?"),
+    text: t("“%(title)s” is deleted on the server, with its messages and files. This cannot be undone.", { title: chat.title || t("New chat") }),
+    ok: t("Delete"),
+    cancel: t("Cancel"),
+    danger: true,
+  })
+  if (!yes) return
+  try {
+    await del(`/chats/${encodeURIComponent(chat.id)}`)
+    ctx.gone(chat)
+  } catch (err) {
+    alertIn(why(err))
   }
 }
 
@@ -440,6 +655,7 @@ function alertIn(text) {
 
 /** Open a chat by id: its newest page, and the reply being written, if one is. */
 export async function openChat(id) {
+  if (open?.chat?.id !== id) discard()
   if (open?.live) open.live.stop()
   open = { chat: { id }, live: null, more: false }
   invoke("set_open_chat", { chat: id })
@@ -517,6 +733,7 @@ let draft = null // { kind }
 /** The form a new chat starts from: `agent` (on this computer) or `chat` (on the server). */
 export function newChat(kind) {
   closeChat()
+  discard()
   draft = { kind }
   clear($("messages"))
   renderCards({ id: "" }, [])
@@ -528,15 +745,20 @@ export function newChat(kind) {
   form.hidden = false
   const s = ctx.status()
   const models = ctx.models()
+  const start = (models.find((m) => m.default) || models[0])?.id || ""
+  const effort = h("select", { id: "new-effort" })
+  const effortField = field(t("Reasoning effort"), effort, "")
+  const showEfforts = (id) => {
+    const efforts = models.find((m) => m.id === id)?.efforts || []
+    effort.replaceChildren(h("option", { value: "", text: "—" }), ...efforts.map((x) => h("option", { value: x, text: x })))
+    effortField.hidden = efforts.length < 2
+  }
   const modelField = field(
     t("Model"),
-    h(
-      "select",
-      { id: "new-model" },
-      models.map((m) => h("option", { value: m.id, text: m.name, selected: m.default })),
-    ),
+    modelPicker({ id: "new-model", models, value: start, label: t("Model"), onChange: showEfforts }),
     models.length ? "" : t("No model is available to this account."),
   )
+  showEfforts(start)
   if (kind === "agent") {
     const roots = s.remote?.enabled ? s.remote.roots : []
     const devices = ctx.thisDevices()
@@ -567,10 +789,11 @@ export function newChat(kind) {
           t("A chat asking for more than the folder allows is lowered to it."),
         ),
         modelField,
+        effortField,
       ),
     )
   } else {
-    form.append(h("div", { class: "fields" }, modelField))
+    form.append(h("div", { class: "fields" }, modelField, effortField))
   }
   showComposer(true)
   setRunning(false)
@@ -585,10 +808,13 @@ function field(label, control, hint) {
   return h("div", { class: "field" }, h("label", { for: id, text: label }), control, h("p", { class: "hint", text: hint || "" }))
 }
 
-async function createChat(text) {
+async function createChat(text, attachments) {
   const body = { text }
+  if (attachments.length) body.attachments = attachments
   const model = $("new-model")?.value
   if (model) body.model = model
+  const effort = $("new-effort")?.value
+  if (effort) body.effort = effort
   if (draft.kind === "agent") {
     const device = ctx.thisDevices()[0]
     const dir = $("new-dir")?.value
@@ -618,16 +844,24 @@ function showComposer(on) {
 async function submit() {
   const box = $("composer-text")
   const text = box.value.trim()
-  if (!text) return
+  if (sending()) {
+    alertIn(t("Wait until the files are sent."))
+    return
+  }
+  const files = readyIds()
+  if (!text && !files.length) return
   $("send").disabled = true
   alertIn("")
   try {
-    if (draft) await createChat(text)
+    if (draft) await createChat(text, files)
     else if (open?.chat?.id) {
-      const r = await post(`/chats/${encodeURIComponent(open.chat.id)}/messages`, { text })
+      const body = { text }
+      if (files.length) body.attachments = files
+      const r = await post(`/chats/${encodeURIComponent(open.chat.id)}/messages`, body)
       if (r.message) $("messages").append(userMessage(r.message))
       if (r.reply) follower(open.chat, r.reply.id)
-    }
+    } else return
+    sent()
     box.value = ""
     grow()
     toBottom(true)

@@ -11,7 +11,9 @@ import { renderSettings, initSettings } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
 import { initExplorer, showLocal, renderServer } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId } from "./chat.js"
+import { initChat, openChat, newChat, closeChat, openChatId, chatMenu } from "./chat.js"
+import { initAttach, allowAttach } from "./attach.js"
+import { initPalette, openPalette } from "./palette.js"
 
 let status = null
 let view = "" // "setup" | "app"
@@ -90,6 +92,7 @@ async function startApp() {
   }
   await Promise.all([loadModels(), loadDevices()])
   $("new-chat-btn").hidden = me?.permissions && me.permissions["chat.create"] === false
+  allowAttach(me?.permissions?.["files.upload"] !== false)
   setKind(kind)
   renderServer()
   invoke("remote_refresh")
@@ -142,6 +145,40 @@ function localPane(chat) {
   else showLocal({ roots, root: "", fixed: false })
 }
 
+/** A new chat of `k`'s kind, in the main view. */
+function startNew(k) {
+  showSettings(false)
+  if (k !== kind) setKind(k)
+  currentChat = null
+  if (narrow()) sideOpen(false)
+  newChat(k)
+  markCurrent()
+  localPane()
+}
+
+/** Open a chat, from the list or the palette: its kind's tab comes with it. */
+function showChat(id, k) {
+  showSettings(false)
+  if (k && k !== kind) setKind(k)
+  if (narrow()) sideOpen(false)
+  openChat(id).then(markCurrent)
+}
+
+/** The palette's commands: what the menus and buttons do, by name. */
+function commands() {
+  const out = [
+    { label: t("New agent chat"), run: () => startNew("agent") },
+    { label: t("New chat"), run: () => startNew("chat") },
+    { label: t("Settings"), run: () => showSettings(true) },
+  ]
+  if (status?.linked) out.push({ label: status.agent_wanted ? t("Stop the agent") : t("Start the agent"), run: () => invoke("set_agent", { on: !status.agent_wanted }) })
+  out.push(
+    { label: status?.linked ? t("Link again") : t("Link this computer"), run: () => invoke("link_computer").catch(() => showSettings(true)) },
+    { label: status?.update ? t("Install LLeMbas %(version)s…", { version: status.update }) : t("Check for updates…"), run: () => invoke("update_app") },
+  )
+  return out
+}
+
 function narrow() {
   return window.matchMedia("(max-width: 48rem)").matches
 }
@@ -175,11 +212,8 @@ async function boot() {
     kind: () => kind,
     thisDevices,
     current: () => openChatId(),
-    open: (id) => {
-      showSettings(false)
-      if (narrow()) sideOpen(false)
-      openChat(id).then(markCurrent)
-    },
+    open: (id) => showChat(id),
+    menu: (anchor, c) => chatMenu(anchor, c),
   })
   initChat({
     status: () => status,
@@ -192,21 +226,25 @@ async function boot() {
       localPane(chat)
       markCurrent()
     },
+    // Archived or deleted: the list without it, and a new chat where it was open.
+    gone: (chat) => {
+      if (!openChatId() || openChatId() === chat.id) {
+        currentChat = null
+        newChat(kind)
+        localPane()
+      }
+      refreshList()
+    },
   })
+  initAttach({ chat: () => openChatId() || "", allowed: () => me?.permissions?.["files.upload"] !== false })
+  initPalette({ commands, open: (c) => showChat(c.id, c.kind === "agent" ? "agent" : "chat") })
   onViewer((on) => {
     $("shell").dataset.viewer = String(on)
   })
 
   for (const b of document.querySelectorAll(".switch button")) b.addEventListener("click", () => setKind(b.dataset.kind))
   $("new-chat-btn").prepend(icon(ICONS.plus))
-  $("new-chat-btn").addEventListener("click", () => {
-    showSettings(false)
-    currentChat = null
-    if (narrow()) sideOpen(false)
-    newChat(kind)
-    markCurrent()
-    localPane()
-  })
+  $("new-chat-btn").addEventListener("click", () => startNew(kind))
   $("settings-btn").replaceChildren(icon(ICONS.gear), h("span", { text: t("Settings") }))
   $("settings-btn").addEventListener("click", () => showSettings($("settings").hidden))
   $("settings-close").replaceChildren(icon(ICONS.close))
@@ -215,6 +253,19 @@ async function boot() {
   $("scrim").addEventListener("click", () => sideOpen(false))
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && $("shell").dataset.side === "true") sideOpen(false)
+    if (view !== "app" || document.querySelector("dialog[open]")) return
+    const mod = e.ctrlKey || e.metaKey
+    // Ctrl+K: the palette. Ctrl+N: a new chat of the tab's kind. Ctrl+,: the settings.
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+      e.preventDefault()
+      openPalette()
+    } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+      e.preventDefault()
+      startNew(kind)
+    } else if (mod && e.key === ",") {
+      e.preventDefault()
+      showSettings(true)
+    }
   })
 
   invoke("set_words", { words: { reply: t("The reply is ready."), agent: t("The agent has finished.") } })
