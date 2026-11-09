@@ -20,10 +20,31 @@ All notable changes to LLeMbas Desktop. The format follows
   *Regenerate reply*. *Copy* puts a message, or a reply's text as Markdown, on the clipboard.
 - **The chat's own menu** (⋯ in its header, or a right click on it in the sidebar): rename it,
   open it in the web interface in your browser, archive it, delete it (asked first).
-- **Change a chat's model** from its header, and its reasoning effort where the model offers
-  more than one level; a new chat can choose its effort too.
-- **Model avatars**: every model in the pickers and under each reply shows its initial on a
-  colour of its own -- the same colour the web interface gives it.
+- **Change a chat's model** from its header, and how hard it thinks as the model offers it: a
+  model with one level shows nothing to choose; one that can switch thinking off and has one
+  effort shows a **Think before answering** switch; more levels keep the selector. A new chat
+  starts at the model's own start level, and the control follows the model you pick.
+- **Agents, fewest and most**, beside it where the chat can have a team (a chat on the server,
+  on a model that serves at least two requests at once, with subagents on): how many agents the
+  chat's team may have, its own agent included. Saved at once in the header; on a new chat,
+  left empty, your default stands. A pair the server will not take is said in its words, and the
+  fields go back.
+- **Model pictures**: a model the server has a picture for shows it in the pickers and under
+  each reply; the others show their initial on a colour of their own -- the same colour the web
+  interface gives them.
+- **The activity panel** beside a chat (the header's bolt button, the strip above the message
+  box, or the palette): what is in the chat's context, by category, against the model's window;
+  the files the chat and its agents wrote, with lines added and removed, each opening in the
+  viewer; every background agent -- a team's members as a tree, helpers and commands -- with what
+  it was asked, its state, how long it has run, its model, its latest step and what it is
+  writing, its whole conversation to read and a button to stop it (a member after you confirm,
+  for those under it stop with it); the team's room, who wrote to whom and which messages are
+  reports; and the plan. It keeps up by itself while the chat is open. The strip above the
+  message box says what the agents are doing ("2 agents working · 1 queued") and opens it. On a
+  narrow window the panel covers the chat; at phone width it fills the window.
+- **Continue an agent chat in a terminal**: its menu and its header show the command that opens
+  the agent's session in a terminal (`lembas -s …`, in the chat's folder), to copy. On this
+  computer it names the LLeMbas CLI as it starts here -- the one on your PATH, else the app's own.
 - **A command palette** (Ctrl+K): new chats, settings, the agent and updates by name, and every
   chat of both kinds by its title (accents optional). Ctrl+N starts a new chat of the tab you are
   on; Ctrl+, opens the settings.
