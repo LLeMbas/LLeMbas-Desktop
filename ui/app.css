@@ -1053,6 +1053,19 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
   .activity { grid-area: main; z-index: var(--z-panel); border-left: 0; }
 }
 
+/* The chat's header by the chat's own width, not the window's: with the activity panel or the
+   viewer beside it, a wide window still leaves a narrow chat, and its controls get a row of their
+   own there as on a narrow window. 48rem is --bp-narrow again. */
+.main { container: chat / inline-size; }
+@container chat (max-width: 48rem) {
+  .head { padding: var(--sp-2) var(--sp-3) 0; grid-template-columns: minmax(0, 1fr) auto; }
+  .head__place { grid-column: 1 / -1; grid-row: 2; padding-bottom: var(--sp-2); }
+  .head__place:empty { display: none; }
+  .head__tools { grid-column: 1 / -1; grid-row: 3; flex-wrap: wrap; padding-bottom: var(--sp-2); }
+  .head__place:empty + .head__tools { grid-row: 2; }
+  .head__tools:empty { display: none; }
+}
+
 /* 48rem (--bp-narrow): the sidebar is a drawer, opened from the title bar. */
 @media (max-width: 48rem) {
   :root { --side-btn-w: var(--titlebar-h); }

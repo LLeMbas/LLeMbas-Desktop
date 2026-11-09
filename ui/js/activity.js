@@ -169,6 +169,11 @@ function stop() {
 }
 
 async function listenTo(id) {
+  // Held while the stream opens, so nothing opens a second one meanwhile.
+  const pending = { close() {} }
+  stream = pending
+  let ended = false
+  let handleId = null
   try {
     const handle = await follow(`/chats/${enc(id)}/activity/events`, {
       onFrame: (event, frame) => {
@@ -179,10 +184,14 @@ async function listenTo(id) {
       // The server closes the stream after a while (`close`): it is opened again at once. A broken
       // one is opened again later, more slowly each time -- polling, in effect, while it fails.
       onEnd: (err) => {
+        ended = true
         if (chat?.id !== id) return
-        stream = null
+        if (stream === pending || stream?.id === handleId) stream = null
+        // Not while the window is hidden (in the tray): it is opened again when it shows.
+        if (document.visibilityState === "hidden") return
         failures = err ? failures + 1 : 0
         retry = setTimeout(() => {
+          retry = 0
           if (chat?.id === id && !stream) {
             if (err && panelOpen()) read(false)
             listenTo(id)
@@ -190,12 +199,17 @@ async function listenTo(id) {
         }, err ? Math.min(60000, 5000 * failures) : 500)
       },
     })
-    if (chat?.id !== id) handle.close()
-    else stream = handle
+    handleId = handle.id
+    if (chat?.id !== id || stream !== pending) handle.close()
+    else if (!ended) stream = handle
   } catch {
+    if (stream === pending) stream = null
     if (chat?.id !== id) return
     failures += 1
-    retry = setTimeout(() => chat?.id === id && listenTo(id), Math.min(60000, 5000 * failures))
+    retry = setTimeout(() => {
+      retry = 0
+      if (chat?.id === id && !stream) listenTo(id)
+    }, Math.min(60000, 5000 * failures))
   }
 }
 
@@ -662,6 +676,8 @@ export function initActivity({ onLayout }) {
     true,
   )
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && chat && panelOpen()) read(false)
+    if (document.visibilityState !== "visible" || !chat) return
+    if (!stream && !retry) listenTo(chat.id)
+    if (panelOpen()) read(false)
   })
 }

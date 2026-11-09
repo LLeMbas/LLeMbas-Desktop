@@ -832,8 +832,6 @@ export function newChat(kind) {
   const showLevels = (id) => {
     const model = models.find((m) => m.id === id)
     const control = effortControl({ model, value: levelsOf(model).start, id: "new-effort" })
-    const switchOnly = levelsOf(model).control === "switch"
-    effortField.children[0].textContent = switchOnly ? t("Thinking") : t("Reasoning effort")
     effortField.children[0].htmlFor = "new-effort"
     effortField.children[1].replaceWith(control || h("span", { id: "new-effort" }))
     effortField.hidden = !control

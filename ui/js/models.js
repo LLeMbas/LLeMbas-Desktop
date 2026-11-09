@@ -165,9 +165,8 @@ export function effortControl({ model, value, onChange, id, compact }) {
       "label",
       { class: `toggle${compact ? " toggle--compact" : ""}`, title: t("Think before answering") },
       box,
-      h("span", { class: "toggle__label", text: compact ? t("Thinking") : t("Think before answering") }),
+      h("span", { class: "toggle__label", text: t("Think before answering") }),
     )
-    if (compact) box.setAttribute("aria-label", t("Think before answering"))
     box.addEventListener("change", () => {
       current = box.checked ? on : "off"
       onChange?.(current)
