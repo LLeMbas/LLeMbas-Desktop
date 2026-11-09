@@ -6,6 +6,11 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.4] — 2026-11-09
+
+Carries LLeMbas CLI 2.0.0-beta.3 and the look of LLeMbas 2.0.0-beta.6. Scheduled tasks need LLeMbas
+2.0.0-beta.6 or later.
+
 ### Fixed
 
 - **An agent that could not link now gets its link.** Signing in asked the server for the agent's
