@@ -172,7 +172,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn schedules(rows: &[(&str, Option<(&str, &str, bool)>)]) -> Value {
+    /// A schedule's last run in a test: its id, status, and whether the server tells of it.
+    type LastRun<'a> = Option<(&'a str, &'a str, bool)>;
+
+    fn schedules(rows: &[(&str, LastRun)]) -> Value {
         json!({"schedules": rows.iter().map(|(id, run)| json!({
             "id": id, "title": format!("Task {id}"),
             "last_run": run.map(|(r, status, told)| json!({"id": r, "status": status, "notified": told})),
