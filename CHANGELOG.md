@@ -6,6 +6,55 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **An agent that could not link now gets its link.** Signing in asked the server for the agent's
+  token only when the built-in LLeMbas CLI had no login for that server on file -- so a computer
+  with an old login the server no longer takes got the app's own token alone, and the agent stayed
+  refused. The sign-in now asks for the agent's token unless the agent's link works right now, and
+  the CLI's new login replaces the old one. **Link this computer** (and **Link again**) is now its
+  own approval for the agent's token, handed to the CLI the same way; before, it ran the CLI's own
+  login, which for a server it was logged in to only refreshed the login it had.
+- **"Refused" means the server refused**, and says the server's reason. A service that stopped for
+  want of a login says *not linked*; any other reason, *stopped* with the reason.
+
+### Changed
+
+- **A new look, the shape of an AI desktop app.** A slim sidebar: **New chat**, a search line,
+  **Scheduled**, **Files**, then your chats of both kinds -- agent chats and chats on the server --
+  under *Today* and *Earlier*, an agent chat with its folder's name; **Settings** with your account
+  at the foot. The sidebar folds away (its button in the title bar, or Ctrl+B) and is a drawer on a
+  narrow window.
+- **A new chat is a chat page.** A greeting, the choice of **Agent** (on this computer) or **Chat**
+  (on the server), and the message box ready -- no form. What the chat starts with sits under the
+  text as small chips, each opening a menu: the folder and the mode for an agent chat, the model
+  with its picture, how hard it thinks (as the model offers it), and the team's size where a team
+  is offered. An open chat has the same chips, and changing one changes the chat.
+- **The conversation** in a centred column: your messages in bubbles on the right, with attached
+  pictures as thumbnails and other files as tiles; replies full width; thinking and each tool call
+  a compact row that unfolds. **Send** is a round button that **Stop** replaces while a reply is
+  written.
+- **The activity panel** opens from a chip above the message box, on every open chat; while
+  agents work, the chip says what they are doing.
+- **The agent's status** is a chip in the title bar that opens what the agent says and the one
+  thing to do about it. When this computer is not linked -- or the server refused its link -- a
+  new agent chat says so right above the message box, with **Link this computer** (or **Link
+  again**) there, not only in Settings; while the approval waits, the code to compare is shown
+  with Cancel.
+- **Files** is a page of its own, with this computer's folders and your files on the server as
+  two tabs. **Settings** is grouped -- Account, Agent, Project folders, Notifications, About --
+  with the groups listed beside them.
+
+### Added
+
+- **Scheduled tasks** (with a server that has them): the list with each task's next run, how its
+  last run went and a switch to pause it; a task's page with what it does, when, how it tells you,
+  the next runs, its history (each run's status, time, model and its result to open) and **Run
+  now**; and a new task said in your own words -- the server reads them into a rule and an
+  instruction and shows the next five runs before you save. While the app runs, a scheduled task's
+  result the server decides to tell of comes as a system notification (never a run with nothing
+  to report). A server without scheduled tasks says so.
+
 ## [1.0.0-beta.3] — 2026-11-09
 
 Carries LLeMbas CLI 2.0.0-beta.3 and the look of LLeMbas 2.0.0-beta.5. Needs a LLeMbas 2.0 server

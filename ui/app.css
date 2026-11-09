@@ -28,6 +28,9 @@
   --radius-soft: calc(2 * var(--radius-xl));
   /* The conversation's column and the composer under it: the server's thread width. */
   --column: var(--thread-max-width);
+  /* A pill in the title bar (the agent's chip, the update button): inside the bar's height, which
+     the touch sizes of the controls would otherwise outgrow. */
+  --bar-chip-h: calc(var(--titlebar-h) - 2 * var(--sp-1));
   /* A chip under the message box: a small control's height. */
   --chip-h: var(--control-h-sm);
   /* The round send and stop buttons. */
@@ -225,7 +228,7 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
   grid-template-columns: var(--dot-size) auto;
   gap: var(--sp-2);
   align-items: center;
-  height: var(--chip-h);
+  height: var(--bar-chip-h);
   margin: 0 var(--sp-2);
   padding: 0 var(--sp-3);
   font: var(--text-xs) / 1 var(--font-ui);
@@ -240,7 +243,7 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
 .bar__agent[data-state="failed"] .dot, .bar__agent[data-state="not_linked"] .dot, .bar__agent[data-state="no_folders"] .dot,
 .bar__agent[data-state="waiting"] .dot, .bar__agent[data-state="refused"] .dot, .bar__agent[data-state="elsewhere_waiting"] .dot { background: var(--warning); }
 .bar__agent[data-state="refused"], .bar__agent[data-state="not_linked"] { color: var(--warning); border-color: var(--warning); }
-.bar > .bar__update { height: var(--chip-h); margin: 0 var(--sp-1); padding: 0 var(--sp-3); color: var(--accent-ink); background: var(--accent); border-radius: var(--radius-full); font-size: var(--text-xs); }
+.bar > .bar__update { height: var(--bar-chip-h); margin: 0 var(--sp-1); padding: 0 var(--sp-3); color: var(--accent-ink); background: var(--accent); border-radius: var(--radius-full); font-size: var(--text-xs); }
 .bar > .bar__update:hover { background: var(--accent-hover); color: var(--accent-ink); }
 /* Hidden keeps its grid track (auto, so zero wide): the slots after it never move. */
 .bar > .bar__update[hidden] { display: block !important; width: 0; margin: 0; padding: 0; overflow: hidden; visibility: hidden; }
