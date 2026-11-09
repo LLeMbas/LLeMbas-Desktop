@@ -19,7 +19,10 @@ chmod 700 "$runtime"
 pids=()
 cleanup() {
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
-  rm -rf "$home" "$runtime"
+  # The document portal, started on the session bus, may have mounted itself (FUSE) at
+  # $XDG_RUNTIME_DIR/doc; rm cannot remove a mount point, and a cleanup must not fail the check.
+  fusermount3 -u "$runtime/doc" 2>/dev/null || fusermount -u "$runtime/doc" 2>/dev/null || true
+  rm -rf "$home" "$runtime" 2>/dev/null || true
 }
 trap cleanup EXIT
 
