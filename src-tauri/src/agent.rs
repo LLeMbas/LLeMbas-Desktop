@@ -83,7 +83,7 @@ impl State {
     }
 
     /// Whether this is a state the CLI's own status file decides, while the process runs.
-    fn from_cli(&self) -> bool {
+    fn told_by_cli(&self) -> bool {
         matches!(
             self,
             State::Starting | State::Connecting | State::Running | State::Waiting(_)
@@ -337,7 +337,7 @@ impl Agent {
             }
             if read {
                 let now = self.state();
-                if now.from_cli() {
+                if now.told_by_cli() {
                     let next = match cli::link_of(pid) {
                         Some(link) => from_link(&link, &now),
                         None => last_line(&self.log, from)
