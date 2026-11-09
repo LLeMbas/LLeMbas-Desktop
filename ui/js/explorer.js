@@ -130,26 +130,29 @@ export function renderServer() {
   tree(box, {
     rootPath: "/",
     list: async (path) => (await get(SERVER_FILES.list(path))).entries || [],
-    open: async (e) => {
-      const where = t("Server")
-      try {
-        const f = await readServer(e.path)
-        openViewer({
-          name: f.name || e.name,
-          path: f.path || e.path,
-          where,
-          text: f.text,
-          // The server's own kind and language: its table and the viewer's are the same one.
-          kind: ["markdown", "code", "text", "html"].includes(f.kind) ? f.kind : undefined,
-          language: f.language || undefined,
-          withheld: f.withheld,
-          size: f.size,
-        })
-      } catch (err) {
-        openViewer({ name: e.name, path: e.path, where, error: why(err) })
-      }
-    },
+    open: (e) => openServerFile(e.path, e.name),
   })
+}
+
+/** A file in the server's tree, in the viewer: from the explorer and from a chat's outputs. */
+export async function openServerFile(path, name) {
+  const where = t("Server")
+  try {
+    const f = await readServer(path)
+    openViewer({
+      name: f.name || name,
+      path: f.path || path,
+      where,
+      text: f.text,
+      // The server's own kind and language: its table and the viewer's are the same one.
+      kind: ["markdown", "code", "text", "html"].includes(f.kind) ? f.kind : undefined,
+      language: f.language || undefined,
+      withheld: f.withheld,
+      size: f.size,
+    })
+  } catch (err) {
+    openViewer({ name, path, where, error: why(err) })
+  }
 }
 
 export function initExplorer() {

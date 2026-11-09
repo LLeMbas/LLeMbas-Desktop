@@ -14,6 +14,7 @@ import { initList, refreshList, markCurrent } from "./list.js"
 import { initChat, openChat, newChat, closeChat, openChatId, chatMenu } from "./chat.js"
 import { initAttach, allowAttach } from "./attach.js"
 import { initPalette, openPalette } from "./palette.js"
+import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
 
 let status = null
 let view = "" // "setup" | "app"
@@ -171,6 +172,7 @@ function commands() {
     { label: t("New chat"), run: () => startNew("chat") },
     { label: t("Settings"), run: () => showSettings(true) },
   ]
+  if (openChatId()) out.push({ label: panelOpen() ? t("Close the activity panel") : t("Open the activity panel"), run: togglePanel })
   if (status?.linked) out.push({ label: status.agent_wanted ? t("Stop the agent") : t("Start the agent"), run: () => invoke("set_agent", { on: !status.agent_wanted }) })
   out.push(
     { label: status?.linked ? t("Link again") : t("Link this computer"), run: () => invoke("link_computer").catch(() => showSettings(true)) },
@@ -191,6 +193,7 @@ function sideOpen(on) {
 // --- Settings -----------------------------------------------------------------------------------
 
 function showSettings(on) {
+  if (on) showPanel(false)
   $("settings").hidden = !on
   $("main").hidden = on
   if (on) {
@@ -240,6 +243,11 @@ async function boot() {
   initPalette({ commands, open: (c) => showChat(c.id, c.kind === "agent" ? "agent" : "chat") })
   onViewer((on) => {
     $("shell").dataset.viewer = String(on)
+  })
+  initActivity({
+    onLayout: (on) => {
+      $("shell").dataset.activity = String(on)
+    },
   })
 
   for (const b of document.querySelectorAll(".switch button")) b.addEventListener("click", () => setKind(b.dataset.kind))

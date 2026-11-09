@@ -87,6 +87,7 @@
         <div class="messages" id="messages"></div>
       </div>
       <div class="cards" id="cards" hidden></div>
+      <div class="strip" id="activity-strip" hidden aria-live="polite"></div>
       <form class="composer" id="composer" hidden data-running="false" data-drag="false">
         <ul class="composer__files" id="composer-files" hidden></ul>
         <button type="button" class="btn composer__attach" id="attach" aria-label="Attach files" title="Attach files" data-i18n-aria-label data-i18n-title></button>
@@ -107,6 +108,15 @@
       </header>
       <div class="settings__body" id="settings-body"></div>
     </section>
+
+    <aside class="activity" id="activity" hidden aria-labelledby="activity-title">
+      <header class="viewer__head activity__head">
+        <button type="button" class="pane__btn" id="activity-back" hidden aria-label="Back" title="Back" data-i18n-aria-label data-i18n-title></button>
+        <h2 class="viewer__name" id="activity-title"></h2>
+        <button type="button" class="pane__btn" id="activity-close" aria-label="Close the activity panel" title="Close the activity panel" data-i18n-aria-label data-i18n-title></button>
+      </header>
+      <div class="activity__body" id="activity-body"></div>
+    </aside>
 
     <aside class="viewer" id="viewer" hidden aria-labelledby="viewer-name">
       <header class="viewer__head">

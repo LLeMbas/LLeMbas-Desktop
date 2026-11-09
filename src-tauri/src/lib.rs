@@ -437,6 +437,13 @@ async fn model_image(handle: AppHandle, path: String) -> Result<String, ApiError
         .map_err(|e| ApiError::new(0, e.to_string()))?
 }
 
+/// How the CLI is started in a terminal here (`lembas`, or the bundled one by its path): the
+/// first word of "continue in a terminal" for an agent chat on this computer.
+#[tauri::command]
+fn terminal_word() -> String {
+    cli::terminal_word()
+}
+
 /// A frame of a reply being written, as the page hears it.
 #[derive(Clone, Serialize)]
 struct Frame {
@@ -1436,6 +1443,7 @@ pub fn run() {
             api,
             api_text,
             model_image,
+            terminal_word,
             stream_open,
             stream_close,
             local_list,

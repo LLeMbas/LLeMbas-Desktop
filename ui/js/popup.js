@@ -124,3 +124,45 @@ export function ask({ title, text, value, ok, cancel, danger }) {
     } else okBtn.focus()
   })
 }
+
+/**
+ * A modal dialog that shows a line to copy: `title`, `text`, the line itself (`code`, shown as
+ * it is and selectable), and Copy beside Close. Resolves when it is closed.
+ */
+export function showLine({ title, text, code, copy, copied, close }) {
+  return new Promise((resolve) => {
+    const line = h("pre", { class: "dialog__code", tabindex: "0", text: code })
+    const copyBtn = h("button", { type: "button", class: "btn btn--primary", text: copy })
+    const closeBtn = h("button", { type: "button", class: "btn", text: close })
+    const dlg = h(
+      "dialog",
+      { class: "dialog" },
+      h("div", { class: "dialog__body" }, h("h2", { class: "dialog__title", text: title }), text ? h("p", { class: "muted", text }) : null, line, h("div", { class: "dialog__actions" }, closeBtn, copyBtn)),
+    )
+    const done = () => {
+      dlg.close()
+      dlg.remove()
+      resolve()
+    }
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard
+        ?.writeText(code)
+        .then(() => (copyBtn.textContent = copied))
+        .catch(() => {
+          // No clipboard: the line is selected, for Ctrl+C.
+          const range = document.createRange()
+          range.selectNodeContents(line)
+          getSelection()?.removeAllRanges()
+          getSelection()?.addRange(range)
+        })
+    })
+    closeBtn.addEventListener("click", done)
+    dlg.addEventListener("cancel", (e) => {
+      e.preventDefault()
+      done()
+    })
+    document.body.append(dlg)
+    dlg.showModal()
+    copyBtn.focus()
+  })
+}

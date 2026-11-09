@@ -1,6 +1,7 @@
 /* LLeMbas Desktop's page. Every colour, size, space and font is a token from tokens.css (the
    server's, copied by scripts/fetch-tokens.sh and pinned); the only values of this page's own are
-   the title bar's height and the setup card's width, named below. Media queries cannot read a
+   the title bar's height, the setup card's width and the activity panel's number columns, named
+   below. Media queries cannot read a
    custom property, so the two breakpoints are written out and named after the tokens they are:
    48rem is --bp-narrow (the sidebar becomes a drawer), 64rem is --bp-wide (the viewer goes over
    the chat instead of beside it).
@@ -18,6 +19,10 @@
   --card-max: 40rem;
   /* The sidebar toggle's track in the title bar: none until the sidebar is a drawer. */
   --side-btn-w: 0px;
+  /* The activity panel's number columns: a token count or a share ("180k", "63.0%"), and an
+     elapsed time ("2h 03m"), in the panel's monospaced figures. */
+  --num-col: 4.5em;
+  --time-col: 5.5em;
 }
 
 html, body { margin: 0; height: 100%; overflow: hidden; }
@@ -376,7 +381,7 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
 
 /* --- The chat ------------------------------------------------------------------------------ */
 
-.main, .settings { grid-area: main; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; }
+.main, .settings { grid-area: main; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; }
 .settings { grid-template-rows: auto minmax(0, 1fr); }
 
 .head {
@@ -495,23 +500,20 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
    its word before them -- fixed tracks, so nothing moves when a number grows a digit. */
 .agents {
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-areas: "min max";
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: var(--sp-2);
   align-items: center;
   width: 100%;
   height: var(--control-h);
 }
-.agents__dash { display: none; }
+.agents__dash { color: var(--ink-muted); }
 .agents__input { width: 100%; min-width: 0; height: var(--control-h); padding: 0 var(--control-px-sm); }
 .agents--compact {
   grid-template-columns: auto calc(var(--w-field-xs) / 2) auto calc(var(--w-field-xs) / 2);
-  grid-template-areas: none;
   width: auto;
   height: var(--control-h-sm);
   font: var(--text-sm) var(--font-ui);
 }
-.agents--compact .agents__dash { display: inline; color: var(--ink-muted); }
 .agents--compact .agents__input { height: var(--control-h-sm); }
 .agents__label { color: var(--ink-muted); white-space: nowrap; }
 /* The model picker: a button the height of a control, avatar · name · chevron. */
@@ -783,6 +785,173 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
 .viewer__note { padding: var(--sp-4); font-size: var(--text-sm); color: var(--ink-muted); }
 .viewer__note.is-error { color: var(--warning); }
 
+/* --- The activity panel -------------------------------------------------------------------------
+   Beside the chat, the inspector's width; while the viewer is open too, the viewer goes over the
+   chat (it was opened from here, and three columns of text beside the sidebar do not fit). Over
+   the chat from --bp-wide down, as the viewer is; at --bp-narrow that is a full-height sheet. */
+
+.shell[data-activity="true"],
+.shell[data-activity="true"][data-viewer="true"] {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width);
+  grid-template-areas: "side main activity";
+}
+.shell[data-activity="true"] .viewer { grid-area: main; z-index: var(--z-panel); border-left: 0; }
+.activity {
+  grid-area: activity;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-left: var(--border-w) solid var(--border);
+  background: var(--bg);
+}
+/* Title and close on two known tracks; with an agent's conversation open, Back before them. */
+.activity__head { grid-template-columns: minmax(0, 1fr) var(--control-h-sm); }
+.activity[data-view="agent"] .activity__head { grid-template-columns: var(--control-h-sm) minmax(0, 1fr) var(--control-h-sm); }
+.activity__body { overflow: auto; min-height: 0; display: grid; align-content: start; font-size: var(--text-sm); }
+.activity__section { padding: var(--sp-3); border-bottom: var(--border-w) solid var(--border); min-width: 0; }
+.activity__section:last-child { border-bottom: 0; }
+.activity__heading, .activity__subheading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  margin: 0;
+  font: 600 var(--text-sm) / var(--leading-tight) var(--font-ui);
+  color: var(--ink);
+  cursor: pointer;
+}
+.activity__heading::-webkit-details-marker { display: none; }
+.activity__section[open] > .activity__heading { margin-bottom: var(--sp-3); }
+.activity__subheading { margin: var(--sp-4) 0 var(--sp-2); cursor: default; }
+.activity__count { font: var(--text-xs) var(--font-mono); color: var(--ink-muted); }
+.activity__empty { margin: 0; padding: var(--sp-1) 0; color: var(--ink-faint); font-size: var(--text-sm); }
+.activity__empty.is-error { color: var(--warning); padding: var(--sp-3); }
+.activity__plan { min-width: 0; }
+
+/* Context: the line, the bar, then one row per category on four fixed tracks -- swatch, the name
+   that gives, and two number columns -- so the numbers stand in columns in any language. The
+   categories' colours are tokens, one each. */
+.ctx { display: grid; gap: var(--sp-2); }
+.ctx__used { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-2); margin: 0; color: var(--ink); }
+.ctx__of { font-family: var(--font-mono); color: var(--ink-muted); }
+.ctx__bar { display: flex; height: var(--sp-2); overflow: hidden; background: var(--surface-active); border-radius: var(--radius-full); }
+.ctx__seg { flex: none; width: var(--share, 0); background: var(--ctx, var(--ink-faint)); }
+.ctx__rows { display: grid; margin: 0; padding: 0; list-style: none; }
+.ctx__row {
+  display: grid;
+  grid-template-columns: var(--sp-3) minmax(0, 1fr) var(--num-col) var(--num-col);
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: var(--row-h);
+}
+.ctx__key { width: var(--sp-3); height: var(--sp-3); border-radius: var(--radius-sm); background: var(--ctx, var(--ink-faint)); }
+.ctx--free.ctx__key { background: transparent; border: var(--border-w) solid var(--border-strong); }
+.ctx__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink-muted); }
+.ctx__num { font: var(--text-xs) var(--font-mono); text-align: right; color: var(--ink-muted); }
+.ctx__note { margin: 0; font-size: var(--text-xs); color: var(--ink-faint); }
+.ctx--messages { --ctx: var(--accent); }
+.ctx--system { --ctx: var(--ink-muted); }
+.ctx--memory { --ctx: var(--warning); }
+.ctx--instructions { --ctx: var(--success); }
+.ctx--tools { --ctx: var(--ink); }
+.ctx--mcp_tools { --ctx: var(--danger); }
+.ctx--since { --ctx: var(--ink-faint); }
+.ctx--buffer { --ctx: var(--border-strong); }
+.ctx--free { --ctx: transparent; }
+
+/* Outputs: icon, the name (cut, never wrapped), the lines added and removed. */
+.outs { display: grid; margin: 0; padding: 0; list-style: none; }
+.outs__row { display: grid; grid-template-columns: var(--sp-4) minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; min-height: var(--row-h); color: var(--ink-muted); }
+.outs__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0; font: var(--text-sm) var(--font-ui); color: var(--ink); text-align: left; background: none; border: 0; cursor: pointer; }
+.outs__name:hover { color: var(--accent); text-decoration: underline; }
+.outs__diff { display: grid; grid-auto-flow: column; gap: var(--sp-2); font: var(--text-xs) var(--font-mono); }
+.outs__add { color: var(--success); }
+.outs__del { color: var(--danger); }
+
+/* Background tasks. An agent's row is one grid of known tracks: state dot, what it is (the one
+   track that gives, cut), elapsed time in a column of its own width, the stop button at its size
+   (an empty box where there is none) -- so rows line up whatever each says. */
+.tasks { display: grid; gap: var(--sp-2); min-width: 0; }
+.tasks__summary, .tasks__team { margin: 0; color: var(--ink-muted); }
+.tasks__goal { margin: 0; color: var(--ink); }
+.tasks__list { display: grid; gap: var(--sp-1); }
+.tasks__more > summary { cursor: pointer; padding: var(--sp-1) 0; color: var(--ink-muted); }
+.tasks__more[open] > summary { margin-bottom: var(--sp-1); }
+.agent { margin-left: calc(var(--depth, 0) * var(--sp-4)); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius); min-width: 0; }
+.agent__row {
+  display: grid;
+  grid-template-columns: var(--dot-size) minmax(0, 1fr) var(--time-col) var(--control-h-sm);
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: var(--control-h);
+  padding: 0 var(--sp-1) 0 var(--sp-3);
+  cursor: pointer;
+  list-style: none;
+}
+.agent__row::-webkit-details-marker { display: none; }
+.agent__dot { width: var(--dot-size); height: var(--dot-size); border-radius: var(--radius-full); background: var(--ink-faint); }
+.agent.is-working .agent__dot { background: var(--accent); }
+.agent.is-queued .agent__dot, .agent.is-waiting .agent__dot { background: var(--warning); }
+.agent.is-done .agent__dot { background: var(--leaf); }
+.agent.is-error .agent__dot { background: var(--danger); }
+.agent__what { display: grid; min-width: 0; }
+.agent__name, .agent__role { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.agent__name { color: var(--ink); }
+.agent__role { font-size: var(--text-xs); color: var(--ink-muted); }
+.agent__time { font: var(--text-xs) var(--font-mono); text-align: right; color: var(--ink-muted); }
+.agent__stop { width: var(--control-h-sm); height: var(--control-h-sm); }
+.agent__body { display: grid; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3) var(--sp-3); border-top: var(--border-w) solid var(--border); min-width: 0; }
+.agent__body > .btn { justify-self: start; }
+.agent__facts { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin: 0; font-size: var(--text-xs); color: var(--ink-muted); }
+.agent__state { color: var(--ink); }
+.agent__model { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.agent__brief { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.agent__step { display: grid; grid-template-columns: var(--dot-size) auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; margin: 0; }
+.agent__verb { color: var(--ink); white-space: nowrap; }
+.agent__title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--text-xs) var(--font-mono); color: var(--ink-muted); }
+.agent__text { margin: 0; max-height: calc(6 * var(--row-h)); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); color: var(--ink-muted); }
+
+/* The team's room: who to whom, a report marked, the words as markdown. */
+.room { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.room__entry { display: grid; gap: var(--sp-1); padding: var(--sp-2) var(--sp-3); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius); min-width: 0; }
+.room__entry.is-report { border-left: var(--border-w-thick) solid var(--leaf); }
+.room__meta { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; font-size: var(--text-xs); color: var(--ink-muted); }
+.room__n { font-family: var(--font-mono); }
+.room__route { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.room__badge { color: var(--leaf); border-color: var(--leaf); }
+
+/* One agent's conversation, read-only. */
+.convo__head { display: grid; gap: var(--sp-2); padding: var(--sp-3); border-bottom: var(--border-w) solid var(--border); }
+.convo__head > .btn { justify-self: start; }
+.convo { display: grid; gap: var(--sp-3); padding: var(--sp-3); min-width: 0; }
+.convo__turn { font-size: var(--text-sm); }
+.convo__tools { display: grid; gap: var(--sp-1); margin: var(--sp-2) 0 0; padding: 0; list-style: none; }
+.convo__tool { display: grid; grid-template-columns: var(--dot-size) auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; font-size: var(--text-xs); }
+
+/* The strip above the message box: what the agents are doing, one line, and the way into the panel. */
+.strip { padding: var(--sp-2) var(--sp-4) 0; }
+.strip__btn {
+  display: grid;
+  grid-template-columns: var(--dot-size) minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  width: 100%;
+  max-width: var(--thread-max-width);
+  min-height: var(--control-h);
+  margin: 0 auto;
+  padding: 0 var(--control-px-sm);
+  font: var(--text-sm) var(--font-ui);
+  color: var(--ink-muted);
+  text-align: left;
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.strip__btn:hover { color: var(--ink); background: var(--surface-hover); }
+.strip__text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
 /* --- Menus, dialogs and the palette ----------------------------------------------------------- */
 
 .menu {
@@ -836,6 +1005,19 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
 .dialog::backdrop { background: var(--scrim); }
 .dialog__body { display: grid; gap: var(--sp-3); padding: var(--sp-4); }
 .dialog__title { font: 600 var(--text-md) / var(--leading-tight) var(--font-ui); }
+/* A line to copy: as it is, on one line that scrolls on its own rather than the dialog. */
+.dialog__code {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  overflow-x: auto;
+  white-space: pre;
+  font: var(--text-sm) var(--font-mono);
+  color: var(--ink);
+  background: var(--code-bg);
+  border: var(--border-w) solid var(--code-border);
+  border-radius: var(--radius);
+  user-select: all;
+}
 .dialog__input { width: 100%; }
 .dialog__actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
 
@@ -866,6 +1048,9 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
 @media (max-width: 64rem) {
   .shell[data-viewer="true"] { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); grid-template-areas: "side main"; }
   .viewer { grid-area: main; z-index: var(--z-panel); border-left: 0; }
+  .shell[data-activity="true"],
+  .shell[data-activity="true"][data-viewer="true"] { grid-template-columns: var(--sidebar-width) minmax(0, 1fr); grid-template-areas: "side main"; }
+  .activity { grid-area: main; z-index: var(--z-panel); border-left: 0; }
 }
 
 /* 48rem (--bp-narrow): the sidebar is a drawer, opened from the title bar. */
@@ -873,7 +1058,8 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
   :root { --side-btn-w: var(--titlebar-h); }
   .bar__side { visibility: visible; }
   .bar__host { display: none; }
-  .shell, .shell[data-viewer="true"] { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main"; }
+  .shell, .shell[data-viewer="true"],
+  .shell[data-activity="true"], .shell[data-activity="true"][data-viewer="true"] { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main"; }
   .side {
     position: absolute;
     inset: 0 auto 0 0;
@@ -893,6 +1079,7 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
   .head__tools:empty { display: none; }
   .thread { padding: var(--sp-3); }
   .composer { padding: var(--sp-2) var(--sp-3) var(--sp-3); }
+  .strip { padding: var(--sp-2) var(--sp-3) 0; }
   .cards { padding: var(--sp-2) var(--sp-3) 0; }
   .card { padding: var(--sp-4); gap: var(--sp-4); }
   .msg--user { max-width: 100%; }

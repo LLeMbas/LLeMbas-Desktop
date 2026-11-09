@@ -42,6 +42,37 @@ pub fn binary() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(exe_name()))
 }
 
+/// How a person starts the CLI in a terminal on this computer: `lembas` where one is on PATH
+/// (installed by hand: it shares the app's sessions, the directories are the same), else the
+/// bundled one by its full path, quoted for a POSIX shell. The bundled copy is never on PATH.
+pub fn terminal_word() -> String {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    on_path(&path, exe_name()).map_or_else(
+        || shell_quote(&binary().to_string_lossy()),
+        |_| exe_name().to_string(),
+    )
+}
+
+fn on_path(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+/// A word for a POSIX shell: as it is when it is plainly safe, else in single quotes.
+pub fn shell_quote(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '/' | '.' | '-' | '_' | '+' | ':' | '@' | '%' | '=')
+        });
+    if plain {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
 fn home() -> PathBuf {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -177,6 +208,26 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn a_word_for_the_shell_is_quoted_only_when_it_must_be() {
+        assert_eq!(
+            shell_quote("/usr/lib/llembas-desktop/lembas"),
+            "/usr/lib/llembas-desktop/lembas"
+        );
+        assert_eq!(shell_quote("/home/a b/lembas"), "'/home/a b/lembas'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn the_cli_on_path_is_found_by_name() {
+        let d = scratch("path");
+        assert_eq!(on_path(d.as_os_str(), "lembas"), None);
+        fs::write(d.join("lembas"), b"").unwrap();
+        assert_eq!(on_path(d.as_os_str(), "lembas"), Some(d.join("lembas")));
+        fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

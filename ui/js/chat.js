@@ -11,9 +11,10 @@ import { api, get, getText, post, patch, del, follow, why, invoke, openLink } fr
 import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
-import { menu, ask } from "./popup.js"
+import { menu, ask, showLine } from "./popup.js"
 import { avatar, modelPicker, effortControl, agentsControl, teamPossible, levelsOf } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
+import { watchActivity, activityChanged, togglePanel, panelOpen, planList } from "./activity.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
@@ -369,7 +370,10 @@ class Live {
       this.status.textContent = t("The connection to the reply was lost: %(why)s", { why: why(err) })
       this.status.classList.add("is-error")
       this.el.append(h("button", { type: "button", class: "btn btn--sm", text: t("Read again"), onclick: reload }))
-    } else reload()
+    } else {
+      reload()
+      activityChanged()
+    }
   }
 }
 
@@ -493,16 +497,6 @@ function cardOf(chat, card) {
   return el
 }
 
-function planList(plan) {
-  return h(
-    "ol",
-    { class: "plan" },
-    (plan.phases || []).map((p) =>
-      h("li", null, h("span", { class: "plan__phase", text: p.title }), h("ul", null, (p.tasks || []).map((task) => h("li", { class: `plan__task is-${task.status}`, text: task.text })))),
-    ),
-  )
-}
-
 // --- Opening a chat --------------------------------------------------------------------------------
 
 function setTitle(title) {
@@ -526,13 +520,38 @@ function renderHead(chat) {
       MODES.map((m) => h("option", { value: m, text: modeName(m), selected: chat.mode === m })),
     )
     tools.append(mode)
+    if (chat.device_session_id) {
+      tools.append(
+        h(
+          "button",
+          { type: "button", class: "pane__btn", "aria-label": t("Continue in a terminal"), title: t("Continue in a terminal"), onclick: () => continueInTerminal(open?.chat || chat) },
+          icon(ICONS.terminal),
+        ),
+      )
+    }
   }
   const slot = h("span", { class: "head__model" })
   tools.append(slot)
   chatModels(chat).then((models) => {
     if (open?.chat?.id === chat.id) headModel(slot, chat, models)
   })
-  tools.append(h("button", { type: "button", class: "pane__btn", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)))
+  tools.append(
+    h(
+      "button",
+      {
+        type: "button",
+        class: "pane__btn",
+        id: "activity-open",
+        "aria-label": t("Activity"),
+        title: t("Activity"),
+        "aria-controls": "activity",
+        "aria-expanded": String(panelOpen()),
+        onclick: togglePanel,
+      },
+      icon(ICONS.bolt),
+    ),
+    h("button", { type: "button", class: "pane__btn", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)),
+  )
 }
 
 /** The models this chat may switch to (its data group's), or the account's when that fails. */
@@ -574,6 +593,7 @@ async function headModel(slot, chat, models) {
             if (open?.chat?.id === chat.id) {
               open.chat = r.chat
               headModel(slot, r.chat, models)
+              activityChanged()
             }
           } catch (err) {
             alertIn(why(err))
@@ -624,10 +644,39 @@ export function chatMenu(anchor, chat) {
   const base = ctx.status()?.server
   const mayDelete = ctx.me()?.permissions?.["chat.delete"] !== false
   const items = [{ label: t("Rename…"), run: () => renameChat(chat) }]
+  if (chat.kind === "agent" && chat.device_session_id) items.push({ label: t("Continue in a terminal…"), run: () => continueInTerminal(chat) })
   if (base) items.push({ label: t("Open in the web interface"), run: () => openLink(`${base}/chat/${encodeURIComponent(chat.id)}`) })
   items.push(null, { label: t("Archive chat"), run: () => archiveChat(chat) })
   if (mayDelete) items.push({ label: t("Delete chat"), danger: true, run: () => deleteChat(chat) })
   menu(anchor, items)
+}
+
+/**
+ * Continue an agent chat in a terminal: the CLI's own session on the device it works on
+ * (`device_session_id`), opened with `lembas -s <id>` in the chat's folder. Shown to copy rather
+ * than run: a terminal is not something every desktop opens the same way, and the command is the
+ * person's to run where they want it. On this computer the first word is the CLI as it is
+ * started here (`lembas` on PATH, else the app's own copy by its path).
+ */
+export async function continueInTerminal(chat) {
+  const session = String(chat.device_session_id || "")
+  if (!/^[A-Za-z0-9_-]+$/.test(session)) return
+  const here = onThisComputer(chat)
+  let word = "lembas"
+  if (here) word = await invoke("terminal_word").catch(() => "lembas")
+  const dir = chat.device?.directory || ""
+  const quoted = /^[A-Za-z0-9/._+:@%=-]+$/.test(dir) ? dir : `'${dir.replace(/'/g, "'\\''")}'`
+  const code = `${dir ? `cd ${quoted} && ` : ""}${word} -s ${session}`
+  await showLine({
+    title: t("Continue in a terminal"),
+    text: here
+      ? t("Run this in a terminal: the agent's session goes on there, in this chat's folder, and the chat keeps it.")
+      : t("Run this in a terminal on the computer this chat works on: the agent's session goes on there, and the chat keeps it."),
+    code,
+    copy: t("Copy"),
+    copied: t("Copied"),
+    close: t("Close"),
+  })
 }
 
 async function renameChat(chat) {
@@ -704,6 +753,7 @@ export async function openChat(id) {
   if (open?.chat?.id !== id) return
   open.chat = r.chat
   open.more = r.more
+  watchActivity(r.chat)
   renderHead(r.chat)
   clear(list)
   if (r.more) list.append(earlier())
@@ -751,6 +801,7 @@ function reload() {
 export function closeChat() {
   if (open?.live) open.live.stop()
   open = null
+  watchActivity(null)
   invoke("set_open_chat", { chat: null })
 }
 
@@ -869,6 +920,7 @@ async function createChat(text, attachments) {
   $("new-chat").hidden = true
   open = { chat: r.chat, live: null, more: false }
   invoke("set_open_chat", { chat: r.chat.id })
+  watchActivity(r.chat)
   renderHead(r.chat)
   clear($("messages"))
   if (r.message) $("messages").append(userMessage(r.message))
