@@ -1,6 +1,6 @@
-// The two explorers, kept apart: this computer's -- the agent's working directory, read through
-// a command that reaches only the agent's folders (src-tauri/src/files.rs) -- and the server's
-// tree, for the chats, read through /api/v2. A file opens in the viewer either way.
+// The two explorers of the Files page, kept apart as two tabs: this computer's -- the agent's
+// folders, read through a command that reaches only them (src-tauri/src/files.rs) -- and the
+// server's tree, for the chats, read through /api/v2. A file opens in the viewer either way.
 
 import { $, h, clear, icon, ICONS, bytes } from "./dom.js"
 import { invoke, get, why } from "./bridge.js"
@@ -84,7 +84,7 @@ function renderLocal() {
   if (!local.roots.length) {
     clear(box).append(
       h("p", { class: "pane__note", text: t("No project folder yet: the agent can open nothing on this computer.") }),
-      h("button", { type: "button", class: "btn btn--sm", text: t("Add folder…"), onclick: () => invoke("remote_add") }),
+      h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Add folder…"), onclick: () => invoke("remote_add") }),
     )
     return
   }
@@ -155,17 +155,26 @@ export async function openServerFile(path, name) {
   }
 }
 
-export function initExplorer() {
-  for (const pane of document.querySelectorAll(".pane")) {
-    const toggle = pane.querySelector(".pane__toggle")
-    toggle.prepend(h("span", { class: "tree__chevron" }, icon(ICONS.chevron)))
-    toggle.addEventListener("click", () => {
-      const open = pane.dataset.open !== "true"
-      pane.dataset.open = String(open)
-      toggle.setAttribute("aria-expanded", String(open))
-      $("side").dataset[pane.id === "pane-local" ? "local" : "server"] = String(open)
-    })
+let tab = "local"
+let serverRead = false
+
+/** Show one of the two trees: `local` (this computer) or `server`. The server's is read once. */
+export function showFilesTab(which) {
+  tab = which === "server" ? "server" : "local"
+  for (const b of $("files-tabs").querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.tab === tab))
+  $("pane-local").hidden = tab !== "local"
+  $("pane-server").hidden = tab !== "server"
+  if (tab === "server" && !serverRead) {
+    serverRead = true
+    renderServer()
   }
+}
+
+export function initExplorer() {
+  const tabBtn = (which, ico, label) =>
+    h("button", { type: "button", role: "tab", class: "tabs__tab", dataset: { tab: which }, "aria-selected": String(which === tab), onclick: () => showFilesTab(which) }, icon(ico), h("span", { text: label }))
+  $("files-tabs").replaceChildren(tabBtn("local", ICONS.folder, t("This computer")), tabBtn("server", ICONS.file, t("Server")))
+  $("server-where").textContent = t("Your files on the server, as the chats see them.")
   $("server-refresh").replaceChildren(icon(ICONS.refresh))
   $("server-refresh").addEventListener("click", renderServer)
   $("local-refresh").replaceChildren(icon(ICONS.refresh))

@@ -1,6 +1,7 @@
 // One chat: its transcript, the reply being written (followed as the server streams it), the
-// cards that wait for an answer, and the composer. And the form a new chat starts from -- an
-// agent chat on this computer, in one of the agent's folders, or a chat on the server.
+// cards that wait for an answer, and the composer with the chat's settings as chips under the
+// text (folder, mode, model, effort, agents). And a new chat, which is the same page empty: a
+// greeting, the choice of an agent chat on this computer or a chat on the server, and the composer.
 //
 // The transcript is the server's /api/v2 serialisation (tests/fixtures/api_v2 in the server's
 // repository is the contract): a person's message is their text as typed; a reply is its steps --
@@ -11,10 +12,12 @@ import { api, get, getText, post, patch, del, follow, why, invoke, openLink } fr
 import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
-import { menu, ask, showLine } from "./popup.js"
-import { avatar, modelPicker, effortControl, agentsControl, teamPossible, levelsOf } from "./models.js"
+import { menu, ask, showLine, popover, closePopover } from "./popup.js"
+import { avatar, agentsControl, teamPossible, levelsOf, levelWord, picture } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
-import { watchActivity, activityChanged, togglePanel, panelOpen, planList } from "./activity.js"
+import { watchActivity, activityChanged, planList } from "./activity.js"
+import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
+import { folderName } from "./list.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
@@ -50,18 +53,34 @@ function copyText(text) {
   navigator.clipboard?.writeText(text).catch(() => {})
 }
 
+/**
+ * A file a message carries, as a tile: a picture as its thumbnail (read through the bridge, as
+ * a `data:` URL), anything else as its icon, name and size.
+ */
+export function fileTile(a) {
+  const tile = h(
+    "li",
+    { class: `tile${a.image ? " tile--image" : ""}`, title: a.name },
+    h("span", { class: "tile__icon" }, icon(ICONS.file)),
+    h("span", { class: "tile__name" }, h("bdi", { text: a.name })),
+    h("span", { class: "tile__size", text: a.size ? bytes(a.size) : "" }),
+  )
+  if (a.image && a.id) {
+    picture(`/attachments/${a.id}`).then((url) => {
+      if (!url || !url.startsWith("data:image/")) return
+      tile.classList.add("has-thumb")
+      tile.prepend(h("img", { class: "tile__thumb", src: url, alt: "", draggable: "false" }))
+    })
+  }
+  return tile
+}
+
 function userMessage(m) {
   const el = h(
     "article",
     { class: `msg msg--user${m.queued ? " is-queued" : ""}${m.machine ? " is-machine" : ""}`, dataset: { id: m.id } },
-    h("div", { class: "msg__text", text: m.text || "" }),
-    m.attachments?.length
-      ? h(
-          "ul",
-          { class: "msg__files" },
-          m.attachments.map((a) => h("li", { class: "chip", title: a.name }, h("bdi", { text: a.name }), a.size ? ` · ${bytes(a.size)}` : "")),
-        )
-      : null,
+    m.attachments?.length ? h("ul", { class: "tiles msg__files" }, m.attachments.map(fileTile)) : null,
+    m.text ? h("div", { class: "msg__bubble" }, h("div", { class: "msg__text", text: m.text })) : null,
     m.queued ? h("p", { class: "msg__note", text: t("Waiting for the reply before it") }) : null,
   )
   // A background job's report is not the person's to rewrite (the server refuses it too).
@@ -168,7 +187,7 @@ function assistantMessage(m, chat) {
         // Only the last reply: CSS shows it there and nowhere else (app.css, .msg__regen).
         action(ICONS.refresh, t("Regenerate reply"), () => regenerate(m), "msg__regen"),
       ),
-      model ? h("span", { class: "chip chip--model", title: model.id }, avatar(model), h("span", { text: model.name })) : null,
+      model ? h("span", { class: "msg__model", title: model.id }, avatar(model), h("span", { text: model.name })) : null,
       meta,
     ),
   )
@@ -186,7 +205,7 @@ function step(s, chat) {
       return h(
         "details",
         { class: "step step--thinking", open: s.open || null },
-        h("summary", null, t("Thought"), s.label ? h("span", { class: "muted", text: ` ${s.label}` }) : null),
+        h("summary", { class: "step__row" }, h("span", { class: "step__icon" }, icon(ICONS.bulb)), h("span", { class: "step__label" }, t("Thought"), s.label ? h("span", { class: "step__meta", text: ` · ${s.label}` }) : null), h("span", { class: "step__chev" }, icon(ICONS.chevron))),
         h("div", { class: "step__pre", text: s.text || "" }),
       )
     case "text":
@@ -242,8 +261,10 @@ function toolCall(c, chat) {
     "summary",
     { class: "call__head" },
     h("span", { class: `dot${failed ? " is-error" : c.status === "running" ? " is-busy" : " is-ok"}`, "aria-hidden": "true" }),
-    h("span", { class: "call__title", title: block.title || c.name, text: block.title || c.name || "" }),
+    h("span", { class: "call__name", text: c.name || "" }),
+    h("span", { class: "call__title", title: block.title || c.name, text: block.title && block.title !== c.name ? block.title : "" }),
     h("span", { class: "call__chips" }, (block.chips || []).map((x) => h("span", { class: "chip", text: x }))),
+    h("span", { class: "step__chev" }, icon(ICONS.chevron)),
   )
   const el = h("details", { class: `call${failed ? " is-failed" : ""}` }, summary, body)
   if (isShow) {
@@ -377,6 +398,7 @@ class Live {
   }
 }
 
+/** While a reply is written, Stop takes Send's place (Send comes back beside it for a message typed meanwhile). */
 function setRunning(on) {
   $("send").hidden = on && !$("composer-text").value.trim()
   $("stop").hidden = !on
@@ -504,6 +526,7 @@ function setTitle(title) {
   $("chat-title").title = title || ""
 }
 
+/** The chat's header: its title, where it works (an agent chat's folder and device), and its tools. */
 function renderHead(chat) {
   setTitle(chat.title)
   const place = clear($("chat-place"))
@@ -511,47 +534,25 @@ function renderHead(chat) {
   if (chat.kind === "agent" && chat.device) {
     const here = onThisComputer(chat)
     place.append(
-      h("span", { class: `chip${here ? " chip--leaf" : ""}`, text: here ? t("This computer") : t("Another device") }),
-      h("span", { class: "head__dir", title: chat.device.directory }, h("bdi", { text: chat.device.directory })),
+      h(
+        "span",
+        { class: `place${here ? " is-here" : ""}`, title: chat.device.directory },
+        icon(ICONS.folder),
+        h("span", { class: "place__name", text: folderName(chat.device.directory) }),
+        h("span", { class: "place__where", text: here ? t("This computer") : t("Another device") }),
+      ),
     )
-    const mode = h(
-      "select",
-      { class: "head__mode", "aria-label": t("Mode"), onchange: (e) => patch(`/chats/${encodeURIComponent(chat.id)}`, { mode: e.target.value }).catch((err) => alertIn(why(err))) },
-      MODES.map((m) => h("option", { value: m, text: modeName(m), selected: chat.mode === m })),
-    )
-    tools.append(mode)
     if (chat.device_session_id) {
       tools.append(
         h(
           "button",
-          { type: "button", class: "pane__btn", "aria-label": t("Continue in a terminal"), title: t("Continue in a terminal"), onclick: () => continueInTerminal(open?.chat || chat) },
+          { type: "button", class: "tool", "aria-label": t("Continue in a terminal"), title: t("Continue in a terminal"), onclick: () => continueInTerminal(open?.chat || chat) },
           icon(ICONS.terminal),
         ),
       )
     }
   }
-  const slot = h("span", { class: "head__model" })
-  tools.append(slot)
-  chatModels(chat).then((models) => {
-    if (open?.chat?.id === chat.id) headModel(slot, chat, models)
-  })
-  tools.append(
-    h(
-      "button",
-      {
-        type: "button",
-        class: "pane__btn",
-        id: "activity-open",
-        "aria-label": t("Activity"),
-        title: t("Activity"),
-        "aria-controls": "activity",
-        "aria-expanded": String(panelOpen()),
-        onclick: togglePanel,
-      },
-      icon(ICONS.bolt),
-    ),
-    h("button", { type: "button", class: "pane__btn", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)),
-  )
+  tools.append(h("button", { type: "button", class: "tool", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)))
 }
 
 /** The models this chat may switch to (its data group's), or the account's when that fails. */
@@ -573,70 +574,189 @@ async function teamOffered(chat) {
   }
 }
 
-/**
- * The chat's model; how hard it thinks, drawn as the model offers it (nothing for one level, the
- * Thinking switch, or the selector); and the team's size where a team is offered.
- */
-async function headModel(slot, chat, models) {
+// --- The chips under the text -------------------------------------------------------------------
+//
+// A chat's settings are small buttons under what is being written, each opening a menu: the
+// folder and the mode (an agent chat), the model with its picture, how hard it thinks (as the
+// model offers it: nothing for one level), and the team's size (where a team is offered). For a
+// new chat they say what it will start with; for an open one, changing one changes the chat.
+
+/** One chip: an icon or a lead (an avatar), its words, and a chevron when it opens a menu. */
+function chip({ ico, lead, label, title, onclick, menuish = true, cls = "", disabled = false }) {
+  return h(
+    "button",
+    { type: "button", class: `cchip ${cls}`, title: title || label, "aria-haspopup": menuish ? "menu" : null, disabled, onclick },
+    lead || (ico ? icon(ico) : null),
+    h("span", { class: "cchip__label", text: label }),
+    menuish ? h("span", { class: "cchip__chev" }, icon(ICONS.chevronDown)) : null,
+  )
+}
+
+const MODE_WORDS = {
+  manual: () => t("Manual — asks first"),
+  edit: () => t("Edit — asks before commands"),
+  auto: () => t("Auto — asks nothing"),
+  plan: () => t("Plan — changes nothing"),
+}
+
+function modeChip(value, onChange, disabled) {
+  return chip({
+    ico: ICONS.shield,
+    label: modeName(value),
+    title: `${t("Mode")}: ${MODE_WORDS[value]?.() || value}`,
+    disabled,
+    onclick: (e) => menu(e.currentTarget, MODES.map((m) => ({ label: MODE_WORDS[m](), checked: m === value, run: () => m !== value && onChange(m) }))),
+  })
+}
+
+function modelChip(models, value, onChange, mayPick) {
+  const m = models.find((x) => x.id === value) || (value ? { id: value, name: value } : null)
+  if (!m) return chip({ ico: ICONS.info, label: t("No model is available to this account."), menuish: false, disabled: true })
+  return chip({
+    lead: avatar(m),
+    label: m.name,
+    title: `${t("Model")}: ${m.name} (${m.id})`,
+    menuish: mayPick && models.length > 1,
+    cls: "cchip--model",
+    onclick: (e) => {
+      if (!mayPick || models.length < 2) return
+      menu(e.currentTarget, models.map((x) => ({ label: x.name, lead: avatar(x), checked: x.id === value, run: () => x.id !== value && onChange(x.id) })))
+    },
+  })
+}
+
+/** How hard the model thinks: nothing where it has one level; else its levels, in a menu. */
+function effortChip(model, value, onChange) {
+  const { levels, start, control } = levelsOf(model)
+  if (control === "none") return null
+  const current = levels.includes(value) ? value : start
+  const words = (l) => (control === "switch" ? (l === "off" ? t("off") : t("Think before answering")) : levelWord(l))
+  return chip({
+    ico: ICONS.bulb,
+    label: control === "switch" ? (current === "off" ? t("off") : levelWord(current)) : levelWord(current),
+    title: `${t("Reasoning effort")}: ${levelWord(current)}`,
+    cls: current === "off" ? "is-dim" : "",
+    onclick: (e) => menu(e.currentTarget, levels.map((l) => ({ label: words(l), hint: control === "switch" && l !== "off" ? levelWord(l) : "", checked: l === current, run: () => l !== current && onChange(l) }))),
+  })
+}
+
+/** The team's size: a chip saying it, opening the two fields. `value` { min, max } or empty. */
+function agentsChip(value, onChange) {
+  const said = value?.min || value?.max ? `${value.min ?? "…"}–${value.max ?? "…"}` : t("default")
+  return chip({
+    ico: ICONS.users,
+    label: `${t("Agents")} ${said}`,
+    title: t("Its own agent included. Above one, it can add members that do the work while it leads them."),
+    onclick: (e) => {
+      const fields = agentsControl({ value, id: "agents-min" })
+      popover(
+        e.currentTarget,
+        h(
+          "div",
+          { class: "pop__body" },
+          h("label", { class: "pop__title", for: "agents-min", text: t("Agents") }),
+          fields,
+          h("p", { class: "hint", text: t("Its own agent included. Above one, it can add members that do the work while it leads them.") }),
+          h("div", { class: "pop__actions" }, h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Save"), onclick: () => (closePopover(), onChange(fields.value)) })),
+        ),
+        { up: true, label: t("Agents") },
+      )
+    },
+  })
+}
+
+/** The folder of a new agent chat: one of the agent's folders, or Add folder… where there is none. */
+function folderChip(roots, value, onChange) {
+  if (!roots.length) return chip({ ico: ICONS.folder, label: t("Add folder…"), menuish: false, cls: "is-warn", onclick: () => invoke("remote_add") })
+  return chip({
+    ico: ICONS.folder,
+    label: folderName(value),
+    title: `${t("Folder")}: ${value}`,
+    onclick: (e) =>
+      menu(e.currentTarget, [
+        ...roots.map((r) => ({ label: folderName(r), hint: r, checked: r === value, run: () => r !== value && onChange(r) })),
+        null,
+        { label: t("Add folder…"), run: () => invoke("remote_add") },
+      ]),
+  })
+}
+
+let chipsDrawn = 0 // which drawing is the latest: an older one's late answers are dropped
+
+/** The chips for what the composer is writing to: a new chat (`draft`) or the open chat. */
+async function renderChips() {
+  const box = $("composer-chips")
+  const drawing = ++chipsDrawn
   const mayPick = ctx.me()?.permissions?.["chat.model_select"] !== false
+  if (draft) {
+    const s = ctx.status()
+    const models = ctx.models()
+    const model = models.find((m) => m.id === draft.model)
+    const parts = []
+    if (draft.kind === "agent") {
+      const roots = s?.remote?.enabled ? s.remote.roots : []
+      if (!roots.includes(draft.dir)) draft.dir = roots[0] || ""
+      parts.push(folderChip(roots, draft.dir, (d) => ((draft.dir = d), renderChips())))
+      parts.push(modeChip(draft.mode, (m) => ((draft.mode = m), renderChips())))
+    }
+    parts.push(modelChip(models, draft.model, (id) => {
+      draft.model = id
+      draft.effort = levelsOf(models.find((m) => m.id === id)).start
+      renderChips()
+    }, mayPick))
+    if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), renderChips())))
+    if (draft.kind === "chat" && teamPossible(model)) parts.push(agentsChip(draft.agents, (a) => ((draft.agents = a), renderChips())))
+    box.replaceChildren(...parts.filter(Boolean))
+    return
+  }
+  const chat = open?.chat
+  if (!chat?.kind) return box.replaceChildren()
+  const save = async (body) => {
+    try {
+      const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, body)
+      if (open?.chat?.id === chat.id) {
+        open.chat = r.chat
+        renderChips()
+        if (body.model) activityChanged()
+      }
+      alertIn("")
+    } catch (err) {
+      alertIn(why(err))
+    }
+  }
+  const models = await chatModels(chat)
+  if (drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
   const current = models.find((m) => m.id === chat.model) || { id: chat.model, name: chat.model, efforts: [] }
   const parts = []
-  if (mayPick && models.length > 1) {
-    parts.push(
-      modelPicker({
-        models,
-        value: chat.model,
-        label: t("Model"),
-        onChange: async (id) => {
-          try {
-            const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, { model: id })
-            if (open?.chat?.id === chat.id) {
-              open.chat = r.chat
-              headModel(slot, r.chat, models)
-              activityChanged()
-            }
-          } catch (err) {
-            alertIn(why(err))
-            headModel(slot, chat, models)
-          }
-        },
-      }),
-    )
-  } else if (chat.model) {
-    parts.push(h("span", { class: "chip chip--model", title: current.id }, avatar(current), h("span", { text: current.name })))
+  if (chat.kind === "agent") parts.push(modeChip(chat.mode || "edit", (m) => save({ mode: m })))
+  if (chat.model) parts.push(modelChip(models, chat.model, (id) => save({ model: id }), mayPick))
+  parts.push(effortChip(current, chat.effort || levelsOf(current).start, (l) => save({ effort: l })))
+  box.replaceChildren(...parts.filter(Boolean))
+  if (!(await teamOffered(chat)) || drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
+  box.append(agentsChip(open.chat.agents || chat.agents, (a) => save({ agents: a })))
+}
+
+/**
+ * Above the composer, what stands in the way of an agent chat on this computer: not linked, the
+ * server refused the link, no folder. A new agent chat says it; an open one on this computer too.
+ */
+function renderNotice() {
+  const box = $("link-notice")
+  const s = ctx.status()
+  const wants = draft ? draft.kind === "agent" : open?.chat?.kind === "agent" && onThisComputer(open.chat)
+  const show = !!s && wants && !agentReady(s) && agentState(s).tone !== "busy"
+  box.hidden = !show
+  if (show) box.replaceChildren(agentBlock(s, { compact: !draft }))
+  else box.replaceChildren()
+}
+
+/** The app's status changed (the agent, its folders): what depends on it is drawn again. */
+export function statusChanged() {
+  renderNotice()
+  if (draft) {
+    renderChips()
+    renderHello()
   }
-  const level = effortControl({
-    model: current,
-    value: chat.effort || levelsOf(current).start,
-    compact: true,
-    onChange: async (value) => {
-      try {
-        const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, { effort: value })
-        if (open?.chat?.id === chat.id) open.chat = r.chat
-      } catch (err) {
-        alertIn(why(err))
-        level.value = open?.chat?.effort || levelsOf(current).start
-      }
-    },
-  })
-  if (level) parts.push(level)
-  slot.replaceChildren(...parts)
-  if (!(await teamOffered(chat)) || open?.chat?.id !== chat.id || !slot.isConnected) return
-  const team = agentsControl({
-    value: open.chat.agents || chat.agents,
-    compact: true,
-    onChange: async (wanted) => {
-      try {
-        const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, { agents: wanted })
-        if (open?.chat?.id === chat.id) open.chat = r.chat
-        alertIn("")
-      } catch (err) {
-        alertIn(why(err))
-        team.value = open?.chat?.agents || chat.agents
-      }
-    },
-  })
-  slot.append(team)
 }
 
 /** The chat's own menu, under its ⋯ button or a row of the sidebar: `chat` as the list has it. */
@@ -735,9 +855,14 @@ export async function openChat(id) {
   if (open?.chat?.id !== id) discard()
   if (open?.live) open.live.stop()
   open = { chat: { id }, live: null, more: false }
+  draft = null
+  closePopover()
   invoke("set_open_chat", { chat: id })
   showComposer(true)
   $("new-chat").hidden = true
+  $("main").dataset.new = "false"
+  clear($("composer-chips"))
+  renderNotice()
   const list = clear($("messages"))
   renderCards({ id }, [])
   alertIn("")
@@ -755,6 +880,8 @@ export async function openChat(id) {
   open.more = r.more
   watchActivity(r.chat)
   renderHead(r.chat)
+  renderChips()
+  renderNotice()
   clear(list)
   if (r.more) list.append(earlier())
   for (const m of r.messages) {
@@ -805,121 +932,119 @@ export function closeChat() {
   invoke("set_open_chat", { chat: null })
 }
 
+
 // --- A new chat ------------------------------------------------------------------------------------
 
-let draft = null // { kind, level (the effort control), agents (the team's size) }
+let draft = null // { kind, dir, mode, model, effort, agents } while a new chat is being written
+let lastKind = "agent"
 
-/** The form a new chat starts from: `agent` (on this computer) or `chat` (on the server). */
+/** The kind a new chat starts as: the last one chosen (an agent chat, at first). */
+export function draftKind() {
+  return draft?.kind || lastKind
+}
+
+/** The greeting of a new chat, and the choice of what it is. */
+function renderHello() {
+  const box = $("new-chat")
+  if (!draft) return
+  const me = ctx.me()
+  const first = String(me?.name || "").trim().split(/\s+/)[0]
+  const kind = draft.kind
+  const s = ctx.status()
+  const server = (() => {
+    try {
+      return new URL(s?.server || "").host
+    } catch {
+      return ""
+    }
+  })()
+  const tab = (k, ico, label) =>
+    h(
+      "button",
+      {
+        type: "button",
+        role: "tab",
+        class: "kind__tab",
+        "aria-selected": String(kind === k),
+        onclick: () => {
+          if (draft.kind === k) return
+          draft.kind = lastKind = k
+          renderHello()
+          renderChips()
+          renderNotice()
+          ctx.drafted?.(k)
+          $("composer-text").focus()
+        },
+      },
+      icon(ico),
+      h("span", { text: label }),
+    )
+  box.replaceChildren(
+    h("img", { class: "hello__mark", src: "logo-mark.svg", alt: "", width: "40", height: "40" }),
+    h("h2", { class: "hello__title", text: first ? t("Hello, %(name)s", { name: first }) : t("Hello") }),
+    h(
+      "p",
+      { class: "hello__sub" },
+      kind === "agent"
+        ? t("An agent chat works in a folder on this computer, through the agent built into this app.")
+        : t("A chat on %(server)s, with your account's models and files.", { server: server || t("Server") }),
+    ),
+    h("div", { class: "kind", role: "tablist", "aria-label": t("New chat") }, tab("agent", ICONS.terminal, t("Agent")), tab("chat", ICONS.chat, t("Chat"))),
+  )
+}
+
+/** A new chat in the main view: the page empty, the greeting, and the composer ready. */
 export function newChat(kind) {
   closeChat()
   discard()
-  draft = { kind }
+  closePopover()
+  const models = ctx.models()
+  const start = models.find((m) => m.default) || models[0]
+  lastKind = kind || lastKind
+  draft = { kind: lastKind, dir: "", mode: "edit", model: start?.id || "", effort: levelsOf(start).start, agents: null }
   clear($("messages"))
   renderCards({ id: "" }, [])
   alertIn("")
-  setTitle(kind === "agent" ? t("New agent chat") : t("New chat"))
+  setTitle(t("New chat"))
   clear($("chat-place"))
   clear($("chat-tools"))
-  const form = clear($("new-chat"))
-  form.hidden = false
-  const s = ctx.status()
-  const models = ctx.models()
-  const start = (models.find((m) => m.default) || models[0])?.id || ""
-  // How hard it thinks, and the team's size: drawn for the chosen model, again when it changes.
-  // Each slot is a field of its own (label, control, hint), so the row lines up whichever is shown.
-  const effortField = field(t("Reasoning effort"), h("span"), "")
-  const agentsField = field(t("Agents"), h("span"), t("Its own agent included. Above one, it can add members that do the work while it leads them."))
-  const showLevels = (id) => {
-    const model = models.find((m) => m.id === id)
-    const control = effortControl({ model, value: levelsOf(model).start, id: "new-effort" })
-    effortField.children[0].htmlFor = "new-effort"
-    effortField.children[1].replaceWith(control || h("span", { id: "new-effort" }))
-    effortField.hidden = !control
-    draft.level = control
-    const team = kind === "chat" && teamPossible(model)
-    draft.agents = team ? agentsControl({ value: null, id: "new-agents" }) : null
-    agentsField.children[1].replaceWith(draft.agents || h("span", { id: "new-agents" }))
-    agentsField.children[0].htmlFor = "new-agents"
-    agentsField.hidden = !team
-  }
-  const modelField = field(
-    t("Model"),
-    modelPicker({ id: "new-model", models, value: start, label: t("Model"), onChange: showLevels }),
-    models.length ? "" : t("No model is available to this account."),
-  )
-  showLevels(start)
-  if (kind === "agent") {
-    const roots = s.remote?.enabled ? s.remote.roots : []
-    const devices = ctx.thisDevices()
-    form.append(
-      h("p", { class: "muted", text: t("An agent chat works in a folder on this computer, through the agent built into this app.") }),
-    )
-    if (!devices.length) {
-      form.append(
-        h("p", { class: "new__warn", text: t("The agent is not connected to the server yet: start it, or link this computer, under Settings.") }),
-      )
-    }
-    form.append(
-      h(
-        "div",
-        { class: "fields" },
-        field(
-          t("Folder"),
-          h("select", { id: "new-dir" }, roots.map((r) => h("option", { value: r, text: r }))),
-          roots.length ? t("Only the agent's folders: Settings, Project folders.") : t("No folder yet: add one under Settings, Project folders."),
-        ),
-        field(
-          t("Mode"),
-          h(
-            "select",
-            { id: "new-mode" },
-            MODES.map((m) => h("option", { value: m, text: modeName(m), selected: m === "edit" })),
-          ),
-          t("A chat asking for more than the folder allows is lowered to it."),
-        ),
-        modelField,
-        effortField,
-      ),
-    )
-  } else {
-    form.append(h("div", { class: "fields" }, modelField, effortField, agentsField))
-  }
+  $("main").dataset.new = "true"
+  $("new-chat").hidden = false
+  renderHello()
+  renderChips()
+  renderNotice()
   showComposer(true)
   setRunning(false)
   invoke("set_open_chat", { chat: null })
   $("composer-text").focus()
 }
 
-/** A field: label, control, hint -- always all three, so a row of them lines up. */
-function field(label, control, hint) {
-  const id = control.id || `f${Math.random().toString(36).slice(2)}`
-  control.id = id
-  return h("div", { class: "field" }, h("label", { for: id, text: label }), control, h("p", { class: "hint", text: hint || "" }))
-}
-
 async function createChat(text, attachments) {
   const body = { text }
   if (attachments.length) body.attachments = attachments
-  const model = $("new-model")?.value
-  if (model) body.model = model
-  const effort = draft.level?.value
-  if (typeof effort === "string" && effort) body.effort = effort
-  const agents = draft.agents?.value
+  if (draft.model) body.model = draft.model
+  if (typeof draft.effort === "string" && draft.effort) body.effort = draft.effort
+  const agents = draft.agents
   if (agents && (agents.min || agents.max)) body.agents = agents
   if (draft.kind === "agent") {
     const device = ctx.thisDevices()[0]
-    const dir = $("new-dir")?.value
-    if (!device) throw { detail: t("The agent is not connected to the server yet: start it, or link this computer, under Settings.") }
-    if (!dir) throw { detail: t("No folder yet: add one under Settings, Project folders.") }
-    Object.assign(body, { kind: "agent", device, directory: dir, mode: $("new-mode")?.value || "edit" })
+    if (!device || !agentReady(ctx.status())) {
+      renderNotice()
+      throw { detail: agentState(ctx.status()).sentence }
+    }
+    if (!draft.dir) throw { detail: t("No folder yet: add one under Settings, Project folders.") }
+    Object.assign(body, { kind: "agent", device, directory: draft.dir, mode: draft.mode || "edit" })
   }
   const r = await post("/chats", body)
   draft = null
   $("new-chat").hidden = true
+  $("main").dataset.new = "false"
   open = { chat: r.chat, live: null, more: false }
   invoke("set_open_chat", { chat: r.chat.id })
   watchActivity(r.chat)
   renderHead(r.chat)
+  renderChips()
+  renderNotice()
   clear($("messages"))
   if (r.message) $("messages").append(userMessage(r.message))
   ctx.changed(r.chat)
@@ -973,6 +1098,8 @@ function grow() {
 
 export function initChat(context) {
   ctx = context
+  $("send").replaceChildren(icon(ICONS.send))
+  $("stop").replaceChildren(icon(ICONS.stop))
   $("composer").addEventListener("submit", (e) => {
     e.preventDefault()
     submit()
@@ -996,6 +1123,6 @@ export function initChat(context) {
       alertIn(why(err))
     }
   })
+  onAgentChange(renderNotice)
   showComposer(false)
 }
-

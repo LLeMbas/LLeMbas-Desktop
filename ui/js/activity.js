@@ -273,16 +273,26 @@ async function read(withContext) {
 
 function renderStrip() {
   const strip = $("activity-strip")
-  // While something runs, as the server's strip: a chat whose helpers all finished long ago does
-  // not carry "12 finished" above its message box for ever (the panel still lists them).
-  const text = chat && summary?.active ? summaryText(summary) : ""
-  strip.hidden = !text
-  if (!text) return clear(strip)
+  // A chip for every open chat: what runs, while something does, as the server's strip says it (a
+  // chat whose helpers all finished long ago does not carry "12 finished" for ever: the panel
+  // still lists them); else only the way into the panel.
+  strip.hidden = !chat
+  if (!chat) return clear(strip)
+  const active = summary?.active ? summaryText(summary) : ""
+  const text = active || t("Activity")
   strip.replaceChildren(
     h(
       "button",
-      { type: "button", class: "strip__btn", "aria-label": `${text} — ${t("Open the activity panel")}`, onclick: () => showPanel(true) },
-      h("span", { class: "dot is-busy", "aria-hidden": "true" }),
+      {
+        type: "button",
+        id: "activity-open",
+        class: `strip__btn${active ? " is-active" : ""}`,
+        "aria-label": `${text} — ${panelOpen() ? t("Close the activity panel") : t("Open the activity panel")}`,
+        "aria-controls": "activity",
+        "aria-expanded": String(panelOpen()),
+        onclick: togglePanel,
+      },
+      h("span", { class: "dot", "aria-hidden": "true" }),
       h("span", { class: "strip__text", text }),
       icon(ICONS.chevron),
     ),

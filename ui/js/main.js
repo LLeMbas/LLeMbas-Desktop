@@ -1,29 +1,35 @@
-// The app's page: which view (the setup card, or the app), and the app itself -- the sidebar
-// (agent chats by default, chats on the server, and the two explorers), the chat, the viewer and
-// the settings. Everything it knows comes from Rust: `status` (the app, the agent, the server) and
-// `api` (the server's /api/v2, as the signed-in account).
+// The app's page: which view (the setup card, or the app), and the app itself -- the sidebar (New
+// chat, search, Scheduled, Files, the chats, Settings), and in the main area one of: a chat (a new
+// one is the same page, empty), the files, the scheduled tasks, or the settings; the activity
+// panel and the viewer beside it. Everything it knows comes from Rust: `status` (the app, the
+// agent, the server) and `api` (the server's /api/v2, as the signed-in account).
 
-import { $, h, clear, icon, ICONS } from "./dom.js"
+import { $, h, icon, ICONS } from "./dom.js"
 import { invoke, listen, get, why } from "./bridge.js"
 import { renderBar, initBar } from "./titlebar.js"
 import { renderSetup, initSetup } from "./setup.js"
-import { renderSettings, initSettings } from "./settings.js"
+import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
-import { initExplorer, showLocal, renderServer } from "./explorer.js"
+import { initExplorer, showLocal, showFilesTab } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId, chatMenu } from "./chat.js"
+import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind } from "./chat.js"
 import { initAttach, allowAttach } from "./attach.js"
 import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
+import { initAgent, link } from "./agent.js"
+import { initScheduled, showScheduled, scheduledCommands } from "./scheduled.js"
+import { closePopover } from "./popup.js"
 
 let status = null
 let view = "" // "setup" | "app"
+let page = "chat" // "chat" | "files" | "scheduled" | "settings"
 let me = null
 let models = []
 let devices = [] // this account's linked devices
-let kind = "agent"
 let started = false
 let currentChat = null
+
+const SIDE_KEY = "lembas.side"
 
 const remembered = (() => {
   try {
@@ -76,8 +82,10 @@ function route() {
   }
   if (view === "setup") renderSetup(status)
   if (view === "app") {
-    if (!$("settings").hidden) renderSettings(status)
+    if (page === "settings") renderSettings(status)
     localPane()
+    statusChanged()
+    accountButton()
   }
 }
 
@@ -92,10 +100,11 @@ async function startApp() {
     $("thread-note").hidden = false
   }
   await Promise.all([loadModels(), loadDevices()])
-  $("new-chat-btn").hidden = me?.permissions && me.permissions["chat.create"] === false
+  $("new-chat-btn").disabled = me?.permissions && me.permissions["chat.create"] === false
   allowAttach(me?.permissions?.["files.upload"] !== false)
-  setKind(kind)
-  renderServer()
+  accountButton()
+  refreshList()
+  if (!openChatId()) startNew()
   invoke("remote_refresh")
 }
 
@@ -121,48 +130,71 @@ async function loadDevices() {
   }
 }
 
-// --- The sidebar --------------------------------------------------------------------------------
-
-function setKind(k) {
-  kind = k
-  for (const b of document.querySelectorAll(".switch button")) b.setAttribute("aria-selected", String(b.dataset.kind === k))
-  $("new-chat-btn").lastChild.textContent = k === "agent" ? t("New agent chat") : t("New chat")
-  clear($("chat-list"))
-  refreshList()
-  // With no chat open, the main view is where a chat of this kind starts.
-  if (!openChatId() && $("settings").hidden) {
-    currentChat = null
-    newChat(k)
-    localPane()
-  }
+/** The sidebar's foot: Settings, with the account it is signed in as. */
+function accountButton() {
+  const who = status?.account?.name || me?.name || status?.account?.email || ""
+  const initial = (who.trim()[0] || "?").toUpperCase()
+  $("settings-btn").replaceChildren(
+    h("span", { class: "navrow__avatar", "aria-hidden": "true", text: initial }),
+    h("span", { class: "navrow__two" }, h("span", { class: "navrow__label", text: t("Settings") }), who ? h("span", { class: "navrow__sub", text: who }) : null),
+    h("span", { class: "navrow__icon" }, icon(ICONS.gear)),
+  )
 }
 
-/** This computer's pane: the open agent chat's folder when it runs here, else a folder chosen. */
+// --- The pages ----------------------------------------------------------------------------------
+
+/** Show one page in the main area: the chat, the files, the scheduled tasks, or the settings. */
+function showPage(name) {
+  page = name
+  closePopover()
+  $("shell").dataset.view = name
+  $("main").hidden = name !== "chat"
+  $("page-files").hidden = name !== "files"
+  $("page-scheduled").hidden = name !== "scheduled"
+  $("settings").hidden = name !== "settings"
+  for (const b of document.querySelectorAll(".navrow[data-view]")) b.setAttribute("aria-current", String(b.dataset.view === name))
+  if (name !== "chat") showPanel(false)
+  if (narrow()) sideOpen(false)
+}
+
+/** This computer's tree: the open agent chat's folder when it runs here, else the one chosen. */
 function localPane(chat) {
   const roots = status?.remote?.enabled ? status.remote.roots : []
   const c = chat || currentChat
   const here = c?.device && thisDevices().includes(c.device.token_id)
-  if (here && c.device.directory) showLocal({ roots, root: c.device.directory, fixed: true })
-  else showLocal({ roots, root: "", fixed: false })
+  showLocal({ roots, root: here && roots.includes(c.device.directory) ? c.device.directory : "", fixed: false })
 }
 
-/** A new chat of `k`'s kind, in the main view. */
-function startNew(k) {
-  showSettings(false)
-  if (k !== kind) setKind(k)
+/** A new chat in the main view, of the kind chosen last (an agent chat, at first). */
+function startNew(kind) {
+  showPage("chat")
   currentChat = null
-  if (narrow()) sideOpen(false)
-  newChat(k)
+  newChat(kind || draftKind())
   markCurrent()
   localPane()
 }
 
-/** Open a chat, from the list or the palette: its kind's tab comes with it. */
-function showChat(id, k) {
-  showSettings(false)
-  if (k && k !== kind) setKind(k)
-  if (narrow()) sideOpen(false)
+/** Open a chat, from the list or the palette. */
+function showChat(id) {
+  showPage("chat")
   openChat(id).then(markCurrent)
+}
+
+function showSettings(on, section) {
+  if (!on) {
+    showPage("chat")
+    return
+  }
+  showPage("settings")
+  renderSettings(status)
+  invoke("remote_refresh")
+  if (section) scrollToSection(section)
+}
+
+function showFiles(which) {
+  showPage("files")
+  if (which) showFilesTab(which)
+  invoke("remote_refresh")
 }
 
 /** The palette's commands: what the menus and buttons do, by name. */
@@ -170,12 +202,15 @@ function commands() {
   const out = [
     { label: t("New agent chat"), run: () => startNew("agent") },
     { label: t("New chat"), run: () => startNew("chat") },
+    { label: t("Scheduled"), run: () => (showPage("scheduled"), showScheduled()) },
+    ...scheduledCommands(),
+    { label: t("Files"), run: () => showFiles() },
     { label: t("Settings"), run: () => showSettings(true) },
   ]
   if (openChatId()) out.push({ label: panelOpen() ? t("Close the activity panel") : t("Open the activity panel"), run: togglePanel })
   if (status?.linked) out.push({ label: status.agent_wanted ? t("Stop the agent") : t("Start the agent"), run: () => invoke("set_agent", { on: !status.agent_wanted }) })
   out.push(
-    { label: status?.linked ? t("Link again") : t("Link this computer"), run: () => invoke("link_computer").catch(() => showSettings(true)) },
+    { label: status?.linked ? t("Link again") : t("Link this computer"), run: link },
     { label: status?.update ? t("Install LLeMbas %(version)s…", { version: status.update }) : t("Check for updates…"), run: () => invoke("update_app") },
   )
   return out
@@ -185,37 +220,33 @@ function narrow() {
   return window.matchMedia("(max-width: 48rem)").matches
 }
 
+/** The sidebar: shown or folded away (remembered); a drawer over the page on a narrow window. */
 function sideOpen(on) {
   $("shell").dataset.side = String(on)
   $("side-toggle").setAttribute("aria-expanded", String(on))
-}
-
-// --- Settings -----------------------------------------------------------------------------------
-
-function showSettings(on) {
-  if (on) showPanel(false)
-  $("settings").hidden = !on
-  $("main").hidden = on
-  if (on) {
-    renderSettings(status)
-    invoke("remote_refresh")
-    $("settings-close").focus()
+  if (!narrow()) {
+    try {
+      localStorage.setItem(SIDE_KEY, on ? "open" : "closed")
+    } catch {}
   }
 }
 
 // --- Start --------------------------------------------------------------------------------------
 
 async function boot() {
-  initBar()
+  initAgent()
+  initBar({ status: () => status, openSettings: (section) => showSettings(true, section) })
   initViewer()
   initExplorer()
   initSetup(() => status)
   initSettings(() => status)
   initList({
-    kind: () => kind,
     thisDevices,
     current: () => openChatId(),
-    open: (id) => showChat(id),
+    open: (id) => {
+      if (narrow()) sideOpen(false)
+      showChat(id)
+    },
     menu: (anchor, c) => chatMenu(anchor, c),
   })
   initChat({
@@ -233,14 +264,15 @@ async function boot() {
     gone: (chat) => {
       if (!openChatId() || openChatId() === chat.id) {
         currentChat = null
-        newChat(kind)
+        newChat()
         localPane()
       }
       refreshList()
     },
   })
   initAttach({ chat: () => openChatId() || "", allowed: () => me?.permissions?.["files.upload"] !== false })
-  initPalette({ commands, open: (c) => showChat(c.id, c.kind === "agent" ? "agent" : "chat") })
+  initPalette({ commands, open: (c) => showChat(c.id) })
+  initScheduled({ status: () => status, models: () => models, me: () => me, openChat: (id) => showChat(id), show: () => showPage("scheduled") })
   onViewer((on) => {
     $("shell").dataset.viewer = String(on)
   })
@@ -250,33 +282,55 @@ async function boot() {
     },
   })
 
-  for (const b of document.querySelectorAll(".switch button")) b.addEventListener("click", () => setKind(b.dataset.kind))
   $("new-chat-btn").prepend(icon(ICONS.plus))
-  $("new-chat-btn").addEventListener("click", () => startNew(kind))
-  $("settings-btn").replaceChildren(icon(ICONS.gear), h("span", { text: t("Settings") }))
-  $("settings-btn").addEventListener("click", () => showSettings($("settings").hidden))
+  $("new-chat-btn").addEventListener("click", () => {
+    if (narrow()) sideOpen(false)
+    startNew()
+  })
+  $("nav-scheduled").querySelector(".navrow__icon").replaceChildren(icon(ICONS.clock))
+  $("nav-scheduled").addEventListener("click", () => {
+    showPage("scheduled")
+    showScheduled()
+  })
+  $("nav-files").querySelector(".navrow__icon").replaceChildren(icon(ICONS.folder))
+  $("nav-files").addEventListener("click", () => showFiles())
+  accountButton()
+  $("settings-btn").addEventListener("click", () => showSettings(page !== "settings"))
   $("settings-close").replaceChildren(icon(ICONS.close))
   $("settings-close").addEventListener("click", () => showSettings(false))
   $("side-toggle").addEventListener("click", () => sideOpen($("shell").dataset.side !== "true"))
   $("scrim").addEventListener("click", () => sideOpen(false))
+  // A wide window starts with the sidebar as it was left; a narrow one with it closed.
+  let saved = "open"
+  try {
+    saved = localStorage.getItem(SIDE_KEY) || "open"
+  } catch {}
+  sideOpen(!narrow() && saved !== "closed")
+  window.matchMedia("(max-width: 48rem)").addEventListener("change", (e) => {
+    if (e.matches) sideOpen(false)
+  })
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && $("shell").dataset.side === "true") sideOpen(false)
+    if (e.key === "Escape" && narrow() && $("shell").dataset.side === "true") sideOpen(false)
     if (view !== "app" || document.querySelector("dialog[open]")) return
     const mod = e.ctrlKey || e.metaKey
-    // Ctrl+K: the palette. Ctrl+N: a new chat of the tab's kind. Ctrl+,: the settings.
-    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+    const key = e.key.toLowerCase()
+    // Ctrl+K: the palette. Ctrl+N: a new chat. Ctrl+,: the settings. Ctrl+B: the sidebar.
+    if (mod && !e.shiftKey && !e.altKey && key === "k") {
       e.preventDefault()
       openPalette()
-    } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+    } else if (mod && !e.shiftKey && !e.altKey && key === "n") {
       e.preventDefault()
-      startNew(kind)
+      startNew()
     } else if (mod && e.key === ",") {
       e.preventDefault()
       showSettings(true)
+    } else if (mod && !e.shiftKey && !e.altKey && key === "b") {
+      e.preventDefault()
+      sideOpen($("shell").dataset.side !== "true")
     }
   })
 
-  invoke("set_words", { words: { reply: t("The reply is ready."), agent: t("The agent has finished.") } })
+  invoke("set_words", { words: { reply: t("The reply is ready."), agent: t("The agent has finished."), scheduled: t("A scheduled task has a result.") } })
   listen("status", (e) => {
     const before = status
     status = e.payload

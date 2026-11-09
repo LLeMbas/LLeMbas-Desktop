@@ -13,13 +13,13 @@
 <body>
 <div class="app">
   <header class="bar" data-tauri-drag-region>
-    <button class="bar__btn bar__side" id="side-toggle" type="button" aria-label="Chats" title="Chats" aria-expanded="false" aria-controls="side" data-i18n-aria-label data-i18n-title></button>
+    <button class="bar__btn" id="side-toggle" type="button" aria-label="Sidebar" title="Sidebar" aria-expanded="true" aria-controls="side" data-i18n-aria-label data-i18n-title></button>
     <img class="bar__leaf" src="logo-mark.svg" alt="" width="18" height="18" data-tauri-drag-region>
     <span class="bar__name" data-tauri-drag-region><b>LL</b>e<b>M</b>bas</span>
     <span class="bar__host" id="host" data-tauri-drag-region></span>
     <button class="bar__update" id="update" type="button" hidden>update</button>
-    <button class="bar__agent" id="agent" type="button" title="Agent">
-      <span class="dot" aria-hidden="true"></span><span id="agent-text">agent off</span>
+    <button class="bar__agent" id="agent" type="button" aria-haspopup="dialog" aria-expanded="false">
+      <span class="dot" aria-hidden="true"></span><span class="bar__agent-text" id="agent-text">agent off</span>
     </button>
     <button class="bar__btn" id="menu" type="button" aria-label="Menu" title="Menu" data-i18n-aria-label data-i18n-title></button>
     <span class="bar__sep" aria-hidden="true"></span>
@@ -41,79 +41,105 @@
     </main>
   </div>
 
-  <div class="shell" id="shell" hidden data-side="false" data-viewer="false">
-    <nav class="side" id="side" aria-label="Chats" data-i18n-aria-label data-local="true" data-server="false">
-      <div class="switch" role="tablist">
-        <button type="button" role="tab" data-kind="agent" aria-selected="true" data-i18n>Agent</button>
-        <button type="button" role="tab" data-kind="chat" aria-selected="false" data-i18n>Chats</button>
+  <div class="shell" id="shell" hidden data-side="true" data-viewer="false" data-view="chat">
+    <nav class="side" id="side" aria-label="Chats" data-i18n-aria-label>
+      <div class="side__top">
+        <button type="button" class="side__new" id="new-chat-btn"><span class="side__new-label" data-i18n>New chat</span><kbd class="kbd">Ctrl N</kbd></button>
+        <label class="search">
+          <span class="search__icon" id="side-search-icon"></span>
+          <input type="search" id="side-search" placeholder="Search chats" aria-label="Search chats" autocomplete="off" spellcheck="false" data-i18n-placeholder data-i18n-aria-label>
+        </label>
       </div>
-      <button type="button" class="btn btn--primary side__new" id="new-chat-btn"><span data-i18n>New agent chat</span></button>
-      <ul class="list" id="chat-list"></ul>
-
-      <section class="pane" id="pane-local" data-open="true" aria-labelledby="pane-local-h">
-        <div class="pane__head">
-          <button type="button" class="pane__toggle" aria-expanded="true" id="pane-local-h"><span data-i18n>This computer</span></button>
-          <button type="button" class="pane__btn" id="local-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button>
-        </div>
-        <div class="pane__body">
-          <div class="pane__where" id="local-where"></div>
-          <div class="pane__tree" id="local-tree"></div>
-        </div>
-      </section>
-
-      <section class="pane" id="pane-server" data-open="false" aria-labelledby="pane-server-h">
-        <div class="pane__head">
-          <button type="button" class="pane__toggle" aria-expanded="false" id="pane-server-h"><span data-i18n>Server files</span></button>
-          <button type="button" class="pane__btn" id="server-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button>
-        </div>
-        <div class="pane__body">
-          <div class="pane__tree" id="server-tree"></div>
-        </div>
-      </section>
-
-      <button type="button" class="side__settings" id="settings-btn"></button>
+      <div class="side__nav">
+        <button type="button" class="navrow" id="nav-scheduled" data-view="scheduled"><span class="navrow__icon"></span><span data-i18n>Scheduled</span></button>
+        <button type="button" class="navrow" id="nav-files" data-view="files"><span class="navrow__icon"></span><span data-i18n>Files</span></button>
+      </div>
+      <ul class="list" id="chat-list" aria-label="Chats" data-i18n-aria-label></ul>
+      <div class="side__foot">
+        <button type="button" class="navrow navrow--account" id="settings-btn" data-view="settings"></button>
+      </div>
     </nav>
     <div class="scrim" id="scrim" aria-hidden="true"></div>
 
-    <main class="main" id="main" aria-labelledby="chat-title">
+    <main class="main" id="main" aria-labelledby="chat-title" data-new="false">
       <header class="head">
         <h1 class="head__title" id="chat-title"></h1>
         <div class="head__place" id="chat-place"></div>
         <div class="head__tools" id="chat-tools"></div>
       </header>
       <div class="thread" id="thread">
-        <p class="thread__note is-error" id="thread-note" hidden></p>
-        <div class="new" id="new-chat" hidden></div>
+        <div class="hello" id="new-chat" hidden></div>
         <div class="messages" id="messages"></div>
       </div>
-      <div class="cards" id="cards" hidden></div>
-      <div class="strip" id="activity-strip" hidden aria-live="polite"></div>
-      <form class="composer" id="composer" hidden data-running="false" data-drag="false">
-        <ul class="composer__files" id="composer-files" hidden></ul>
-        <button type="button" class="btn composer__attach" id="attach" aria-label="Attach files" title="Attach files" data-i18n-aria-label data-i18n-title></button>
-        <textarea id="composer-text" rows="1" placeholder="Message" aria-label="Message" data-i18n-placeholder data-i18n-aria-label></textarea>
-        <p class="composer__drop" aria-hidden="true" data-i18n>Drop the files to attach them</p>
-        <div class="composer__actions">
-          <button type="button" class="btn" id="stop" hidden data-i18n>Stop</button>
-          <button type="submit" class="btn btn--primary" id="send" data-i18n>Send</button>
-        </div>
-      </form>
+      <div class="dock" id="dock">
+        <p class="thread__note is-error" id="thread-note" hidden></p>
+        <div class="cards" id="cards" hidden></div>
+        <div class="notice" id="link-notice" hidden></div>
+        <div class="strip" id="activity-strip" hidden aria-live="polite"></div>
+        <form class="composer" id="composer" hidden data-running="false" data-drag="false">
+          <ul class="composer__files" id="composer-files" hidden></ul>
+          <textarea id="composer-text" rows="1" placeholder="Message" aria-label="Message" data-i18n-placeholder data-i18n-aria-label></textarea>
+          <div class="composer__bar">
+            <button type="button" class="tool composer__attach" id="attach" aria-label="Attach files" title="Attach files" data-i18n-aria-label data-i18n-title></button>
+            <div class="composer__chips" id="composer-chips"></div>
+            <button type="button" class="round round--stop" id="stop" hidden aria-label="Stop" title="Stop" data-i18n-aria-label data-i18n-title></button>
+            <button type="submit" class="round" id="send" aria-label="Send" title="Send" data-i18n-aria-label data-i18n-title></button>
+          </div>
+          <p class="composer__drop" aria-hidden="true" data-i18n>Drop the files to attach them</p>
+        </form>
+      </div>
     </main>
 
-    <section class="settings" id="settings" hidden aria-labelledby="settings-title">
+    <section class="page" id="page-files" hidden aria-labelledby="files-title">
+      <header class="head">
+        <h1 class="head__title" id="files-title" data-i18n>Files</h1>
+        <div class="head__place"></div>
+        <div class="head__tools"><div class="tabs" role="tablist" id="files-tabs"></div></div>
+      </header>
+      <div class="page__body files">
+        <section class="files__pane" id="pane-local" aria-label="This computer" data-i18n-aria-label>
+          <div class="files__head">
+            <div class="files__where" id="local-where"></div>
+            <button type="button" class="tool" id="local-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button>
+          </div>
+          <div class="files__tree" id="local-tree"></div>
+        </section>
+        <section class="files__pane" id="pane-server" hidden aria-label="Server" data-i18n-aria-label>
+          <div class="files__head">
+            <div class="files__where muted" id="server-where"></div>
+            <button type="button" class="tool" id="server-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button>
+          </div>
+          <div class="files__tree" id="server-tree"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="page" id="page-scheduled" hidden aria-labelledby="scheduled-title">
+      <header class="head">
+        <h1 class="head__title" id="scheduled-title" data-i18n>Scheduled</h1>
+        <div class="head__place" id="scheduled-place"></div>
+        <div class="head__tools" id="scheduled-tools"></div>
+      </header>
+      <div class="page__body" id="scheduled-body"></div>
+    </section>
+
+    <section class="page settings" id="settings" hidden aria-labelledby="settings-title">
       <header class="head">
         <h1 class="head__title" id="settings-title" data-i18n>Settings</h1>
         <div class="head__place"></div>
-        <div class="head__tools"><button type="button" class="pane__btn" id="settings-close" aria-label="Close" title="Close" data-i18n-aria-label data-i18n-title></button></div>
+        <div class="head__tools"><button type="button" class="tool" id="settings-close" aria-label="Close" title="Close" data-i18n-aria-label data-i18n-title></button></div>
       </header>
-      <div class="settings__body" id="settings-body"></div>
+      <div class="settings__layout">
+        <nav class="settings__nav" id="settings-nav" aria-label="Settings" data-i18n-aria-label></nav>
+        <div class="settings__body" id="settings-body"></div>
+      </div>
     </section>
 
     <aside class="activity" id="activity" hidden aria-labelledby="activity-title">
       <header class="viewer__head activity__head">
-        <button type="button" class="pane__btn" id="activity-back" hidden aria-label="Back" title="Back" data-i18n-aria-label data-i18n-title></button>
+        <button type="button" class="tool" id="activity-back" hidden aria-label="Back" title="Back" data-i18n-aria-label data-i18n-title></button>
         <h2 class="viewer__name" id="activity-title"></h2>
-        <button type="button" class="pane__btn" id="activity-close" aria-label="Close the activity panel" title="Close the activity panel" data-i18n-aria-label data-i18n-title></button>
+        <button type="button" class="tool" id="activity-close" aria-label="Close the activity panel" title="Close the activity panel" data-i18n-aria-label data-i18n-title></button>
       </header>
       <div class="activity__body" id="activity-body"></div>
     </aside>
@@ -125,7 +151,7 @@
           <p class="viewer__where" id="viewer-where"></p>
         </div>
         <div class="viewer__modes" id="viewer-modes"></div>
-        <button type="button" class="pane__btn" id="viewer-close" aria-label="Close" title="Close" data-i18n-aria-label data-i18n-title></button>
+        <button type="button" class="tool" id="viewer-close" aria-label="Close" title="Close" data-i18n-aria-label data-i18n-title></button>
       </header>
       <div class="viewer__body" id="viewer-body"></div>
     </aside>

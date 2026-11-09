@@ -14,7 +14,7 @@ import { menu } from "./popup.js"
 // so a missing picture is not asked for again with every redraw).
 const pictures = new Map()
 
-function picture(path) {
+export function picture(path) {
   if (!pictures.has(path)) pictures.set(path, invoke("model_image", { path }).catch(() => null))
   return pictures.get(path)
 }

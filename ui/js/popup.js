@@ -21,11 +21,12 @@ function outside(e) {
 }
 
 /**
- * A menu of `items` ({ label, run, lead?, checked?, danger?, disabled? }, or null for a separator), under
+ * A menu of `items` ({ label, hint?, run, lead?, checked?, danger?, disabled? }, or null for a separator), under
  * `anchor` (an element) or at `{ x, y }` (page pixels). Arrow keys move, Enter chooses.
  */
 export function menu(anchor, items) {
   closeMenu()
+  closePopover()
   const plain = !items.some((i) => i?.lead)
   const el = h("div", { class: `menu${plain ? " menu--plain" : ""}`, role: "menu" })
   for (const item of items) {
@@ -50,7 +51,9 @@ export function menu(anchor, items) {
           },
         },
         h("span", { class: "menu__lead" }, item.lead || null),
-        h("span", { class: "menu__label", text: item.label }),
+        item.hint
+          ? h("span", { class: "menu__label menu__label--two" }, h("span", { text: item.label }), h("span", { class: "menu__hint", text: item.hint }))
+          : h("span", { class: "menu__label", text: item.label }),
         h("span", { class: "menu__check", "aria-hidden": "true", text: item.checked ? "✓" : "" }),
       ),
     )
@@ -76,7 +79,9 @@ export function menu(anchor, items) {
   // Its width as measured at the left edge, kept: moved right, it would shrink to fit instead.
   el.style.width = `${Math.ceil(r.width)}px`
   el.style.left = `${Math.max(0, Math.min(at.left, window.innerWidth - r.width))}px`
-  el.style.top = `${Math.max(0, Math.min(at.bottom, window.innerHeight - r.height))}px`
+  // Below the anchor where it fits, else above it (a chip under the message box opens upwards).
+  const above = at.top !== undefined && at.bottom + r.height > window.innerHeight && at.top - r.height >= 0
+  el.style.top = above ? `${at.top - r.height}px` : `${Math.max(0, Math.min(at.bottom, window.innerHeight - r.height))}px`
   openMenu = { el, back: anchor instanceof Element ? anchor : document.activeElement }
   document.addEventListener("pointerdown", outside, true)
   el.querySelector(".menu__item:not(:disabled)")?.focus()
@@ -165,4 +170,69 @@ export function showLine({ title, text, code, copy, copied, close }) {
     dlg.showModal()
     copyBtn.focus()
   })
+}
+
+let openPop = null
+
+/** Close the popover that is open, if any. */
+export function closePopover() {
+  if (!openPop) return
+  const { el, back, onClose } = openPop
+  openPop = null
+  el.remove()
+  document.removeEventListener("pointerdown", outsidePop, true)
+  document.removeEventListener("keydown", escPop, true)
+  onClose?.()
+  back?.focus?.()
+}
+
+function outsidePop(e) {
+  if (openPop && !openPop.el.contains(e.target) && !openPop.back?.contains?.(e.target)) closePopover()
+}
+
+function escPop(e) {
+  if (e.key === "Escape" && openPop) {
+    e.preventDefault()
+    e.stopPropagation()
+    closePopover()
+  }
+}
+
+/**
+ * A small panel under `anchor` (or above it, `up`), holding `content` (an element, or a function
+ * that draws it and is called again by `redraw`). Escape and a click outside close it. Returns
+ * { redraw, close }. `align`: "start" (the anchor's left edge) or "end" (its right edge).
+ */
+export function popover(anchor, content, { up = false, align = "start", label = "", onClose } = {}) {
+  closePopover()
+  closeMenu()
+  const el = h("div", { class: "pop", role: "dialog", "aria-label": label || null })
+  const draw = () => el.replaceChildren(typeof content === "function" ? content() : content)
+  draw()
+  document.body.append(el)
+  const place = () => {
+    const at = anchor.getBoundingClientRect()
+    const r = el.getBoundingClientRect()
+    const left = align === "end" ? at.right - r.width : at.left
+    el.style.left = `${Math.max(8, Math.min(left, window.innerWidth - r.width - 8))}px`
+    const top = up ? at.top - r.height - 6 : at.bottom + 6
+    el.style.top = `${Math.max(8, Math.min(top, window.innerHeight - r.height - 8))}px`
+  }
+  place()
+  openPop = { el, back: anchor, onClose }
+  document.addEventListener("pointerdown", outsidePop, true)
+  document.addEventListener("keydown", escPop, true)
+  el.querySelector("button, input, select")?.focus()
+  return {
+    redraw() {
+      if (openPop?.el !== el) return
+      draw()
+      place()
+    },
+    close: closePopover,
+  }
+}
+
+export function popoverOpen() {
+  return !!openPop
 }

@@ -6,8 +6,9 @@
 
 import { $, h, clear, icon, ICONS, bytes } from "./dom.js"
 import { invoke, listen, del, why } from "./bridge.js"
+import { picture } from "./models.js"
 
-let pending = [] // { key, name, size, state: "sending" | "ready" | "failed", id?, error? }
+let pending = [] // { key, name, size, state: "sending" | "ready" | "failed", id?, error?, thumb? }
 let seq = 0
 let ctx = null // { chat(): the open chat's id, or "" for one not made yet; allowed(): bool }
 
@@ -45,15 +46,21 @@ function remove(p) {
   render()
 }
 
-/** One file as the composer shows it: the same three tracks for every row. */
+/**
+ * One file as the composer shows it: a tile -- a picture's thumbnail (a pasted one from its own
+ * bytes, a sent one through the bridge), or the file's icon -- its name, its size or state, and
+ * a button to take it off. The same tracks on every tile.
+ */
 function row(p) {
   const status =
     p.state === "sending" ? t("Sending…") : p.state === "failed" ? p.error || "" : p.size ? bytes(p.size) : ""
-  return h(
+  const tile = h(
     "li",
-    { class: `file is-${p.state}`, title: p.state === "failed" ? `${p.name}: ${p.error || ""}` : p.name },
-    h("span", { class: "file__name" }, h("bdi", { text: p.name })),
-    h("span", { class: "file__state", text: status }),
+    { class: `tile file is-${p.state}${p.thumb ? " has-thumb" : ""}`, title: p.state === "failed" ? `${p.name}: ${p.error || ""}` : p.name },
+    p.thumb ? h("img", { class: "tile__thumb", src: p.thumb, alt: "", draggable: "false" }) : null,
+    h("span", { class: "tile__icon" }, icon(ICONS.file)),
+    h("span", { class: "tile__name" }, h("bdi", { text: p.name })),
+    h("span", { class: "tile__size", text: status }),
     h(
       "button",
       {
@@ -67,10 +74,12 @@ function row(p) {
       icon(ICONS.close),
     ),
   )
+  return tile
 }
 
 function render() {
   const list = clear($("composer-files"))
+  list.className = "tiles composer__files"
   list.hidden = !pending.length
   for (const p of pending) list.append(row(p))
 }
@@ -90,11 +99,31 @@ async function track(names, call) {
   for (const r of results || []) {
     pending.push(
       r.attachment
-        ? { key: ++seq, name: r.attachment.name || r.name, size: r.attachment.size || r.size, state: "ready", id: r.attachment.id }
+        ? { key: ++seq, name: r.attachment.name || r.name, size: r.attachment.size || r.size, state: "ready", id: r.attachment.id, image: !!r.attachment.image, thumb: r.thumb }
         : { key: ++seq, name: r.name, size: r.size, state: "failed", error: (REASONS[r.reason] || (() => r.error))() },
     )
   }
   render()
+  // A sent picture with no thumbnail of its own yet: the server's copy, through the bridge.
+  for (const p of pending) {
+    if (p.state !== "ready" || !p.image || p.thumb) continue
+    picture(`/attachments/${p.id}`).then((url) => {
+      if (!url || !url.startsWith("data:image/") || !pending.includes(p)) return
+      p.thumb = url
+      render()
+    })
+  }
+}
+
+/** A pasted picture's own bytes as a `data:` URL: the page's policy allows images from there. */
+function dataUrl(file) {
+  return new Promise((resolve) => {
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) return resolve(undefined)
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : undefined)
+    reader.onerror = () => resolve(undefined)
+    reader.readAsDataURL(file)
+  })
 }
 
 /** Choose files in the system's dialog. */
@@ -118,7 +147,7 @@ async function paste(e) {
     track([name], async () => {
       const data = new Uint8Array(await f.arrayBuffer())
       const attachment = await invoke("attach_bytes", data, { headers: { "x-name": encodeURIComponent(name), "x-chat": ctx.chat() || "" } })
-      return [{ name, size: f.size, attachment }]
+      return [{ name, size: f.size, attachment, thumb: await dataUrl(f) }]
     })
   }
 }
