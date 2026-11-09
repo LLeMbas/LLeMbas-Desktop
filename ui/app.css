@@ -1322,7 +1322,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 
 /* Scheduled: the list. One row per task on fixed tracks -- icon, title over its rule, the next
    run, the last run's status, and the pause switch outside the row's button. */
-.tasks-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.tasks-list { list-style: none; margin: 0 auto; padding: 0; display: grid; gap: var(--sp-2); }
 .task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
 .task:hover { border-color: var(--border-strong); }
 .task.is-paused .task__title, .task.is-paused .task__icon { color: var(--ink-faint); }

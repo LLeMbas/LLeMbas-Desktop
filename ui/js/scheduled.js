@@ -160,7 +160,12 @@ function taskRow(task) {
       { type: "button", class: "task__open", onclick: () => go({ name: "task", id: task.id }) },
       h("span", { class: "task__icon" }, icon(ICONS.clock)),
       h("span", { class: "task__what" }, h("span", { class: "task__title", text: task.title || task.request || "" }), h("span", { class: "task__rule", text: task.summary || "" })),
-      h("span", { class: "task__next" }, h("span", { class: "task__label", text: t("Next run") }), h("span", { class: "task__value", text: nextWords(task) })),
+      h(
+        "span",
+        { class: "task__next", title: task.enabled && task.next_run_at ? stamp(task.next_run_at) : "" },
+        h("span", { class: "task__label", text: t("Next run") }),
+        h("span", { class: "task__value", text: task.enabled && task.next_run_at ? when(task.next_run_at) : nextWords(task) }),
+      ),
       h("span", { class: "task__last" }, statusChip(task.last_run)),
     ),
     h("label", { class: "toggle task__toggle" }, toggle),
