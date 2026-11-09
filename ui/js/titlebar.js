@@ -9,10 +9,33 @@ const WORDS = {
   off: () => t("agent off"),
   not_linked: () => t("not linked"),
   starting: () => t("agent starting…"),
+  connecting: () => t("agent connecting…"),
   running: () => t("agent running"),
+  waiting: () => t("agent waiting"),
+  refused: () => t("agent refused"),
   elsewhere: () => t("agent running (service)"),
+  elsewhere_waiting: () => t("agent waiting"),
   failed: () => t("agent stopped"),
   no_folders: () => t("agent: no folders"),
+}
+
+/**
+ * The pill's state: what the CLI says of its link, not whether a process runs. Linked but allowed
+ * into no folder is said too -- a green light would say it works when it cannot.
+ */
+export function pillState(s) {
+  const a = s.agent
+  const noFolders = s.remote && !(s.remote.enabled && s.remote.roots.length)
+  const linked = a.state === "running" || (a.state === "elsewhere" && a.detail?.linked)
+  if (linked && noFolders) return "no_folders"
+  if (a.state === "elsewhere" && !a.detail?.linked) return "elsewhere_waiting"
+  return a.state
+}
+
+/** Why the agent is not working, in the CLI's words, when it said. */
+export function agentWhy(a) {
+  if (a.state === "elsewhere") return a.detail?.why || ""
+  return typeof a.detail === "string" ? a.detail : ""
 }
 
 export function renderBar(s) {
@@ -22,12 +45,11 @@ export function renderBar(s) {
   } catch {}
   $("host").textContent = host
   $("host").title = s.server || ""
-  // Connected but allowed into no folder: a green light would say it works when it cannot.
-  const noFolders = s.remote && !(s.remote.enabled && s.remote.roots.length)
-  const state = s.agent.state === "running" && noFolders ? "no_folders" : s.agent.state
+  const state = pillState(s)
+  const reason = agentWhy(s.agent)
   $("agent").dataset.state = state
   $("agent-text").textContent = WORDS[state] ? WORDS[state]() : state
-  $("agent").title = state === "failed" ? t("Agent stopped: %(why)s", { why: s.agent.detail }) : t("Agent")
+  $("agent").title = reason ? t("Agent: %(why)s", { why: reason }) : t("Agent")
   $("update").hidden = !s.update
   $("update").textContent = s.update ? t("update %(version)s", { version: s.update }) : t("update")
   $("update").title = s.update ? t("LLeMbas %(version)s is available (this is %(current)s)", { version: s.update, current: s.version }) : ""

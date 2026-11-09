@@ -9,8 +9,10 @@ const AGENT = {
   off: () => [t("The agent is off."), ""],
   not_linked: () => [t("This computer is not linked to the server yet."), ""],
   starting: () => [t("The agent is starting…"), ""],
+  connecting: () => [t("The agent is connecting to the server…"), ""],
   running: () => [t("The agent is running: agent chats can use this computer."), "is-ok"],
-  elsewhere: (pid) => [t("A LLeMbas CLI service already runs here (pid %(pid)s); it is this computer's agent.", { pid }), "is-ok"],
+  waiting: (why) => [t("The agent is not connected: %(why)s. It keeps trying.", { why }), "is-error"],
+  refused: (why) => [t("The agent will not connect: %(why)s. Link this computer again.", { why }), "is-error"],
   failed: (why) => [t("The agent stopped: %(why)s. Trying again shortly.", { why }), "is-error"],
 }
 
@@ -18,10 +20,18 @@ let folderError = ""
 let linking = null // { user_code, uri } while the computer is being linked
 let linkError = ""
 
+/** The agent's state in a sentence, and its class: the CLI's word for its link. */
 export function agentWords(s) {
+  const a = s.agent
   const noFolders = s.remote && !(s.remote.enabled && s.remote.roots.length)
-  if (s.agent.state === "running" && noFolders) return [t("The agent is connected, but may open no folder yet: add one below."), "is-error"]
-  return (AGENT[s.agent.state] ?? AGENT.off)(s.agent.detail)
+  if (a.state === "elsewhere") {
+    const pid = a.detail?.pid
+    if (!a.detail?.linked) return [t("A LLeMbas CLI service already runs here (pid %(pid)s), but is not connected: %(why)s", { pid, why: a.detail?.why || "…" }), "is-error"]
+    if (noFolders) return [t("The agent is connected, but may open no folder yet: add one below."), "is-error"]
+    return [t("A LLeMbas CLI service already runs here (pid %(pid)s); it is this computer's agent.", { pid }), "is-ok"]
+  }
+  if (a.state === "running" && noFolders) return [t("The agent is connected, but may open no folder yet: add one below."), "is-error"]
+  return (AGENT[a.state] ?? AGENT.off)(a.detail || "…")
 }
 
 function section(id, title, ...body) {

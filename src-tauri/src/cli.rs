@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use serde::Deserialize;
+
 static BUNDLED: OnceLock<PathBuf> = OnceLock::new();
 
 /// Where the bundle put the CLI: the app's resource directory (`/usr/lib/llembas-desktop/` from
@@ -108,6 +110,32 @@ fn running_in(state: &Path) -> Option<u32> {
     (pid != 0 && alive(pid)).then_some(pid)
 }
 
+/// What a running `lembas service run` says of its link to the server, as it writes it to
+/// `service.json` in its state directory at every change: `connecting`, `linked`, `waiting`
+/// (not linked now, trying again; `detail` says why) or `stopped` (it will not try again;
+/// `detail` says why -- the server refused the token, or speaks another protocol). `pid` is the
+/// process that wrote it: a file left by an earlier run is not this one's word.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Link {
+    pub state: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
+    pub pid: u32,
+    #[serde(default)]
+    pub attempts: u32,
+}
+
+/// The link status the CLI's service wrote last, if it was `pid` that wrote it.
+pub fn link_of(pid: u32) -> Option<Link> {
+    link_in(&state_dir()).filter(|l| l.pid == pid)
+}
+
+fn link_in(state: &Path) -> Option<Link> {
+    let text = std::fs::read_to_string(state.join("service.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// This computer's host name: what the CLI sent the server as `device_host` at login
 /// (`os.hostname()`, the kernel's node name), so the server can tell which device is this one.
 #[cfg(unix)]
@@ -163,6 +191,33 @@ mod tests {
         assert!(linked_in(&d, "https://ai.example"));
         assert!(linked_in(&d, "https://ai.example/"));
         assert!(!linked_in(&d, "https://other.example"));
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_link_status_is_read_as_the_service_writes_it() {
+        let d = scratch("link");
+        assert_eq!(link_in(&d), None);
+        // As `lembas service run` writes it (src/service.ts): LinkStatus and its pid.
+        fs::write(
+            d.join("service.json"),
+            r#"{"state":"waiting","instance":"https://ai.example","since":"2026-01-01T00:00:00.000Z","detail":"could not reach the instance; trying again in 4s","attempts":3,"pid":4242}"#,
+        )
+        .unwrap();
+        let l = link_in(&d).unwrap();
+        assert_eq!(l.state, "waiting");
+        assert_eq!(l.pid, 4242);
+        assert_eq!(l.attempts, 3);
+        assert!(l.detail.unwrap().starts_with("could not reach"));
+        // `linked` carries no detail.
+        fs::write(
+            d.join("service.json"),
+            r#"{"state":"linked","instance":"x","since":"y","attempts":1,"pid":7}"#,
+        )
+        .unwrap();
+        assert_eq!(link_in(&d).unwrap().detail, None);
+        fs::write(d.join("service.json"), "not json").unwrap();
+        assert_eq!(link_in(&d), None);
         fs::remove_dir_all(&d).unwrap();
     }
 
