@@ -1368,8 +1368,7 @@ fn on_agent_state(handle: &AppHandle, state: &AgentState) {
     announce(handle);
 }
 
-/// Look at the chat list every so often, and say when a reply finished out of sight; and at the
-/// scheduled tasks, and say when one has a result the server tells of.
+/// Look at the chat list every so often, and say when a reply finished out of sight.
 fn watch_chats(handle: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(watch::EVERY);
@@ -1387,11 +1386,7 @@ fn watch_chats(handle: AppHandle) {
             }
         };
         let done = app.watch.look(&list);
-        // Scheduled tasks: a server without the routes (404) has none to tell of.
-        let ran = server::request(&app_url, &token, "GET", "/schedules", None)
-            .map(|v| app.watch.look_schedules(&v))
-            .unwrap_or_default();
-        if (done.is_empty() && ran.is_empty()) || !app.settings().notify {
+        if done.is_empty() || !app.settings().notify {
             continue;
         }
         let in_front = main_window(&handle)
@@ -1414,23 +1409,68 @@ fn watch_chats(handle: AppHandle) {
                 .body(if d.agent { &words.agent } else { &words.reply })
                 .show();
         }
-        // A scheduled result is said even with the window in front: it ran on its own.
-        for r in ran {
-            let title = if r.title.is_empty() {
-                "LLeMbas".to_string()
-            } else {
-                r.title
+    });
+}
+
+/// How long to wait before following the event stream again: after it closed or broke off, and
+/// (longer) on a server that has none.
+const EVENTS_AGAIN: std::time::Duration = std::time::Duration::from_secs(5);
+const EVENTS_NONE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Follow the server's event stream for the signed-in person (`GET /events`): each `schedules`
+/// frame goes to the page as it is (the Scheduled page redraws from it), and a scheduled task's
+/// newly finished run is told by its notify decision (`watch::decide`). Said even with the window
+/// in front: it ran on its own. Signing out or another server ends the stream (`Watch::reset`).
+fn watch_events(handle: AppHandle) {
+    std::thread::spawn(move || loop {
+        let app = handle.state::<App>();
+        let Some((app_url, token)) = app.door() else {
+            std::thread::sleep(EVENTS_AGAIN);
+            continue;
+        };
+        let stop = app.watch.stop_flag();
+        let result = server::stream(&app_url, &token, "/events", &stop, |event, data| {
+            if event != "schedules" {
+                return true;
+            }
+            let Ok(list) = serde_json::from_str::<Value>(data) else {
+                return true;
             };
-            let _ = handle
-                .notification()
-                .builder()
-                .title(title)
-                .body(if r.failed {
-                    &words.scheduled_failed
+            let app = handle.state::<App>();
+            let ran = app.watch.look_schedules(&list);
+            let _ = handle.emit("schedules", &list);
+            if ran.is_empty() || !app.settings().notify {
+                return true;
+            }
+            let words = app.watch.words.lock().unwrap().clone();
+            for r in ran {
+                let title = if r.title.is_empty() {
+                    "LLeMbas".to_string()
                 } else {
-                    &words.scheduled
-                })
-                .show();
+                    r.title
+                };
+                let body = match r.told {
+                    watch::Told::Result => &words.scheduled,
+                    watch::Told::Failed => &words.scheduled_failed,
+                    watch::Told::Pause => &words.scheduled_pause,
+                };
+                let _ = handle
+                    .notification()
+                    .builder()
+                    .title(title)
+                    .body(body)
+                    .show();
+            }
+            true
+        });
+        match result {
+            Err(e) if e.status == 401 => {
+                token_refused(&handle);
+                std::thread::sleep(EVENTS_AGAIN);
+            }
+            // A server without the stream: look again now and then (it may be updated).
+            Err(e) if e.status == 404 || e.status == 405 => std::thread::sleep(EVENTS_NONE),
+            _ => std::thread::sleep(EVENTS_AGAIN),
         }
     });
 }
@@ -1594,6 +1634,7 @@ pub fn run() {
             build_main(&handle)?;
             watch_updates(handle.clone());
             watch_chats(handle.clone());
+            watch_events(handle.clone());
             {
                 let h = handle.clone();
                 std::thread::spawn(move || {

@@ -8,13 +8,19 @@
 //! the page's language; the chat's title is the person's own. Nothing from the reply itself is
 //! put on screen outside the app.
 //!
-//! Scheduled tasks: the app asks `/api/v2/schedules` as often, and a schedule whose last run is a
-//! new one, with the server's word that it is worth telling (`notified`: its notify policy, and a
-//! `[SILENT]` run not), is said once -- by the schedule's title, never the result's words. A
-//! server without the routes answers 404, and nothing is said.
+//! Scheduled tasks: the app follows the server's own event stream (`GET /api/v2/events`), whose
+//! `schedules` frame carries the whole list (`{"version", "schedules": [schedule]}`) whenever it
+//! changes -- a run starting, waiting, finishing. A schedule's last run that has newly finished is
+//! told by the server's notify decision for it: `notified` when the server already told a device,
+//! else the schedule's `notify` policy as the server applies it (`services/schedule/notify.py`:
+//! `always` -- a result, even "nothing to report"; `matters` -- a result, never a `[SILENT]` one;
+//! `never` -- nothing), and a failure the first time in a row and again on the third, which asks
+//! whether to pause it. Said by the schedule's title, never the result's words. A server without
+//! the stream answers 404, and nothing is said.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -35,6 +41,9 @@ pub struct Words {
     /// A scheduled task's run failed.
     #[serde(default = "scheduled_failed_word")]
     pub scheduled_failed: String,
+    /// A scheduled task failed three times in a row: pause it?
+    #[serde(default = "scheduled_pause_word")]
+    pub scheduled_pause: String,
 }
 
 fn scheduled_word() -> String {
@@ -45,6 +54,10 @@ fn scheduled_failed_word() -> String {
     "A scheduled task failed.".into()
 }
 
+fn scheduled_pause_word() -> String {
+    "A scheduled task failed 3 times in a row. Pause it?".into()
+}
+
 impl Default for Words {
     fn default() -> Self {
         Words {
@@ -52,6 +65,7 @@ impl Default for Words {
             agent: "The agent has finished.".into(),
             scheduled: scheduled_word(),
             scheduled_failed: scheduled_failed_word(),
+            scheduled_pause: scheduled_pause_word(),
         }
     }
 }
@@ -71,15 +85,56 @@ pub struct Watch {
     pub words: Mutex<Words>,
     /// Which chats were being answered at the last look (None before the first look).
     running: Mutex<Option<HashMap<String, bool>>>,
-    /// Each schedule's last run at the last look (None before the first look).
-    runs: Mutex<Option<HashMap<String, String>>>,
+    /// Each schedule's last run at the last look, and whether it had finished (None before the
+    /// first look).
+    runs: Mutex<Option<HashMap<String, (String, bool)>>>,
+    /// Set to end the event stream that is followed now; `reset` sets it and puts a new one here.
+    stop: Mutex<Arc<AtomicBool>>,
 }
 
-/// A scheduled task's new run that the server says is worth telling of.
+/// How a scheduled task's run is told.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Told {
+    /// It has a result.
+    Result,
+    /// It failed.
+    Failed,
+    /// It failed for the third time in a row: pause it?
+    Pause,
+}
+
+/// A scheduled task's newly finished run that is worth telling of.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ran {
     pub title: String,
-    pub failed: bool,
+    pub told: Told,
+}
+
+/// The run statuses that are an end (`db/models/schedule.py`): `running` and `waiting` are not.
+const FINISHED: [&str; 5] = ["ok", "silent", "failed", "skipped", "missed"];
+/// The failure in a row that asks whether to pause (`notify.PAUSE_AFTER`).
+const PAUSE_AFTER: i64 = 3;
+
+/// Whether a finished run is told, and how: the server's word when it already told (`notified`),
+/// else its notify policy for the schedule as the server applies it.
+pub fn decide(policy: &str, status: &str, notified: bool, streak: i64) -> Option<Told> {
+    let failed = matches!(status, "failed" | "skipped");
+    let kind = if failed && streak == PAUSE_AFTER {
+        Told::Pause
+    } else if failed {
+        Told::Failed
+    } else {
+        Told::Result
+    };
+    if notified {
+        return Some(kind);
+    }
+    match (policy, status) {
+        ("never", _) => None,
+        (_, "ok") | ("always", "silent") => Some(Told::Result),
+        _ if failed && (streak <= 1 || streak == PAUSE_AFTER) => Some(kind),
+        _ => None,
+    }
 }
 
 impl Watch {
@@ -120,8 +175,9 @@ impl Watch {
         done
     }
 
-    /// Note the schedules as the server gave them; the new runs to tell of since the last look.
-    /// The first look only notes, as with the chats.
+    /// Note the schedules as the event stream gave them (`{"schedules": [...]}`); the runs that
+    /// finished since the last look and are told. The first look only notes, as with the chats; a
+    /// run is told once, however often the list comes again.
     pub fn look_schedules(&self, list: &Value) -> Vec<Ran> {
         let rows = list
             .get("schedules")
@@ -142,28 +198,48 @@ impl Watch {
             let Some(run_id) = run.get("id").and_then(Value::as_str) else {
                 continue;
             };
+            let status = run.get("status").and_then(Value::as_str).unwrap_or("");
+            let finished = FINISHED.contains(&status);
             let before = seen.as_ref().and_then(|s| s.get(id));
-            let told = run.get("notified").and_then(Value::as_bool) == Some(true);
-            if !first && before.map(String::as_str) != Some(run_id) && told {
-                out.push(Ran {
-                    title: row
-                        .get("title")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    failed: run.get("status").and_then(Value::as_str) == Some("failed"),
-                });
+            let known = before.is_some_and(|(r, done)| r == run_id && *done);
+            if !first && finished && !known {
+                let told = decide(
+                    row.get("notify").and_then(Value::as_str).unwrap_or(""),
+                    status,
+                    run.get("notified").and_then(Value::as_bool) == Some(true),
+                    row.get("failure_streak")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
+                );
+                if let Some(told) = told {
+                    out.push(Ran {
+                        title: row
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        told,
+                    });
+                }
             }
-            now.insert(id.to_string(), run_id.to_string());
+            now.insert(id.to_string(), (run_id.to_string(), finished));
         }
         *seen = Some(now);
         out
+    }
+
+    /// The flag that ends the event stream followed now.
+    pub fn stop_flag(&self) -> Arc<AtomicBool> {
+        self.stop.lock().unwrap().clone()
     }
 
     /// Start again from nothing: another server, or signed out.
     pub fn reset(&self) {
         *self.running.lock().unwrap() = None;
         *self.runs.lock().unwrap() = None;
+        let mut stop = self.stop.lock().unwrap();
+        stop.store(true, Ordering::SeqCst);
+        *stop = Arc::new(AtomicBool::new(false));
     }
 }
 
@@ -172,38 +248,88 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// A schedule's last run in a test: its id, status, and whether the server tells of it.
-    type LastRun<'a> = Option<(&'a str, &'a str, bool)>;
+    /// A schedule in a test: its id, notify policy, failure streak, and last run (id, status,
+    /// whether the server told of it).
+    type Row<'a> = (&'a str, &'a str, i64, Option<(&'a str, &'a str, bool)>);
 
-    fn schedules(rows: &[(&str, LastRun)]) -> Value {
-        json!({"schedules": rows.iter().map(|(id, run)| json!({
-            "id": id, "title": format!("Task {id}"),
+    fn schedules(rows: &[Row]) -> Value {
+        json!({"version": "v", "schedules": rows.iter().map(|(id, notify, streak, run)| json!({
+            "id": id, "title": format!("Task {id}"), "notify": notify, "failure_streak": streak,
             "last_run": run.map(|(r, status, told)| json!({"id": r, "status": status, "notified": told})),
         })).collect::<Vec<_>>()})
     }
 
+    fn ran(id: &str, told: Told) -> Ran {
+        Ran {
+            title: format!("Task {id}"),
+            told,
+        }
+    }
+
     #[test]
-    fn a_new_run_the_server_tells_of_is_said_once_and_a_silent_one_never() {
+    fn a_finished_run_is_said_once_by_its_policy_and_a_silent_one_only_when_always() {
         let w = Watch::default();
         assert!(w
-            .look_schedules(&schedules(&[("a", Some(("r1", "ok", true))), ("b", None)]))
+            .look_schedules(&schedules(&[
+                ("a", "matters", 0, Some(("r1", "ok", false))),
+                ("b", "always", 0, None)
+            ]))
             .is_empty());
-        let ran = w.look_schedules(&schedules(&[
-            ("a", Some(("r2", "ok", true))),
-            ("b", Some(("r3", "silent", false))),
-        ]));
-        assert_eq!(
-            ran,
-            vec![Ran {
-                title: "Task a".into(),
-                failed: false
-            }]
-        );
+        // Running is not news; finishing is, even under the same run id.
         assert!(w
-            .look_schedules(&schedules(&[("a", Some(("r2", "ok", true)))]))
+            .look_schedules(&schedules(&[(
+                "a",
+                "matters",
+                0,
+                Some(("r2", "running", false))
+            )]))
             .is_empty());
-        let failed = w.look_schedules(&schedules(&[("a", Some(("r4", "failed", true)))]));
-        assert!(failed[0].failed);
+        let out = w.look_schedules(&schedules(&[
+            ("a", "matters", 0, Some(("r2", "ok", false))),
+            ("b", "always", 0, Some(("r3", "silent", false))),
+            ("c", "matters", 0, Some(("r4", "silent", false))),
+            ("d", "never", 0, Some(("r5", "ok", false))),
+        ]));
+        assert_eq!(out, vec![ran("a", Told::Result), ran("b", Told::Result)]);
+        // The same list again (the server told a device meanwhile): not said twice.
+        assert!(w
+            .look_schedules(&schedules(&[("a", "matters", 0, Some(("r2", "ok", true)))]))
+            .is_empty());
+    }
+
+    #[test]
+    fn failures_are_said_the_first_time_and_the_third_asks_to_pause() {
+        assert_eq!(decide("matters", "failed", false, 1), Some(Told::Failed));
+        assert_eq!(decide("matters", "failed", false, 2), None);
+        assert_eq!(decide("always", "skipped", false, 3), Some(Told::Pause));
+        assert_eq!(decide("never", "failed", false, 1), None);
+        assert_eq!(decide("matters", "missed", false, 0), None);
+        // The server's own word wins: it told a device.
+        assert_eq!(decide("matters", "failed", true, 2), Some(Told::Failed));
+        assert_eq!(decide("matters", "silent", true, 0), Some(Told::Result));
+    }
+
+    #[test]
+    fn a_reset_ends_the_stream_and_starts_quiet() {
+        let w = Watch::default();
+        let old = w.stop_flag();
+        w.look_schedules(&schedules(&[(
+            "a",
+            "matters",
+            0,
+            Some(("r1", "running", false)),
+        )]));
+        w.reset();
+        assert!(old.load(Ordering::SeqCst));
+        assert!(!w.stop_flag().load(Ordering::SeqCst));
+        assert!(w
+            .look_schedules(&schedules(&[(
+                "a",
+                "matters",
+                0,
+                Some(("r1", "ok", false))
+            )]))
+            .is_empty());
     }
 
     fn list(rows: &[(&str, bool, &str)]) -> Value {
