@@ -507,6 +507,82 @@ pub fn request_text(app: &str, token: &str, path: &str) -> Result<String, ApiErr
     Ok(text)
 }
 
+/// The most a model's picture may be: the server's own limit for one (2 MB), and a little room.
+pub const IMAGE_LIMIT: u64 = 2 * 1024 * 1024 + 4096;
+
+/// The pictures a model may have, by the type the server serves them as: the four it accepts on
+/// upload. Nothing else is shown, whatever the server says it is.
+const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+/// A model's picture path as `/api/v2/models` names it (`/api/v2/models/images/<file>`), on the
+/// app's door: `/models/images/<file>`, or None for anything else. One plain file name, no more.
+pub fn image_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/api/v2").unwrap_or(path);
+    let name = rest.strip_prefix("/models/images/")?;
+    let plain = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        && !name.starts_with('.');
+    plain.then(|| format!("/models/images/{name}"))
+}
+
+/// A model's picture, as a `data:` URL the page can show without a request of its own (its
+/// policy allows images from `data:` and nowhere else on the network). Read with the app's
+/// token, as the page reads nothing itself.
+pub fn request_image(app: &str, token: &str, path: &str) -> Result<String, ApiError> {
+    let Some(path) = image_path(path) else {
+        return Err(ApiError::new(400, format!("Not a model's picture: {path}")));
+    };
+    let res = agent(Duration::from_secs(30))
+        .get(&format!("{app}{path}"))
+        .set("authorization", &format!("Bearer {token}"))
+        .call()?;
+    let kind = res
+        .content_type()
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !IMAGE_TYPES.contains(&kind.as_str()) {
+        return Err(ApiError::new(415, format!("Not a picture: {kind}")));
+    }
+    let mut bytes = Vec::new();
+    res.into_reader()
+        .take(IMAGE_LIMIT)
+        .read_to_end(&mut bytes)
+        .map_err(|e| ApiError::new(0, format!("The server's answer could not be read: {e}")))?;
+    if bytes.len() as u64 >= IMAGE_LIMIT {
+        return Err(ApiError::new(413, "The picture is too large."));
+    }
+    Ok(format!("data:{kind};base64,{}", base64(&bytes)))
+}
+
+/// Standard base64 with padding (RFC 4648 §4): a picture's bytes in a `data:` URL.
+pub fn base64(bytes: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(ABC[((n >> 18) & 63) as usize] as char);
+        out.push(ABC[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ABC[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ABC[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 /// The most a file sent as an attachment may be here. The server has its own limit (20 MB by
 /// default, an administrator may change it) and says so in its words; this one only keeps a
 /// file far beyond any server's limit from being read into memory at all.
@@ -786,6 +862,39 @@ mod tests {
         ] {
             assert!(checked_path(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_models_picture_is_one_file_on_the_app_door() {
+        assert_eq!(
+            image_path("/api/v2/models/images/0a1b2c3d4e5f.png").as_deref(),
+            Some("/models/images/0a1b2c3d4e5f.png")
+        );
+        assert_eq!(
+            image_path("/models/images/a-b_c.webp").as_deref(),
+            Some("/models/images/a-b_c.webp")
+        );
+        for bad in [
+            "/api/v2/models/images/",
+            "/api/v2/models/images/../me",
+            "/api/v2/models/images/a/b.png",
+            "/api/v2/models/images/.hidden",
+            "/api/v2/chats/x",
+            "/uploads/models/a.png",
+            "https://elsewhere/models/images/a.png",
+        ] {
+            assert!(image_path(bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn base64_is_the_standard_alphabet_with_padding() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64(&[0xfb, 0xff]), "+/8=");
     }
 
     #[test]

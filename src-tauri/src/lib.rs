@@ -425,6 +425,18 @@ async fn api_text(handle: AppHandle, path: String) -> Result<String, ApiError> {
     result
 }
 
+/// A model's picture (`image` in `/api/v2/models`), as a `data:` URL: the page's policy allows
+/// images from `data:` and reaches the server only through the bridge.
+#[tauri::command]
+async fn model_image(handle: AppHandle, path: String) -> Result<String, ApiError> {
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    tauri::async_runtime::spawn_blocking(move || server::request_image(&app_url, &token, &path))
+        .await
+        .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
 /// A frame of a reply being written, as the page hears it.
 #[derive(Clone, Serialize)]
 struct Frame {
@@ -1423,6 +1435,7 @@ pub fn run() {
             sign_out,
             api,
             api_text,
+            model_image,
             stream_open,
             stream_close,
             local_list,

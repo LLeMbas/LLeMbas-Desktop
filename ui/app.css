@@ -449,6 +449,9 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-ui); colo
   flex: none;
 }
 .avatar--none { background: var(--surface-active); }
+/* A model's own picture fills the same square, cut to it: the avatar's size does not depend on it. */
+.avatar--image { overflow: hidden; background: var(--surface); }
+.avatar--image img { display: block; width: 100%; height: 100%; object-fit: cover; }
 /* The model picker: a button the height of a control, avatar · name · chevron. */
 .picker {
   display: inline-grid;

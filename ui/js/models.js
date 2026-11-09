@@ -1,11 +1,23 @@
-// Models as the person picks them: each with its avatar, as the server's web interface draws a
-// model without an uploaded image -- its initial on a colour of its own, the hue worked out from
-// the model's id exactly as the server does it (`stable_hue`: the first two bytes of the id's
-// MD5, modulo 360), so a model looks the same in the app and in the browser. Saturation and
+// Models as the person picks them: each with its avatar. A model with a picture (`image` in
+// /api/v2/models) shows it, read through the bridge with the app's token and handed to the page
+// as a `data:` URL; until it arrives, and for a model without one, the avatar is what the
+// server's web interface draws then -- its initial on a colour of its own, the hue worked out
+// from the model's id exactly as the server does it (`stable_hue`: the first two bytes of the
+// id's MD5, modulo 360), so a model looks the same in the app and in the browser. Saturation and
 // lightness are the theme's (app.css), only the hue is the model's.
 
 import { h, icon, ICONS } from "./dom.js"
+import { invoke } from "./bridge.js"
 import { menu } from "./popup.js"
+
+// Each picture once per run: its path -> a promise of its `data:` URL (null when it cannot be had,
+// so a missing picture is not asked for again with every redraw).
+const pictures = new Map()
+
+function picture(path) {
+  if (!pictures.has(path)) pictures.set(path, invoke("model_image", { path }).catch(() => null))
+  return pictures.get(path)
+}
 
 /** MD5 of a string's UTF-8 bytes (RFC 1321), as 16 bytes. For a colour, not for security. */
 function md5(text) {
@@ -53,11 +65,18 @@ export function stableHue(id) {
   return ((d[0] << 8) | d[1]) % 360
 }
 
-/** A model's avatar: its initial on its own colour. */
+/** A model's avatar: its picture, or its initial on its own colour while there is none. */
 export function avatar(model) {
   const label = String(model?.name || model?.id || "?").trim() || "?"
   const el = h("span", { class: "avatar", "aria-hidden": "true", text: label[0].toUpperCase() })
   el.style.setProperty("--avatar-hue", String(stableHue(model?.id || label)))
+  if (typeof model?.image === "string" && model.image) {
+    picture(model.image).then((url) => {
+      if (!url || !url.startsWith("data:image/")) return
+      el.classList.add("avatar--image")
+      el.replaceChildren(h("img", { src: url, alt: "", draggable: "false" }))
+    })
+  }
   return el
 }
 
