@@ -6,6 +6,11 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] — 2026-11-09
+
+Carries LLeMbas CLI 2.0.0-beta.3 and the look of LLeMbas 2.0.0-beta.5. Needs a LLeMbas 2.0 server
+(2.0.0-beta.5 or later for the activity panel, the Thinking switch and team sizes).
+
 ### Added
 
 - **Attachments.** A message can carry files: the attach button beside the composer (the
