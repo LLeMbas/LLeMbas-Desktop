@@ -77,6 +77,8 @@ function route() {
     view = want
     $("setup").hidden = want !== "setup"
     $("shell").hidden = want !== "app"
+    // The sidebar's button keeps its place in the title bar, unseen while there is no sidebar.
+    $("side-toggle").style.visibility = want === "app" ? "" : "hidden"
     if (want === "app") startApp()
     else stopApp()
   }

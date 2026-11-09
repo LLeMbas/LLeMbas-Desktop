@@ -8,15 +8,21 @@ an app of its own.
   computer's device. Agent chats work in your project folders here, without a terminal -- start
   them, follow them and answer them in the app.
 - **Your server's chats** beside them: the same account, models and permissions as in the browser.
-- **Two explorers, kept apart**: the agent's working directory on this computer, and your files
-  on the server.
+- **A chat app's shape**: a slim sidebar with your chats of both kinds by day, a new chat that is
+  a chat page, and the chat's folder, mode, model, effort and team size as chips in the message
+  box.
+- **Scheduled tasks** (with a server that has them): the list, each task's history and *Run now*,
+  and a new one said in your own words, with its next runs shown before you save.
+- **Files**, two trees kept apart: the agent's folders on this computer, and your files on the
+  server.
 - **A viewer** for what you open and for what the agent shows you: Markdown drawn, code
   highlighted, text, and HTML in a sealed frame that can reach neither the app nor the network.
 - **Attachments** from the file dialog, a drop on the window or a paste; **edit** a message,
   **regenerate** a reply, rename, archive or delete a chat, and open it in the web interface.
 - **A command palette** (Ctrl+K) for commands and every chat by its title.
 - **The agent's real status**: what the built-in CLI says of its link -- connecting, running,
-  waiting and why -- not whether a process runs.
+  waiting and why, refused with the server's reason -- not whether a process runs; and, when this
+  computer is not linked, **Link this computer** right where you start an agent chat.
 - **Notifications** when a reply or an agent's work finishes while you are elsewhere.
 - **Its own window and tray**: close the window and the agent keeps running in the tray.
 
@@ -57,12 +63,13 @@ built into the app before anything is installed. Betas are not offered as update
    browser, where you are signed in already; approve the code shown in the app. This one approval
    lets the app read and write your chats, as the web interface does, and links this computer as
    the device the agent runs on: the app hands the agent's token to its LLeMbas CLI, which keeps it
-   in its own configuration. The agent starts. (A computer linked already keeps its link; on a
-   server that cannot give both from one approval, **Link this computer** under **Settings** is a
-   second one.)
+   in its own configuration. The agent starts. (A computer whose link works keeps it; on a server
+   that cannot give both from one approval, **Link this computer** -- above the message box of a
+   new agent chat, in the agent's panel in the title bar, or in **Settings** -- is a second one.)
 2. Choose the folders the agent may work in (Settings, *Add folder…*); a new computer allows none
    until you do.
-3. **New agent chat**: pick one of those folders, a mode and a model, and write.
+3. **New chat**, **Agent**: pick one of those folders, a mode and a model in the chips under the
+   message box, and write.
 
 The agent is the LLeMbas CLI's `lembas service`, using the CLI's own configuration
 (`~/.config/lembas`). The app's copy of the CLI lives in its own directory
