@@ -475,20 +475,25 @@ function contextPart(c) {
 }
 
 /**
- * How far it is to the automatic compaction -- the server compacts before a turn once the context
- * would reach `threshold` % of the window; 0 is off -- and the button that compacts now.
+ * How far it is to the automatic compaction, and the button that compacts now. The server says it
+ * (2.0.0-beta.7: `auto_compact`, `until_compact` in tokens, `compactable` whether Compact can run
+ * now); an older one gives only `threshold` -- the server compacts before a turn once the context
+ * would reach that % of the window, 0 is off -- and it is worked out from that.
  */
 function compactRow(c) {
   const limit = Number(c.limit) || 0
   const threshold = Number(c.threshold)
+  const auto = "auto_compact" in c ? !!c.auto_compact : threshold > 0
+  let until = c.until_compact
+  if (until === undefined && auto && limit && threshold < 100) until = Math.floor((limit * threshold) / 100) - (Number(c.used) || 0)
   let words
-  if (!(threshold > 0)) words = t("Automatic compaction is off.")
-  else if (!limit || threshold >= 100) words = t("Compacts by itself once the window is known.")
-  else {
-    const until = Math.floor((limit * threshold) / 100) - (Number(c.used) || 0)
-    words = until > 0 ? t("%(tokens)s until auto-compact", { tokens: compact(until) }) : t("Compacts before the next reply.")
-  }
+  if (!auto) words = t("Automatic compaction is off.")
+  else if (until === null || until === undefined) words = t("Compacts by itself once the window is known.")
+  else words = until > 0 ? t("%(tokens)s until auto-compact", { tokens: compact(until) }) : t("Compacts before the next reply.")
   const busy = compacting === chat?.id
+  // `compactable` false: nothing to summarise yet, a reply being written, compaction turned off --
+  // the button stays, greyed; pressing an older server's says why in its own words.
+  const can = !("compactable" in c) || !!c.compactable
   return h(
     "div",
     { class: "ctx__compact" },
@@ -497,7 +502,7 @@ function compactRow(c) {
       type: "button",
       class: "btn btn--sm",
       text: busy ? t("Compacting…") : t("Compact"),
-      disabled: busy,
+      disabled: busy || !can,
       title: t("Summarise the earlier turns now and send the summary in their place."),
       onclick: compactNow,
     }),
@@ -601,7 +606,7 @@ function roomPart() {
   )
 }
 
-/** A folded list of tasks ("Show 3 more", "Finished 12", "2 tasks"), remembered across redraws. */
+/** A folded list of tasks ("Show 3 more", "Finished 12", "Tasks: 2"), remembered across redraws. */
 function fold(name, label, list, cls = "") {
   const el = h(
     "details",
@@ -613,11 +618,11 @@ function fold(name, label, list, cls = "") {
   return el
 }
 
-/** A task and, folded under it, the tasks it leads or started ("1 task", "3 tasks"). */
+/** A task and, folded under it, the tasks it leads or started ("Tasks: 3"). */
 function agentRows(a) {
   const kids = a.children || []
   if (!kids.length) return agentRow(a)
-  const nested = fold(`under:${a.kind}:${a.id}`, kids.length === 1 ? t("1 task") : t("%(n)s tasks", { n: kids.length }), kids, "tasks__nested")
+  const nested = fold(`under:${a.kind}:${a.id}`, t("Tasks: %(n)s", { n: kids.length }), kids, "tasks__nested")
   nested.style.setProperty("--depth", String(Math.max(0, Math.min(6, (Number(a.depth) || 0) + 1))))
   return [agentRow(a), nested]
 }

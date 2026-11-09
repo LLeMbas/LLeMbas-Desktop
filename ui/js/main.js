@@ -19,6 +19,7 @@ import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
 import { initAgent, link } from "./agent.js"
 import { initScheduled, showScheduled, scheduledCommands } from "./scheduled.js"
 import { closePopover } from "./popup.js"
+import { noteSubagentsCap } from "./models.js"
 
 let status = null
 let view = "" // "setup" | "app"
@@ -118,7 +119,9 @@ function stopApp() {
 
 async function loadModels() {
   try {
-    models = (await get("/models")).models || []
+    const r = await get("/models")
+    models = r.models || []
+    noteSubagentsCap(r.subagents_cap)
   } catch {
     models = []
   }

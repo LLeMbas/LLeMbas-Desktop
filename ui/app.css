@@ -122,6 +122,7 @@ textarea { padding: var(--sp-2) var(--control-px-sm); resize: none; line-height:
 
 label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); color: var(--ink-muted); }
 .hint { font-size: var(--text-sm); color: var(--ink-muted); min-height: calc(var(--text-sm) * var(--leading-normal)); }
+.hint.is-warn { color: var(--warning); }
 .status { font: var(--text-sm) / var(--leading-normal) var(--font-body); }
 .status.is-ok { color: var(--leaf); }
 .check { display: grid; grid-template-columns: var(--check-size) minmax(0, 1fr); gap: var(--sp-2); align-items: center; color: var(--ink); }

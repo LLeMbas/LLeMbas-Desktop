@@ -13,7 +13,7 @@ import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
 import { menu, ask, showLine, popover, closePopover } from "./popup.js"
-import { avatar, agentsControl, teamPossible, subagentsCap, SUBAGENTS_HINT, levelsOf, levelWord, picture } from "./models.js"
+import { avatar, agentsControl, teamPossible, namedOnly, subagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
@@ -566,17 +566,20 @@ async function chatModels(chat) {
 }
 
 /**
- * Whether this chat is offered subagents, and the instance's most: the chat's own word where the
- * server gives one (`subagents` on the chat), else its team's (`GET /chats/{chat}/team`) -- only a
- * chat on the server. null where it is not offered.
+ * Whether this chat is offered subagents: `{ cap, own }` (the instance's most; whether only a model
+ * the person names could serve them), or null. The chat's own `subagents` where the server gives
+ * it (2.0.0-beta.7), else its team's word (`GET /chats/{chat}/team`) -- only a chat on the server.
  */
 async function teamOffered(chat) {
   const said = chat.subagents
-  if (said !== undefined && said !== null) return (typeof said === "object" ? said.offered : said) ? { cap: subagentsCap(said, ctx.me()) } : null
+  if (said !== undefined && said !== null) {
+    const offered = typeof said === "object" ? said.offered : said
+    return offered ? { cap: subagentsCap(said), own: namedOnly(said) } : null
+  }
   if (chat.kind !== "chat") return null
   try {
     const team = (await get(`/chats/${encodeURIComponent(chat.id)}/team`)).team
-    return team?.offered ? { cap: subagentsCap(team, ctx.me()) } : null
+    return team?.offered ? { cap: subagentsCap(), own: false } : null
   } catch {
     return null
   }
@@ -652,13 +655,13 @@ function effortChip(model, value, onChange) {
  * The subagents a chat may run: a chip saying the fewest and the most, opening the two fields.
  * `value` { min, max } or empty; `cap` the instance's most, where the server says it.
  */
-function agentsChip(value, onChange, cap) {
+function agentsChip(value, onChange, { cap, own } = {}) {
   const said = value?.min || value?.max ? `${value.min ?? "…"}–${value.max ?? "…"}` : t("default")
   return chip({
     ico: ICONS.users,
     label: `${t("Subagents")} ${said}`,
-    title: SUBAGENTS_HINT(),
-    cls: "cchip--subagents",
+    title: own ? SUBAGENTS_OWN() : SUBAGENTS_HINT(),
+    cls: `cchip--subagents${own ? " is-warn" : ""}`,
     onclick: (e) => {
       const fields = agentsControl({ value, id: "agents-min", cap })
       popover(
@@ -669,6 +672,7 @@ function agentsChip(value, onChange, cap) {
           h("label", { class: "pop__title", for: "agents-min", text: t("Subagents") }),
           h("div", { class: "agents__heads", "aria-hidden": "true" }, h("span", { text: t("Fewest") }), h("span"), h("span", { text: t("Most") })),
           fields,
+          own ? h("p", { class: "hint is-warn", text: SUBAGENTS_OWN() }) : null,
           h("p", { class: "hint", text: SUBAGENTS_HINT() }),
           h("div", { class: "pop__actions" }, h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Save"), onclick: () => (closePopover(), onChange(fields.value)) })),
         ),
@@ -718,7 +722,7 @@ async function renderChips() {
       renderChips()
     }, mayPick))
     if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), renderChips())))
-    if (draft.kind === "chat" && teamPossible(model)) parts.push(agentsChip(draft.agents, (a) => ((draft.agents = a), renderChips()), subagentsCap(model?.subagents, ctx.me())))
+    if (draft.kind === "chat" && teamPossible(model)) parts.push(agentsChip(draft.agents, (a) => ((draft.agents = a), renderChips()), { cap: subagentsCap(), own: namedOnly(model?.subagents) }))
     box.replaceChildren(...parts.filter(Boolean))
     return
   }
@@ -747,7 +751,7 @@ async function renderChips() {
   box.replaceChildren(...parts.filter(Boolean))
   const offer = await teamOffered(chat)
   if (!offer || drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
-  box.append(agentsChip(open.chat.agents || chat.agents, (a) => save({ agents: a }), offer.cap))
+  box.append(agentsChip(open.chat.agents || chat.agents, (a) => save({ agents: a }), offer))
 }
 
 /**

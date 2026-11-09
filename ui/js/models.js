@@ -193,13 +193,13 @@ export function effortControl({ model, value, onChange, id, compact }) {
 }
 
 /**
- * Whether a new chat on `model` is offered subagents. The server says so where it can: a model's
- * `subagents` in `/models` (a flag, or `{offered}`), true when subagents are on for the model and
- * the instance and at least one model could serve as one -- the model itself with room for two
- * requests at once, or a usable model outside its one-model-at-a-time server. A server that does
- * not say it yet: a model that calls tools and serves two requests at once (`parallel` null is a
- * hosted API with no stated limit). The server decides again; this only keeps the chip away where
- * it could never apply. An open chat asks the server (`GET /chats/{chat}/team`).
+ * Whether a new chat on `model` is offered subagents: the model's `subagents.offered` in `/models`
+ * (server 2.0.0-beta.7: subagents on for the model and the instance, and at least one model could
+ * serve as one -- the model itself with room for two requests at once, or a usable model outside
+ * its one-model-at-a-time server). A server that does not say it: a model that calls tools and
+ * serves two requests at once (`parallel` null is a hosted API with no stated limit). The server
+ * decides again; this only keeps the chip away where it could never apply. An open chat has its
+ * own `subagents` (chat.js).
  */
 export function teamPossible(model) {
   const said = model?.subagents
@@ -207,16 +207,28 @@ export function teamPossible(model) {
   return !!model?.tools && (model.parallel === null || model.parallel === undefined || model.parallel >= 2)
 }
 
-/** The most subagents the instance allows a chat (`cap`), where the server says it; else 32. */
+/** Whether only a model the person names in the chat could serve its subagents (`named_only`). */
+export function namedOnly(said) {
+  return !!(said && typeof said === "object" && said.named_only)
+}
+
+// The instance's most, as `/models` said it last (`subagents_cap`); 32 where it says nothing.
 export const SUBAGENTS_CAP = 32
-export const SUBAGENTS_HINT = () => t("The fewest and the most subagents this chat runs. They work on the same model unless you name another one in the chat.")
+let knownCap = null
+export function noteSubagentsCap(n) {
+  knownCap = Number(n) >= 1 ? Number(n) : null
+}
+/** The most subagents a chat may have: the first of `sources` that says it (`cap`), else the instance's. */
 export function subagentsCap(...sources) {
   for (const s of sources) {
-    const n = Number(s?.cap ?? s?.subagents_cap ?? s?.subagents?.cap)
+    const n = Number(s?.cap)
     if (Number.isFinite(n) && n >= 1) return n
   }
-  return SUBAGENTS_CAP
+  return knownCap || SUBAGENTS_CAP
 }
+export const SUBAGENTS_HINT = () => t("Counted with the chat's own agent. A subagent runs on the chat's model, or on another only when you name it in the chat.")
+// The spec's `subagents.setting.own`: beside the setting where the chat's model cannot serve them.
+export const SUBAGENTS_OWN = () => t("This model serves one request at a time: subagents need another model, on another server, named in the chat.")
 
 /**
  * The subagents a chat may run: the fewest and the most, as two number fields on one shared
