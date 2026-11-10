@@ -44,6 +44,11 @@ All notable changes to LLeMbas Desktop. The format follows
   server has it on for the account. The microphone is allowed only right after Dictate is pressed.
 - **Draw a picture.** From Ctrl+K, where the server can draw for the account: a prompt and a
   shape, and the picture under it. Only the account's own pictures on its own server are shown.
+- **A scheduled task's notification says what it found.** Where the server makes the run's
+  notification, it carries the task's name and the result's first lines (or the failure said),
+  with Open and Run again (and Pause, when a task has failed three times in a row), labelled in
+  the account's language. Open, or a click on the notification, opens the task; Run again and
+  Pause do it without opening the window. A chat's notification, clicked, opens that chat.
 
 ### Fixed
 

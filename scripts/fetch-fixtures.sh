@@ -16,7 +16,7 @@ OUT="tests/ui/fixtures"
 FILES="chat_agent.json event_ask.json event_status.json event_status_idle.json event_status_person.json
 event_status_stopped.json event_tree.json models_agent.json subagent_findings.json subagent_transcript.json tree.json
 me.json folders.json folder.json search.json memories.json memory.json scope.json push_schedule.json push_schedule_failed.json
-event_schedules.json schedule_run.json chat.json chats_listed.json files_listing.json"
+event_schedules.json schedule.json schedule_run.json chat.json chats_listed.json files_listing.json"
 
 [ $# -eq 1 ] || { echo "usage: scripts/fetch-fixtures.sh <server-ref>" >&2; exit 2; }
 commit="$(git -C "$SERVER" rev-parse --verify --quiet "$1^{commit}")" \

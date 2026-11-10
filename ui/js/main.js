@@ -410,6 +410,16 @@ async function boot() {
   listen("open-settings", () => {
     if (view === "app") showSettings(true)
   })
+  // A notification clicked: the chat it told of, or the scheduled task whose run it was.
+  listen("open-chat", (e) => {
+    if (view === "app" && typeof e.payload === "string") showChat(e.payload)
+  })
+  listen("open-schedule", (e) => {
+    const id = e.payload?.schedule
+    if (view !== "app" || typeof id !== "string") return
+    showPage("scheduled")
+    showScheduled(id)
+  })
   status = await invoke("get_status")
   applyTheme(status.theme)
   renderBar(status)

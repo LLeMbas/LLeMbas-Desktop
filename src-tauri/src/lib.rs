@@ -43,7 +43,7 @@ use tauri::{
     WebviewWindow, WebviewWindowBuilder, Window, WindowEvent, Wry,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_notification::{Action, ActionPerformed, ActionType, NotificationExt};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -1656,14 +1656,66 @@ fn watch_chats(handle: AppHandle) {
             } else {
                 d.title.clone()
             };
+            let id = app.watch.notes.add(watch::Note::Chat(d.id.clone()));
             let _ = handle
                 .notification()
                 .builder()
+                .id(id)
                 .title(title)
                 .body(if d.agent { &words.agent } else { &words.reply })
                 .show();
         }
     });
+}
+
+/// A click on one of the app's notifications, or on one of its actions: a chat's opens that chat;
+/// a scheduled run's opens its task (`open`, or the notification itself), runs it again now
+/// (`run_again`) or pauses it (`pause`) -- the last two without opening the window.
+fn notification_action(handle: &AppHandle, done: &ActionPerformed) {
+    let Some(id) = done.notification().map(|n| n.id()) else {
+        return;
+    };
+    let Some(note) = handle.state::<App>().watch.notes.get(id) else {
+        return;
+    };
+    match (note, done.action_id()) {
+        (watch::Note::Chat(chat), "tap") => {
+            show(handle);
+            let _ = handle.emit("open-chat", chat);
+        }
+        (watch::Note::Run { schedule, run }, "tap" | "open") => {
+            show(handle);
+            let _ = handle.emit(
+                "open-schedule",
+                serde_json::json!({ "schedule": schedule, "run": run }),
+            );
+        }
+        (watch::Note::Run { schedule, .. }, which @ ("run_again" | "pause")) => {
+            let path = format!(
+                "/schedules/{}/{}",
+                terminal::encode(&schedule),
+                if which == "pause" { "pause" } else { "run" }
+            );
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                let Some((app_url, token)) = h.state::<App>().door() else {
+                    return;
+                };
+                match server::request(
+                    &app_url,
+                    &token,
+                    "POST",
+                    &path,
+                    Some(&serde_json::json!({})),
+                ) {
+                    Err(e) if e.status == 401 => token_refused(&h),
+                    Err(e) => log::write(&format!("a notification's action failed: {}", e.detail)),
+                    Ok(_) => {}
+                }
+            });
+        }
+        _ => {}
+    }
 }
 
 /// How long to wait before following the event stream again: after it closed or broke off, and
@@ -1703,17 +1755,48 @@ fn watch_events(handle: AppHandle) {
                 } else {
                     r.title
                 };
-                let body = match r.told {
-                    watch::Told::Result => &words.scheduled,
-                    watch::Told::Failed => &words.scheduled_failed,
-                    watch::Told::Pause => &words.scheduled_pause,
-                };
-                let _ = handle
+                let body = r.body.clone().unwrap_or_else(|| {
+                    match r.told {
+                        watch::Told::Result => &words.scheduled,
+                        watch::Told::Failed => &words.scheduled_failed,
+                        watch::Told::Pause => &words.scheduled_pause,
+                    }
+                    .clone()
+                });
+                let id = app.watch.notes.add(watch::Note::Run {
+                    schedule: r.schedule.clone(),
+                    run: r.run.clone(),
+                });
+                let mut note = handle
                     .notification()
                     .builder()
+                    .id(id)
                     .title(title)
-                    .body(body)
-                    .show();
+                    .body(body);
+                if !r.actions.is_empty() {
+                    // One action type per set of actions; registered again, it takes the labels
+                    // this run came with (the person's language may have changed).
+                    let kind = format!(
+                        "schedule-{}",
+                        r.actions
+                            .iter()
+                            .map(|(a, _)| a.as_str())
+                            .collect::<Vec<_>>()
+                            .join("-")
+                    );
+                    let actions = r
+                        .actions
+                        .iter()
+                        .map(|(a, label)| Action::builder(a, label).build())
+                        .collect();
+                    let _ = handle
+                        .notification()
+                        .register_action_types(vec![ActionType::builder(&kind)
+                            .actions(actions)
+                            .build()]);
+                    note = note.action_type_id(kind);
+                }
+                let _ = note.show();
             }
             true
         });
@@ -1900,6 +1983,12 @@ pub fn run() {
             watch_updates(handle.clone());
             watch_chats(handle.clone());
             watch_events(handle.clone());
+            {
+                let h = handle.clone();
+                let _ = handle
+                    .notification()
+                    .on_action(move |done| notification_action(&h, done));
+            }
             {
                 let h = handle.clone();
                 std::thread::spawn(move || {

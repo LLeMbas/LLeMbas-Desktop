@@ -1526,6 +1526,30 @@ test("I8: at 390 px the composer with Dictate and the drawing dialog stay inside
   assert.deepEqual(p.errors, [])
 })
 
+// J8: a notification clicked (Rust: notification_action) opens the chat or the scheduled task.
+
+test("J8: a scheduled run's notification opens its task, and a chat's opens the chat", async () => {
+  const p = await page({
+    status: status(),
+    routes: baseRoutes({
+      "GET /schedules": { schedules: fixture("event_schedules").schedules },
+      "GET /schedules/sched1": fixture("schedule"),
+      "GET /schedules/sched1/runs": { runs: [fixture("schedule_run").run || fixture("schedule_run")], more: false },
+      "GET /schedules/models": { models: [], instance: [], mine: [] },
+      "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?")], more: false, live: null },
+    }),
+    streams: {},
+  })
+  await p.waitForSelector("#composer")
+  await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched1", run: "run1" }))
+  await p.waitForSelector("#page-scheduled:not([hidden])")
+  await p.waitForFunction(() => window.__mock.api("GET", "/schedules/sched1").length >= 1)
+  await p.waitForFunction(() => /Waybread check/.test(document.getElementById("scheduled-title").textContent))
+  await p.evaluate(() => window.__mock.emit("open-chat", "chat1"))
+  await p.waitForFunction(() => window.__mock.api("GET", "/chats/chat1").length === 1)
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

@@ -15,8 +15,15 @@
 //! else the schedule's `notify` policy as the server applies it (`services/schedule/notify.py`:
 //! `always` -- a result, even "nothing to report"; `matters` -- a result, never a `[SILENT]` one;
 //! `never` -- nothing), and a failure the first time in a row and again on the third, which asks
-//! whether to pause it. Said by the schedule's title, never the result's words. A server without
-//! the stream answers 404, and nothing is said.
+//! whether to pause it. A server that made the run's notification (`run.notification`, server
+//! 2.0.0-beta.9) gives its words: the task's name and the result's first lines -- shown here as on
+//! an unlocked phone, the desktop being the person's own -- and its actions with their labels in
+//! the person's language (`open`, `run_again`, and `pause` on a failure that asks). An older
+//! server's run is said by the schedule's title and the page's words, without actions. A server
+//! without the stream answers 404, and nothing is said.
+//!
+//! Every notification shown is remembered by its id (`Notes`), so a click on it or on one of its
+//! actions knows which chat or which run it was about.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +97,8 @@ pub struct Watch {
     runs: Mutex<Option<HashMap<String, (String, bool)>>>,
     /// Set to end the event stream that is followed now; `reset` sets it and puts a new one here.
     stop: Mutex<Arc<AtomicBool>>,
+    /// The notifications shown, so a click on one knows what it was about.
+    pub notes: Notes,
 }
 
 /// How a scheduled task's run is told.
@@ -108,6 +117,95 @@ pub enum Told {
 pub struct Ran {
     pub title: String,
     pub told: Told,
+    pub schedule: String,
+    pub run: String,
+    /// The server's own words for it (`run.notification.body`): the result's first lines, or the
+    /// failure said. None from a server that does not make them.
+    pub body: Option<String>,
+    /// The actions it offers, `(id, label)`, in the server's order: only those the app can do.
+    pub actions: Vec<(String, String)>,
+}
+
+/// The actions of a scheduled run's notification the app knows how to do.
+pub const RUN_ACTIONS: [&str; 3] = ["open", "run_again", "pause"];
+
+/// The most of a result's first lines a notification carries: the server cuts them already.
+const BODY_MAX: usize = 400;
+
+/// The words and actions of a run's own notification (`run.notification`), as far as they are
+/// usable: a body without control characters and not too long; actions the app knows, each with
+/// its label (the id when the server gave none).
+fn run_notification(run: &Value) -> (Option<String>, Vec<(String, String)>) {
+    let Some(n) = run.get("notification").filter(|n| n.is_object()) else {
+        return (None, Vec::new());
+    };
+    let body = n
+        .get("body")
+        .and_then(Value::as_str)
+        .map(|b| {
+            b.chars()
+                .map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
+                .take(BODY_MAX)
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .filter(|b| !b.is_empty());
+    let labels = n.get("labels");
+    let actions = n
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .filter(|a| RUN_ACTIONS.contains(a))
+                .map(|a| {
+                    let label = labels
+                        .and_then(|l| l.get(a))
+                        .and_then(Value::as_str)
+                        .filter(|l| !l.trim().is_empty())
+                        .unwrap_or(a);
+                    (a.to_string(), label.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (body, actions)
+}
+
+/// What a notification shown was about.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Note {
+    /// A chat whose reply or work finished.
+    Chat(String),
+    /// A scheduled task's run.
+    Run { schedule: String, run: String },
+}
+
+/// The notifications shown, by id: the most recent `NOTES_KEPT`.
+#[derive(Default)]
+pub struct Notes {
+    next: Mutex<i32>,
+    by_id: Mutex<HashMap<i32, Note>>,
+}
+
+const NOTES_KEPT: i32 = 200;
+
+impl Notes {
+    /// Remember a notification about to be shown; its id.
+    pub fn add(&self, note: Note) -> i32 {
+        let mut next = self.next.lock().unwrap();
+        *next = next.checked_add(1).unwrap_or(1);
+        let id = *next;
+        let mut by_id = self.by_id.lock().unwrap();
+        by_id.insert(id, note);
+        by_id.retain(|k, _| *k > id - NOTES_KEPT);
+        id
+    }
+
+    pub fn get(&self, id: i32) -> Option<Note> {
+        self.by_id.lock().unwrap().get(&id).cloned()
+    }
 }
 
 /// The run statuses that are an end (`db/models/schedule.py`): `running` and `waiting` are not.
@@ -212,6 +310,7 @@ impl Watch {
                         .unwrap_or(0),
                 );
                 if let Some(told) = told {
+                    let (body, actions) = run_notification(run);
                     out.push(Ran {
                         title: row
                             .get("title")
@@ -219,6 +318,10 @@ impl Watch {
                             .unwrap_or("")
                             .to_string(),
                         told,
+                        schedule: id.to_string(),
+                        run: run_id.to_string(),
+                        body,
+                        actions,
                     });
                 }
             }
@@ -259,11 +362,73 @@ mod tests {
         })).collect::<Vec<_>>()})
     }
 
-    fn ran(id: &str, told: Told) -> Ran {
+    fn ran(id: &str, run: &str, told: Told) -> Ran {
         Ran {
             title: format!("Task {id}"),
             told,
+            schedule: id.into(),
+            run: run.into(),
+            body: None,
+            actions: vec![],
         }
+    }
+
+    #[test]
+    fn a_runs_own_notification_gives_its_first_lines_and_the_actions_the_app_can_do() {
+        let w = Watch::default();
+        let row = |run: Value| {
+            json!({"version": "v", "schedules": [{
+                "id": "s1", "title": "Waybread check", "notify": "matters", "failure_streak": 3,
+                "last_run": run,
+            }]})
+        };
+        w.look_schedules(&row(json!({"id": "r0", "status": "running"})));
+        let out = w.look_schedules(&row(json!({"id": "r0", "status": "failed", "notified": true,
+            "notification": {"title": "Waybread check", "body": "Failed 3 times\u{7} in a row. Pause it?",
+                "actions": ["open", "run_again", "pause", "unknown"],
+                "labels": {"open": "Otvoriť", "run_again": "Spustiť znova", "pause": ""}}})));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].told, Told::Pause);
+        assert_eq!(
+            (out[0].schedule.as_str(), out[0].run.as_str()),
+            ("s1", "r0")
+        );
+        assert_eq!(
+            out[0].body.as_deref(),
+            Some("Failed 3 times  in a row. Pause it?")
+        );
+        assert_eq!(
+            out[0].actions,
+            vec![
+                ("open".to_string(), "Otvoriť".to_string()),
+                ("run_again".to_string(), "Spustiť znova".to_string()),
+                ("pause".to_string(), "pause".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_notification_is_found_again_by_its_id() {
+        let notes = Notes::default();
+        let a = notes.add(Note::Chat("c1".into()));
+        let b = notes.add(Note::Run {
+            schedule: "s1".into(),
+            run: "r1".into(),
+        });
+        assert_ne!(a, b);
+        assert_eq!(notes.get(a), Some(Note::Chat("c1".into())));
+        assert_eq!(
+            notes.get(b),
+            Some(Note::Run {
+                schedule: "s1".into(),
+                run: "r1".into()
+            })
+        );
+        assert_eq!(notes.get(b + 1), None);
+        for _ in 0..NOTES_KEPT {
+            notes.add(Note::Chat("x".into()));
+        }
+        assert_eq!(notes.get(a), None);
     }
 
     #[test]
@@ -290,7 +455,10 @@ mod tests {
             ("c", "matters", 0, Some(("r4", "silent", false))),
             ("d", "never", 0, Some(("r5", "ok", false))),
         ]));
-        assert_eq!(out, vec![ran("a", Told::Result), ran("b", Told::Result)]);
+        assert_eq!(
+            out,
+            vec![ran("a", "r2", Told::Result), ran("b", "r3", Told::Result)]
+        );
         // The same list again (the server told a device meanwhile): not said twice.
         assert!(w
             .look_schedules(&schedules(&[("a", "matters", 0, Some(("r2", "ok", true)))]))
