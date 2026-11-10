@@ -267,6 +267,10 @@ async function boot() {
       showChat(id)
     },
     menu: (anchor, c) => chatMenu(anchor, c),
+    note: (text) => {
+      $("thread-note").textContent = text
+      $("thread-note").hidden = !text
+    },
   })
   initChat({
     status: () => status,

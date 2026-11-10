@@ -17,7 +17,7 @@ import { avatar, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubag
 import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton, treeChanged } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
-import { folderName, listed } from "./list.js"
+import { folderName, listed, folderTree, newFolder } from "./list.js"
 import { unarchive } from "./archived.js"
 import { isProgress, progressLine, progressTicks } from "./progress.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
@@ -1033,6 +1033,10 @@ export function chatMenu(anchor, chat) {
   const base = ctx.status()?.server
   const mayDelete = ctx.me()?.permissions?.["chat.delete"] !== false
   const items = [{ label: t("Rename…"), run: () => renameChat(chat) }]
+  if (!chat.archived) {
+    items.push({ label: chat.pinned ? t("Unpin chat") : t("Pin chat"), run: () => setChat(chat, { pinned: !chat.pinned }) })
+    items.push({ label: t("Move to folder…"), run: () => moveMenu(anchor, chat) })
+  }
   if (chat.kind === "agent" && chat.device_session_id) items.push({ label: t("Continue in a terminal…"), run: () => continueInTerminal(chat) })
   if (base) items.push({ label: t("Open in the web interface"), run: () => openLink(`${base}/chat/${encodeURIComponent(chat.id)}`) })
   items.push(null, chat.archived ? { label: t("Restore chat"), run: () => unarchiveChat(chat) } : { label: t("Archive chat"), run: () => archiveChat(chat) })
@@ -1066,6 +1070,34 @@ export async function continueInTerminal(chat) {
     copied: t("Copied"),
     close: t("Close"),
   })
+}
+
+/** Where a chat can go: no folder, any of the account's, or a new one. */
+function moveMenu(anchor, chat) {
+  const here = chat.folder_id || ""
+  menu(anchor, [
+    { label: t("No folder"), checked: !here, run: () => here && setChat(chat, { folder_id: null }) },
+    ...folderTree().map(({ folder, depth }) => ({ label: `${"\u2003".repeat(depth)}${folder.name}`, checked: folder.id === here, run: () => folder.id !== here && setChat(chat, { folder_id: folder.id }) })),
+    null,
+    {
+      label: t("New folder…"),
+      run: async () => {
+        const id = await newFolder()
+        if (id) setChat(chat, { folder_id: id })
+      },
+    },
+  ])
+}
+
+/** A change to a chat from its menu (pinned, its folder): the list drawn again from the server. */
+async function setChat(chat, body) {
+  try {
+    const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, body)
+    if (open?.chat?.id === chat.id && r?.chat) open.chat = r.chat
+    ctx.changed(r?.chat)
+  } catch (err) {
+    alertIn(why(err))
+  }
 }
 
 async function renameChat(chat) {

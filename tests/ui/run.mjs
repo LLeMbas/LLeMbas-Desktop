@@ -1094,6 +1094,112 @@ test("E5: at 390 px the Appearance group stays inside the window", async () => {
   assert.deepEqual(p.errors, [])
 })
 
+// F8: pinned chats and chat folders (fixture folders.json: Waybread, and Recipes inside it, folded).
+
+function f8(over = {}) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /folders": fixture("folders"),
+      "GET /chats": {
+        chats: [
+          chatRow({ id: "chat1", title: "Waybread", pinned: true }),
+          agentChat({ id: "chat2", title: "Tidy the build", folder_id: "fold1" }),
+          chatRow({ id: "chat3", title: "Seed cake", folder_id: "fold2" }),
+          chatRow({ id: "chat4", title: "Loose ends" }),
+        ],
+        more: false,
+      },
+      "PATCH /folders/fold2": { folder: { ...fixture("folders").folders[1], collapsed: false } },
+      "PATCH /chats/chat4": { chat: chatRow({ id: "chat4", title: "Loose ends", pinned: true }) },
+      "POST /folders": fixture("folder"),
+      "DELETE /folders/fold1": null,
+      ...over,
+    }),
+    streams: {},
+  }
+}
+
+const sideText = (p) => p.$$eval("#chat-list > li", (lis) => lis.map((li) => li.textContent.replace(/\s+/g, " ").trim()))
+
+test("F8: the sidebar: pinned chats first, then the folders, nested and folded as kept, then the rest", async () => {
+  const p = await page(f8())
+  await p.waitForSelector("#chat-list .folderrow")
+  const items = await sideText(p)
+  assert.equal(items[0], "Pinned chats")
+  assert.match(items[1], /Waybread/)
+  assert.match(items[2], /Waybread\s*2/, "the folder counts the chats inside, its folders' too")
+  assert.match(items[3], /Tidy the build/)
+  assert.match(items[4], /Recipes/)
+  assert.ok(!items.some((x) => /Seed cake/.test(x)), "a folded folder's chats are not shown")
+  assert.ok(items.some((x) => /Loose ends/.test(x)))
+  assert.equal(await p.getAttribute('.folderrow[data-folder="fold2"]', "aria-expanded"), "false")
+  await p.click('.folderrow[data-folder="fold2"]')
+  await p.waitForSelector('.chatrow[data-id="chat3"]')
+  const [folded] = await p.evaluate(() => window.__mock.api("PATCH", "/folders/fold2"))
+  assert.deepEqual(folded.args.body, { collapsed: false })
+  await shot(p, "f8-folders-1280")
+  // Searching: every match, flat.
+  await p.fill("#side-search", "seed")
+  assert.deepEqual((await sideText(p)).slice(1), ["Seed cake"])
+  assert.deepEqual(p.errors, [])
+})
+
+test("F8: a chat's menu pins it and moves it into a folder, or a new one", async () => {
+  const p = await page(f8())
+  await p.waitForSelector('.chatrow[data-id="chat4"]')
+  await p.click('.chatrow[data-id="chat4"]', { button: "right" })
+  await p.click(".menu .menu__item >> text=Pin chat")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat4").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat4")))[0].args.body, { pinned: true })
+  await p.click('.chatrow[data-id="chat4"]', { button: "right" })
+  await p.click(".menu .menu__item >> text=Move to folder…")
+  const labels = await p.$$eval(".menu .menu__item .menu__label", (l) => l.map((x) => x.textContent.trim()))
+  assert.deepEqual(labels, ["No folder", "Waybread", "Recipes", "New folder…"])
+  await p.click(".menu .menu__item >> text=Recipes")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat4").length === 2)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat4")))[1].args.body, { folder_id: "fold2" })
+  // A new one: named, made, and the chat moved into it.
+  await p.click('.chatrow[data-id="chat4"]', { button: "right" })
+  await p.click(".menu .menu__item >> text=Move to folder…")
+  await p.click(".menu .menu__item >> text=New folder…")
+  await p.fill("dialog[open] .dialog__input", "Lembas")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat4").length === 3)
+  const made = await p.evaluate(() => window.__mock.api("POST", "/folders"))
+  assert.deepEqual(made[0].args.body, { name: "Lembas" })
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat4")))[2].args.body, { folder_id: "fold1" })
+  assert.deepEqual(p.errors, [])
+})
+
+test("F8: a folder's menu renames it and deletes it, its chats kept; a refusal is said", async () => {
+  const p = await page(f8({ "PATCH /folders/fold1": { __error: { status: 403, detail: "You may not manage folders." } } }))
+  await p.waitForSelector('.folderrow[data-folder="fold1"]')
+  await p.click('.folderrow[data-folder="fold1"]', { button: "right" })
+  await p.click(".menu .menu__item >> text=Rename folder")
+  await p.fill("dialog[open] .dialog__input", "Bread")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForSelector("#thread-note:not([hidden])")
+  assert.match(await p.textContent("#thread-note"), /may not manage folders/)
+  await p.click('.list__folder:has([data-folder="fold1"]) .folderrow__more')
+  await p.click(".menu .menu__item >> text=Delete folder")
+  assert.match(await p.textContent("dialog[open]"), /Their chats stay/)
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("DELETE", "/folders/fold1").length === 1)
+  assert.equal(await p.evaluate(() => window.__mock.api("DELETE", "/chats").length), 0, "no chat deleted")
+  assert.deepEqual(p.errors, [])
+})
+
+test("F8: at 390 px the folders stay inside the sidebar", async () => {
+  const p = await page(f8(), { width: 390, height: 844 })
+  await p.evaluate(() => document.getElementById("side-toggle").click())
+  await p.waitForSelector('.folderrow[data-folder="fold1"]')
+  await p.waitForTimeout(400) // the sidebar slides in
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "f8-folders-390")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

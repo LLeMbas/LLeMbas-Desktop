@@ -431,6 +431,34 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
 .chatrow__state { width: var(--dot-size); height: var(--dot-size); border-radius: var(--radius-full); }
 .chatrow__state.is-busy { background: var(--accent); animation: pulse 1.4s var(--ease-in-out) infinite; }
 .chatrow__state.is-new { background: var(--leaf); }
+/* A chat folder's head: chevron · folder · name · count, and its own ⋯ beside it on one track. */
+.list__folder { display: grid; grid-template-columns: minmax(0, 1fr) var(--control-h-sm); align-items: center; }
+.folderrow {
+  display: grid;
+  grid-template-columns: 12px 16px minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--sp-2) 0 calc(var(--sp-2) + var(--depth, 0) * var(--sp-4));
+  text-align: left;
+  font: 600 var(--text-sm) / var(--leading-tight) var(--font-ui);
+  color: var(--ink-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+}
+.folderrow:hover { color: var(--ink); background: var(--surface-hover); }
+.folderrow__chev, .folderrow__icon { display: grid; place-items: center; color: var(--ink-faint); }
+.folderrow__chev .icon { width: 12px; height: 12px; }
+.folderrow__icon .icon { width: 14px; height: 14px; }
+.folderrow__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.folderrow__count { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
+.folderrow__more { display: grid; place-items: center; width: var(--control-h-sm); height: var(--control-h-sm); color: var(--ink-faint); background: transparent; border: 0; border-radius: var(--radius-lg); cursor: pointer; opacity: 0; }
+.list__folder:hover .folderrow__more, .folderrow__more:focus-visible { opacity: 1; }
+.folderrow__more:hover { color: var(--ink); background: var(--surface-hover); }
+@media (hover: none) { .folderrow__more { opacity: 1; } }
+.chatrow.is-filed { padding-left: calc(var(--sp-2) + var(--depth, 1) * var(--sp-4)); }
 @keyframes pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .chatrow__state.is-busy { animation: none; } }
 

@@ -20,6 +20,10 @@ All notable changes to LLeMbas Desktop. The format follows
   server says it, unless this computer's or another of the app's nine is chosen (kept in the app;
   the window opens again in it). The theme is the account's, and choosing one saves it there, so
   the web interface and the phone follow; on a server that cannot be told, it is kept in the app.
+- **Pinned chats and chat folders.** The sidebar lists the pinned chats first, then the account's
+  folders, nested and folded as the server keeps them, then the rest by day. A chat's menu pins
+  it and moves it into a folder or a new one; a folder's menu renames it, makes one inside it, or
+  deletes it (its chats stay, back in the list). The search line still lists every match.
 
 ### Fixed
 
