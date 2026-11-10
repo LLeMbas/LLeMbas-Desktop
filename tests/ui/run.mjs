@@ -1550,6 +1550,42 @@ test("J8: a scheduled run's notification opens its task, and a chat's opens the 
   assert.deepEqual(p.errors, [])
 })
 
+// K8: the release the server recommends (GET /apps), in Settings › About.
+
+async function aboutWith(version, apps) {
+  const p = await page({ status: status({ version }), routes: baseRoutes({ "GET /apps": apps }), streams: {} })
+  await p.click("#settings-btn")
+  await p.waitForFunction(() => window.__mock.api("GET", "/apps").length === 1)
+  await p.waitForTimeout(100)
+  return p
+}
+
+test("K8: a newer release the server recommends is offered in About, with its release page", async () => {
+  const p = await aboutWith("1.0.0", fixture("apps_stable"))
+  await p.waitForSelector("#set-about >> text=Your server recommends LLeMbas Desktop 1.0.1")
+  await p.click("#set-about .btn >> text=Open the release page")
+  const opened = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "open_external").map((c) => c.args.url))
+  assert.deepEqual(opened, ["https://github.com/LLeMbas/LLeMbas-Desktop/releases/tag/v1.0.1"])
+  await shot(p, "k8-about-1280")
+  assert.deepEqual(p.errors, [])
+})
+
+test("K8: nothing is offered that is not newer, a beta to a stable install, or a page elsewhere", async () => {
+  const beta = { apps: { desktop: { version: "1.1.0-beta.2", tag: "v1.1.0-beta.2", channel: "beta", page: "https://github.com/LLeMbas/LLeMbas-Desktop/releases/tag/v1.1.0-beta.2" } } }
+  for (const [mine, apps, shown] of [
+    ["1.0.1", fixture("apps_stable"), false],
+    ["1.0.0", beta, false],
+    ["1.0.0-beta.6", beta, true],
+    ["1.0.0", { apps: { desktop: { version: "1.0.2", page: "https://elsewhere.example/releases/tag/v1.0.2" } } }, false],
+    ["1.0.0", { __error: { status: 404, detail: "Not Found" } }, false],
+  ]) {
+    const p = await aboutWith(mine, apps)
+    assert.equal(await p.locator("#set-about >> text=Your server recommends").count(), shown ? 1 : 0, `${mine} ← ${JSON.stringify(apps).slice(0, 60)}`)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

@@ -49,6 +49,9 @@ All notable changes to LLeMbas Desktop. The format follows
   with Open and Run again (and Pause, when a task has failed three times in a row), labelled in
   the account's language. Open, or a click on the notification, opens the task; Run again and
   Pause do it without opening the window. A chat's notification, clicked, opens that chat.
+- **The release your server recommends.** Settings › About names the Desktop release that goes
+  with the server's version when it is newer than this one (a beta only to a beta install), with
+  a link to its release page.
 
 ### Fixed
 

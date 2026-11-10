@@ -520,6 +520,10 @@ KEYS = (
     "Draw",
     "Drawing… a picture can take a minute or two.",
     "The server's answer had no picture in it.",
+    # settings.js: the release the server recommends
+    "Your server recommends LLeMbas Desktop %(version)s",
+    "The release that goes with the server's version. This is %(current)s.",
+    "Open the release page",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -790,6 +794,9 @@ OWN: dict[str, dict[str, str]] = {
         "Draw": "Nakreslit",
         "Drawing… a picture can take a minute or two.": "Kreslím… obrázek může trvat minutu nebo dvě.",
         "The server's answer had no picture in it.": "V odpovědi serveru nebyl žádný obrázek.",
+        "Your server recommends LLeMbas Desktop %(version)s": "Váš server doporučuje LLeMbas Desktop %(version)s",
+        "The release that goes with the server's version. This is %(current)s.": "Vydání, které patří k verzi serveru. Toto je %(current)s.",
+        "Open the release page": "Otevřít stránku vydání",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -1055,6 +1062,9 @@ OWN: dict[str, dict[str, str]] = {
         "Draw": "Zeichnen",
         "Drawing… a picture can take a minute or two.": "Wird gezeichnet… ein Bild kann ein bis zwei Minuten dauern.",
         "The server's answer had no picture in it.": "Die Antwort des Servers enthielt kein Bild.",
+        "Your server recommends LLeMbas Desktop %(version)s": "Ihr Server empfiehlt LLeMbas Desktop %(version)s",
+        "The release that goes with the server's version. This is %(current)s.": "Die Version, die zur Version des Servers passt. Dies ist %(current)s.",
+        "Open the release page": "Release-Seite öffnen",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1320,6 +1330,9 @@ OWN: dict[str, dict[str, str]] = {
         "Draw": "Dibujar",
         "Drawing… a picture can take a minute or two.": "Dibujando… una imagen puede tardar uno o dos minutos.",
         "The server's answer had no picture in it.": "La respuesta del servidor no traía ninguna imagen.",
+        "Your server recommends LLeMbas Desktop %(version)s": "Su servidor recomienda LLeMbas Desktop %(version)s",
+        "The release that goes with the server's version. This is %(current)s.": "La versión que corresponde a la del servidor. Esta es %(current)s.",
+        "Open the release page": "Abrir la página de la versión",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1585,6 +1598,9 @@ OWN: dict[str, dict[str, str]] = {
         "Draw": "Dessiner",
         "Drawing… a picture can take a minute or two.": "Dessin en cours… une image peut prendre une minute ou deux.",
         "The server's answer had no picture in it.": "La réponse du serveur ne contenait aucune image.",
+        "Your server recommends LLeMbas Desktop %(version)s": "Votre serveur recommande LLeMbas Desktop %(version)s",
+        "The release that goes with the server's version. This is %(current)s.": "La version qui va avec celle du serveur. Celle-ci est la %(current)s.",
+        "Open the release page": "Ouvrir la page de la version",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1850,6 +1866,9 @@ OWN: dict[str, dict[str, str]] = {
         "Draw": "Rajzolás",
         "Drawing… a picture can take a minute or two.": "Rajzolás… egy kép egy-két percig is eltarthat.",
         "The server's answer had no picture in it.": "A szerver válaszában nem volt kép.",
+        "Your server recommends LLeMbas Desktop %(version)s": "A szervere a LLeMbas Desktop %(version)s verziót ajánlja",
+        "The release that goes with the server's version. This is %(current)s.": "A szerver verziójához tartozó kiadás. Ez a %(current)s.",
+        "Open the release page": "Kiadás oldalának megnyitása",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -2115,6 +2134,9 @@ OWN: dict[str, dict[str, str]] = {
         "Draw": "Disegna",
         "Drawing… a picture can take a minute or two.": "Disegno in corso… un’immagine può richiedere un minuto o due.",
         "The server's answer had no picture in it.": "La risposta del server non conteneva immagini.",
+        "Your server recommends LLeMbas Desktop %(version)s": "Il tuo server consiglia LLeMbas Desktop %(version)s",
+        "The release that goes with the server's version. This is %(current)s.": "La versione che va con quella del server. Questa è la %(current)s.",
+        "Open the release page": "Apri la pagina della versione",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2380,6 +2402,9 @@ OWN: dict[str, dict[str, str]] = {
         "Draw": "Narysuj",
         "Drawing… a picture can take a minute or two.": "Rysowanie… obraz może zająć minutę lub dwie.",
         "The server's answer had no picture in it.": "W odpowiedzi serwera nie było obrazu.",
+        "Your server recommends LLeMbas Desktop %(version)s": "Twój serwer zaleca LLeMbas Desktop %(version)s",
+        "The release that goes with the server's version. This is %(current)s.": "Wydanie pasujące do wersji serwera. To jest %(current)s.",
+        "Open the release page": "Otwórz stronę wydania",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2645,6 +2670,9 @@ OWN: dict[str, dict[str, str]] = {
         "Draw": "Nakresliť",
         "Drawing… a picture can take a minute or two.": "Kreslím… obrázok môže trvať minútu alebo dve.",
         "The server's answer had no picture in it.": "V odpovedi servera nebol žiadny obrázok.",
+        "Your server recommends LLeMbas Desktop %(version)s": "Váš server odporúča LLeMbas Desktop %(version)s",
+        "The release that goes with the server's version. This is %(current)s.": "Vydanie, ktoré patrí k verzii servera. Toto je %(current)s.",
+        "Open the release page": "Otvoriť stránku vydania",
     },
 }
 

@@ -4,7 +4,7 @@
 // this release.
 
 import { $, h, clear, icon, ICONS } from "./dom.js"
-import { invoke, listen } from "./bridge.js"
+import { invoke, listen, get, openLink } from "./bridge.js"
 import { agentBlock, onAgentChange, link } from "./agent.js"
 import { localTheme, chooseTheme, accountTheme, accountThemes, chosenLanguage, chooseLanguage, accountLanguage } from "./look.js"
 import { why } from "./bridge.js"
@@ -136,6 +136,7 @@ export function renderSettings(s) {
     ),
   )
 
+  const advised = recommendation(s)
   box.append(
     section(
       "about",
@@ -145,8 +146,64 @@ export function renderSettings(s) {
         s.update ? t("LLeMbas %(version)s is available (this is %(current)s)", { version: s.update, current: s.version }) : "",
         h("button", { type: "button", class: "btn btn--sm", text: s.update ? t("Install LLeMbas %(version)s…", { version: s.update }) : t("Check for updates…"), onclick: () => invoke("update_app") }),
       ),
+      advised
+        ? line(
+            t("Your server recommends LLeMbas Desktop %(version)s", { version: advised.version }),
+            t("The release that goes with the server's version. This is %(current)s.", { current: s.version }),
+            h("button", { type: "button", class: "btn btn--sm", text: t("Open the release page"), onclick: () => openLink(advised.page) }),
+          )
+        : null,
     ),
   )
+  if (s.account && appsFor !== s.server) askApps(s.server)
+}
+
+// --- The release the server recommends (GET /apps) --------------------------------------------------
+//
+//   GET /apps  { server: { version, channel }, apps: { desktop: { version, tag, channel, page } | null } }
+//
+// Shown when it is newer than this app. A stable install is never offered a beta; a beta install
+// may be. Only the project's own release pages are opened.
+
+let apps = null // the server's recommendation; null: none (an older server, or nothing newer)
+let appsFor = null // the server it was asked of
+const RELEASES = "https://github.com/LLeMbas/LLeMbas-Desktop/releases/tag/"
+const VERSION = /^v?(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$/
+
+/** A sortable key for `X.Y.Z` / `X.Y.Z-beta.N` (a release above its betas); null for anything else. */
+export function versionKey(text) {
+  const m = VERSION.exec(String(text || "").trim())
+  return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? Infinity : +m[4]] : null
+}
+
+function newer(a, b) {
+  for (let i = 0; i < 4; i++) if (a[i] !== b[i]) return a[i] > b[i]
+  return false
+}
+
+async function askApps(server) {
+  appsFor = server
+  apps = null
+  try {
+    const r = (await get("/apps"))?.apps?.desktop || null
+    if (appsFor === server) apps = r
+  } catch {
+    apps = null
+  }
+  if (!$("settings").hidden) renderSettings(current())
+}
+
+/** The recommended release, where it is newer than this one and on a channel this install takes. */
+function recommendation(s) {
+  if (!apps) return null
+  const mine = versionKey(s.version)
+  const theirs = versionKey(apps.version)
+  if (!mine || !theirs) return null
+  if (theirs[3] !== Infinity && mine[3] === Infinity) return null
+  if (!newer(theirs, mine)) return null
+  const page = String(apps.page || "")
+  if (!page.startsWith(RELEASES) || !/^[A-Za-z0-9._-]+$/.test(page.slice(RELEASES.length))) return null
+  return { version: apps.version, page }
 }
 
 let lookError = ""
