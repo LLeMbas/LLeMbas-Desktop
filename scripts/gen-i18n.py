@@ -401,6 +401,42 @@ KEYS = (
     "The terminal needs a newer LLeMbas server. Ask its administrator to update it.",
 )
 
+# The progress line's sentences (ui/js/progress.js; harness spec 3.4.0, `loop.json`
+# progress.texts, its `{{field}}` written as `%(field)s`). Shared with every client, so they
+# are the server's to translate and never in OWN: until its catalogues have one, that sentence
+# shows in English and this script says how many are waiting -- not a failure.
+SERVER_PENDING = (
+    "Queued",
+    "Queued: %(ahead)s ahead",
+    "Waiting for %(model)s: %(reason)s",
+    "Loading %(model)s",
+    "Reading the prompt: %(done)s / %(total)s tokens (%(percent)s%%)",
+    "Reading the prompt",
+    "Thinking",
+    "Writing: %(rate)s tok/s",
+    "Writing",
+    "Running %(tool)s: %(what)s",
+    "Running %(tool)s",
+    "Waiting for you: %(what)s",
+    "Waiting for subagents: %(running)s running",
+    "Compacting the conversation",
+    "Retrying in %(in)s s: %(reason)s",
+    "Stopped",
+    "Stopped: %(reason)s",
+    "Failed: %(reason)s",
+    "it serves one request at a time and is answering another",
+    "all its slots are in use",
+    "its server holds another model now",
+    "allow %(tool)s?",
+    "an approval",
+    "a question",
+    "the plan",
+    "by you",
+    "step limit",
+    "budget",
+    "%(text)s · %(elapsed)s",
+)
+
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
 # server's catalogues keep them ("Režim Edit", "Modus Edit"); "Local" is the server's word for
 # the device, as the server's catalogue has it.
@@ -2218,6 +2254,20 @@ def main() -> None:
         ours = OWN.get(lang, {})
         table: dict[str, str] = {}
         from_server = 0
+        waiting = 0
+        for key in SERVER_PENDING:
+            if key in KEYS:
+                continue
+            text = theirs.get(key)
+            if not text:
+                waiting += 1
+            elif set(FIELD.findall(text)) != set(FIELD.findall(key)):
+                print(f"gen-i18n: {lang}: the fields of {text!r} do not match {key!r}", file=sys.stderr)
+                problems += 1
+            else:
+                table[key] = text
+        if waiting:
+            print(f"gen-i18n: {lang}: {waiting} progress sentences wait for the server's catalogue (English until then)")
         for key in KEYS:
             text = theirs.get(key)
             if text:
@@ -2238,7 +2288,7 @@ def main() -> None:
                 print(f"gen-i18n: {lang}: OWN has {key!r}, which no page uses", file=sys.stderr)
                 problems += 1
         catalogue[lang] = table
-        print(f"gen-i18n: {lang}: {len(table)} of {len(KEYS)} ({from_server} from the server)")
+        print(f"gen-i18n: {lang}: {len(table)} sentences, {from_server} of the page's {len(KEYS)} from the server")
 
     body = json.dumps(catalogue, ensure_ascii=False, indent=2, sort_keys=True)
     out = (

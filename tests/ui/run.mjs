@@ -615,6 +615,49 @@ test("B3: at 1280 px the terminal sits beside the chat, which keeps its column",
   assert.deepEqual(p.errors, [])
 })
 
+// --- B1: the progress line ---------------------------------------------------------------------
+//
+// Harness spec 3.4.0 (harness/progress.md in the LLeMbas CLI): one `progress` object, drawn by
+// every client as `{{text}} · {{elapsed}}`. tests/ui/conformance/progress.json is a copy of the
+// spec's conformance/progress.json (3.4.0); every case must come out word for word.
+
+test("B1: every conformance case of the spec draws the same text and line", async () => {
+  const { cases } = JSON.parse(readFileSync(join(HERE, "conformance", "progress.json"), "utf8"))
+  const p = await page(b3())
+  const got = await p.evaluate(async (cs) => {
+    const m = await import("/js/progress.js")
+    return cs.map((c) => ({ text: m.progressText(c.progress, c.now), line: m.progressLine(c.progress, c.now) }))
+  }, cases)
+  cases.forEach((c, i) => assert.deepEqual(got[i], c.expect, c.about))
+  assert.deepEqual(p.errors, [])
+})
+
+test("B1: a reply being written draws the stream's progress, its clock moving, and the status text without one", async () => {
+  const p = await page(agentChatOpen([["status", { text: "Writing…" }]]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live .msg__status")
+  await p.evaluate((path) => {
+    window.__mock.frame(path, "status", { text: "Running bake --slow", progress: { phase: "running_tool", since: Date.now() - 65000, tool: "bash", what: "bake --slow" } })
+  }, STREAM2)
+  const line = () => p.textContent(".msg.is-live .msg__status")
+  assert.equal(await line(), "Running bash: bake --slow · 1m 05s")
+  assert.equal(await p.getAttribute(".msg.is-live .msg__status", "data-phase"), "running_tool")
+  await p.waitForFunction(() => document.querySelector(".msg.is-live .msg__status").textContent.endsWith("1m 06s"), null, { timeout: 2500 })
+  // A data-only frame with progress (the ask frame carries it too): the line follows.
+  await p.evaluate((path) => window.__mock.frame(path, "ask", { cards: [], progress: { phase: "waiting_for_person", since: Date.now(), what: "approval", tool: "bash" } }), STREAM2)
+  assert.equal(await line(), "Waiting for you: allow bash? · 0s")
+  // Nothing running: `progress: null`, and the status text is drawn again.
+  await p.evaluate((path) => window.__mock.frame(path, "status", { text: "Writing…", progress: null }), STREAM2)
+  assert.equal(await line(), "Writing…")
+  // An older server sends no progress at all: its status text, as before.
+  await p.evaluate((path) => window.__mock.frame(path, "status", { text: "Running bake --slow" }), STREAM2)
+  assert.equal(await line(), "Running bake --slow")
+  // Stopped and failed have no clock.
+  await p.evaluate((path) => window.__mock.frame(path, "status", { text: "Stopped.", progress: { phase: "stopped", since: Date.now() - 4000, reason: "person" } }), STREAM2)
+  assert.equal(await line(), "Stopped: by you")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

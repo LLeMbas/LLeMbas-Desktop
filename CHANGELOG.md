@@ -34,6 +34,13 @@ All notable changes to LLeMbas Desktop. The format follows
   closing either keeps the shell. Offered where the computer allows a terminal (needs the server's
   2.0.0-beta.8). The app opens the connection itself, with its sign-in: the page never holds it.
   "Continue in a terminal" is now in the chat's menu only.
+- **What a reply is doing, the same way everywhere.** The line under a reply being written now
+  says it in the words every LLeMbas client uses (harness spec 3.4.0): queued, waiting for a
+  model and why, loading it, reading the prompt (with how far), thinking, writing (with its
+  speed), running a tool and what it runs, waiting for you, waiting for subagents, compacting,
+  retrying (counting down), stopped or failed -- each with how long it has lasted, kept moving
+  every second. From a server that sends no such line (before 2.0.0-beta.8), the app shows the
+  server's own words as before. Translations come with the server's.
 - `tests/ui/`: the page under a headless browser against a stand-in for the app's bridge, with
   the server's answers as a table (`node tests/ui/run.mjs`, needs Playwright and a Chromium).
 

@@ -18,6 +18,7 @@ import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
 import { folderName } from "./list.js"
+import { isProgress, progressLine, progressTicks } from "./progress.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
@@ -351,6 +352,24 @@ class Live {
     this.el = h("article", { class: "msg msg--assistant is-live", dataset: { id: messageId } }, this.steps, this.thinking, this.tail, this.jobs, this.status)
     this.done = false
     this.handle = null
+    this.progress = null // the stream's `progress` (spec 3.4.0), drawn in place of `status` when it comes
+    this.said = "" // the last `status` text, for a server that sends no progress
+    this.clock = 0
+  }
+
+  /** The status line: the progress object's line where the server sends one, else its text. */
+  drawStatus() {
+    const p = this.progress
+    this.status.textContent = isProgress(p) ? progressLine(p) : this.said || t("Writing…")
+    this.status.dataset.phase = isProgress(p) ? p.phase : ""
+    const ticks = progressTicks(p)
+    if (ticks && !this.clock) this.clock = setInterval(() => (this.done ? this.stopClock() : this.drawStatus()), 1000)
+    else if (!ticks) this.stopClock()
+  }
+
+  stopClock() {
+    clearInterval(this.clock)
+    this.clock = 0
   }
 
   async start() {
@@ -366,11 +385,18 @@ class Live {
 
   stop() {
     this.done = true
+    this.stopClock()
     this.handle?.close()
   }
 
   frame(event, data) {
     if (this.done) return
+    // Any frame that carries `progress` (the status frame does, from server 2.0.0-beta.8 on):
+    // the object, or null for nothing running -- then the status text again.
+    if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "progress")) {
+      this.progress = isProgress(data.progress) ? data.progress : null
+      if (event !== "status") this.drawStatus()
+    }
     switch (event) {
       case "steps":
         renderSteps(this.steps, data.steps || [], this.chat)
@@ -380,7 +406,8 @@ class Live {
         this.tailed(data)
         break
       case "status":
-        this.status.textContent = data.text || t("Writing…")
+        this.said = data.text || ""
+        this.drawStatus()
         break
       case "ask":
         renderCards(this.chat, data.cards || [])
@@ -399,6 +426,7 @@ class Live {
         break
       case "done":
         this.done = true
+        this.stopClock()
         this.el.replaceWith(assistantMessage(data.message, this.chat))
         renderCards(this.chat, [])
         if (data.chat?.title) setTitle(data.chat.title)
@@ -424,6 +452,7 @@ class Live {
   end(err) {
     if (this.done) return
     this.done = true
+    this.stopClock()
     if (open?.live === this) open.live = null
     setRunning(false)
     if (err) {
