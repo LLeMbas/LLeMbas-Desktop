@@ -17,7 +17,7 @@ import { avatar, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubag
 import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton, treeChanged } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
-import { folderName } from "./list.js"
+import { folderName, listed } from "./list.js"
 import { unarchive } from "./archived.js"
 import { isProgress, progressLine, progressTicks } from "./progress.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
@@ -42,10 +42,44 @@ function deviceOf(id) {
   return (ctx.devices?.() || []).find((d) => d.id === id) || null
 }
 
-/** The device a new agent chat goes to: this computer's, preferring the one linked right now. */
-function draftDevice() {
+/** This computer's device: the one linked right now, else the last one it was. */
+function hereDevice() {
   const mine = ctx.thisDevices()
   return mine.find((id) => deviceOf(id)) || mine[0] || ""
+}
+
+/**
+ * The device a new agent chat goes to: the one chosen on its chip while it is still linked, else
+ * this computer's.
+ */
+function draftDevice() {
+  if (draft?.device && deviceOf(draft.device)) return draft.device
+  return hereDevice()
+}
+
+/** Whether the new agent chat works here (the agent built into this app) or on another device. */
+function draftHere() {
+  const d = draftDevice()
+  return !d || ctx.thisDevices().includes(d)
+}
+
+/** The other linked devices of this account: where else a new agent chat can work. */
+function otherDevices() {
+  const mine = ctx.thisDevices()
+  return (ctx.devices?.() || []).filter((d) => !mine.includes(d.id))
+}
+
+/**
+ * The folders an agent chat on another device has worked in: the sidebar's agent chats there,
+ * newest first. This app cannot browse another computer; these and a typed path are the choice.
+ */
+function knownFolders(device) {
+  const out = []
+  for (const c of listed()) {
+    const dir = c.kind === "agent" && c.device?.token_id === device ? c.device.directory : ""
+    if (dir && !out.includes(dir)) out.push(dir)
+  }
+  return out.slice(0, 8)
 }
 
 /**
@@ -58,7 +92,7 @@ function terminalTarget() {
     if (draft.kind !== "agent" || !draft.dir) return null
     const device = deviceOf(draftDevice())
     if (!device?.terminal) return null
-    return { device: device.id, directory: draft.dir, name: device.name || t("This computer") }
+    return { device: device.id, directory: draft.dir, name: device.name || (draftHere() ? t("This computer") : t("Another device")) }
   }
   const chat = open?.chat
   if (chat?.kind !== "agent" || !chat.device) return null
@@ -839,6 +873,51 @@ function folderChip(roots, value, onChange) {
   })
 }
 
+/**
+ * Which computer a new agent chat works on: this one (the agent built into this app), or another
+ * linked device of the account, as `GET /devices` lists them. Shown only where there is another.
+ */
+function deviceChip(others) {
+  const here = draftHere()
+  const current = deviceOf(draftDevice())
+  const choose = (id) => {
+    if (id === draftDevice()) return
+    draft.device = id
+    const elsewhere = !ctx.thisDevices().includes(id)
+    draft.dir = elsewhere ? knownFolders(id)[0] || "" : ""
+    renderChips()
+    renderHello()
+    renderNotice()
+  }
+  const items = [{ label: t("This computer"), hint: ctx.status()?.host || "", checked: here, run: () => choose(hereDevice() || "") }]
+  for (const d of others) items.push({ label: d.name || d.host || d.id, hint: [d.host, d.platform].filter(Boolean).join(" · "), checked: !here && current?.id === d.id, run: () => choose(d.id) })
+  const label = here ? t("This computer") : current?.name || current?.host || t("Another device")
+  const b = chip({ ico: ICONS.terminal, label, title: `${t("Computer")}: ${label}`, cls: "cchip--device", onclick: (e) => menu(e.currentTarget, items) })
+  return b
+}
+
+/** The folder of a new agent chat on another device: one it has worked in, or one typed. */
+function elsewhereFolderChip(device, value, onChange) {
+  const type = async () => {
+    const dir = await ask({ title: t("Folder on %(device)s", { device: deviceOf(device)?.name || t("Another device") }), text: t("The folder's full path on that computer. Its agent opens only folders it has been given."), value: value || "", ok: t("Choose"), cancel: t("Cancel") })
+    if (dir) onChange(dir)
+  }
+  const known = knownFolders(device)
+  if (!value && !known.length) return chip({ ico: ICONS.folder, label: t("Choose a folder…"), menuish: false, cls: "is-warn", onclick: type })
+  return chip({
+    ico: ICONS.folder,
+    label: value ? folderName(value) : t("Choose a folder…"),
+    title: value ? `${t("Folder")}: ${value}` : "",
+    cls: value ? "" : "is-warn",
+    onclick: (e) =>
+      menu(e.currentTarget, [
+        ...known.map((r) => ({ label: folderName(r), hint: r, checked: r === value, run: () => r !== value && onChange(r) })),
+        known.length ? null : undefined,
+        { label: t("Type a folder…"), run: type },
+      ].filter((x) => x !== undefined)),
+  })
+}
+
 let chipsDrawn = 0 // which drawing is the latest: an older one's late answers are dropped
 
 /** The chips for what the composer is writing to: a new chat (`draft`) or the open chat. */
@@ -852,9 +931,15 @@ async function renderChips() {
     const model = models.find((m) => m.id === draft.model)
     const parts = []
     if (draft.kind === "agent") {
-      const roots = s?.remote?.enabled ? s.remote.roots : []
-      if (!roots.includes(draft.dir)) draft.dir = roots[0] || ""
-      parts.push(folderChip(roots, draft.dir, (d) => ((draft.dir = d), renderChips())))
+      const others = otherDevices()
+      if (others.length) parts.push(deviceChip(others))
+      if (draftHere()) {
+        const roots = s?.remote?.enabled ? s.remote.roots : []
+        if (!roots.includes(draft.dir)) draft.dir = roots[0] || ""
+        parts.push(folderChip(roots, draft.dir, (d) => ((draft.dir = d), renderChips())))
+      } else {
+        parts.push(elsewhereFolderChip(draftDevice(), draft.dir, (d) => ((draft.dir = d), renderChips())))
+      }
       parts.push(modeChip(draft.mode, (m) => ((draft.mode = m), renderChips())))
     }
     const shell = terminalTarget()
@@ -923,7 +1008,7 @@ async function renderChips() {
 function renderNotice() {
   const box = $("link-notice")
   const s = ctx.status()
-  const wants = draft ? draft.kind === "agent" : open?.chat?.kind === "agent" && onThisComputer(open.chat)
+  const wants = draft ? draft.kind === "agent" && draftHere() : open?.chat?.kind === "agent" && onThisComputer(open.chat)
   const show = !!s && wants && !agentReady(s) && agentState(s).tone !== "busy"
   box.hidden = !show
   if (show) box.replaceChildren(agentBlock(s, { compact: !draft }))
@@ -1128,7 +1213,7 @@ export function closeChat() {
 
 // --- A new chat ------------------------------------------------------------------------------------
 
-let draft = null // { kind, dir, mode, model, effort, agents } while a new chat is being written
+let draft = null // { kind, device, dir, mode, model, effort, agents } while a new chat is being written
 let lastKind = "agent"
 
 /** The kind a new chat starts as: the last one chosen (an agent chat, at first). */
@@ -1190,7 +1275,9 @@ function renderHello() {
     h(
       "p",
       { class: "hello__sub" },
-      kind === "agent"
+      kind === "agent" && !draftHere()
+        ? t("An agent chat works in a folder on %(device)s, through the LLeMbas agent there.", { device: deviceOf(draftDevice())?.name || t("Another device") })
+        : kind === "agent"
         ? t("An agent chat works in a folder on this computer, through the agent built into this app.")
         : t("A chat on %(server)s, with your account's models and files.", { server: server || t("Server") }),
     ),
@@ -1206,7 +1293,7 @@ export function newChat(kind) {
   const models = ctx.models()
   const start = models.find((m) => m.default) || models[0]
   lastKind = kind || lastKind
-  draft = { kind: lastKind, dir: "", mode: "edit", model: start?.id || "", effort: levelsOf(start).start, agents: null }
+  draft = { kind: lastKind, device: "", dir: "", mode: "edit", model: start?.id || "", effort: levelsOf(start).start, agents: null }
   clear($("messages"))
   renderCards({ id: "" }, [])
   alertIn("")
@@ -1233,11 +1320,16 @@ async function createChat(text, attachments) {
   if (agents && (agents.min || agents.max)) body.agents = agents
   if (draft.kind === "agent") {
     const device = draftDevice()
-    if (!device || !agentReady(ctx.status())) {
-      renderNotice()
-      throw { detail: agentState(ctx.status()).sentence }
+    if (draftHere()) {
+      if (!device || !agentReady(ctx.status())) {
+        renderNotice()
+        throw { detail: agentState(ctx.status()).sentence }
+      }
+      if (!draft.dir) throw { detail: t("No folder yet: add one under Settings, Project folders.") }
+    } else {
+      if (!deviceOf(device)) throw { detail: t("This device is not linked right now.") }
+      if (!draft.dir) throw { detail: t("Choose a folder first.") }
     }
-    if (!draft.dir) throw { detail: t("No folder yet: add one under Settings, Project folders.") }
     Object.assign(body, { kind: "agent", device, directory: draft.dir, mode: draft.mode || "edit" })
   }
   const r = await post("/chats", body)

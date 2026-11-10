@@ -12,6 +12,10 @@ All notable changes to LLeMbas Desktop. The format follows
   found again in the app. Archived, under Files in the sidebar, lists them newest first; each opens
   as any chat does, goes back into the sidebar with Restore chat, or is deleted. An archived chat
   that is open says so in its header, with Restore chat beside it and in its menu.
+- **An agent chat on another computer.** A new agent chat could only work on this computer. Where
+  the account has another computer linked, a chip before the folder chooses it (this computer is
+  the default). Its folder is one its agent chats have worked in, or a path typed in; the Terminal
+  before the first message opens there too.
 
 ## [1.0.0-beta.6] — 2026-11-10
 

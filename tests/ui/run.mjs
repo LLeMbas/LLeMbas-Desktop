@@ -887,6 +887,94 @@ test("D2: at 390 px the archived page stays inside the window, its buttons reach
   assert.deepEqual(p.errors, [])
 })
 
+// D4: a new agent chat on another linked computer. `GET /devices` lists this one (its host is the
+// app's own) and another; folders on the other come from its agent chats in the sidebar, or typed.
+
+const STUDIO = { id: "token9", name: "studio", host: "studio", platform: "linux", terminal: true }
+
+function d4(over = {}) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /devices": { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true }, STUDIO] },
+      "GET /chats": { chats: [chatRow(), agentChat(), agentChat({ id: "chat7", title: "Site tweaks", running: false, device: { token_id: "token9", directory: "/srv/site" } })], more: false },
+      "POST /chats": { chat: agentChat({ id: "chat8", running: false, device: { token_id: "token9", directory: "/srv/site" } }), message: userMessage("m9", "Check the logs"), reply: null },
+      ...over,
+    }),
+    streams: {},
+    terminal: [READY, ["output", "dev@studio:/srv/site$ "]],
+  }
+}
+
+async function pickDevice(p, name) {
+  await p.click("#composer-chips .cchip--device")
+  await p.locator(".menu .menu__item", { hasText: name }).first().click()
+}
+
+test("D4: a new agent chat defaults to this computer and can be sent to another linked one, in a folder it knows", async () => {
+  const p = await page(d4())
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await p.waitForSelector("#composer-chips .cchip--device")
+  assert.match(await p.textContent("#composer-chips .cchip--device"), /This computer/)
+  await pickDevice(p, "studio")
+  await p.waitForFunction(() => /studio/.test(document.querySelector("#composer-chips .cchip--device")?.textContent || ""))
+  assert.match(await p.textContent("#new-chat .hello__sub"), /studio/, "the greeting names the computer")
+  assert.match(await p.textContent("#composer-chips"), /site/, "the folder its agent chats work in")
+  assert.ok(await p.isHidden("#link-notice"), "this computer's agent is not in the way")
+  await shot(p, "d4-device-1280")
+  // The Terminal opens on that computer, in that folder, before the first message.
+  await p.click("#composer-chips .cchip--terminal")
+  await p.waitForFunction(() => window.__mock.terminals().length === 1)
+  const [shell] = await p.evaluate(() => window.__mock.terminals())
+  assert.deepEqual(shell.target, { chat: null, device: "token9", directory: "/srv/site" })
+  await p.fill("#composer-text", "Check the logs")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  const [made] = await p.evaluate(() => window.__mock.api("POST", "/chats"))
+  assert.equal(made.args.body.kind, "agent")
+  assert.equal(made.args.body.device, "token9")
+  assert.equal(made.args.body.directory, "/srv/site")
+  assert.deepEqual(p.errors, [])
+})
+
+test("D4: on a computer with no known folder the path is typed; back to this computer gives its own folders", async () => {
+  const p = await page(d4({ "GET /chats": { chats: [chatRow(), agentChat()], more: false } }))
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await pickDevice(p, "studio")
+  await p.waitForSelector("#composer-chips .cchip.is-warn")
+  await p.fill("#composer-text", "Hello")
+  await p.click("#send")
+  await p.waitForSelector("#thread-note:not([hidden])")
+  assert.equal(await p.evaluate(() => window.__mock.api("POST", "/chats").length), 0, "nothing sent without a folder")
+  await p.click("#composer-chips .cchip.is-warn")
+  await p.waitForSelector("dialog[open] .dialog__input")
+  await p.fill("dialog[open] .dialog__input", "/home/dev/other")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => /other/.test(document.querySelector("#composer-chips").textContent))
+  await pickDevice(p, "This computer")
+  await p.waitForFunction(() => /project/.test(document.querySelector("#composer-chips").textContent))
+  assert.deepEqual(p.errors, [])
+})
+
+test("D4: with no other computer linked there is no choice to make; at 390 px the chips stay inside", async () => {
+  let p = await page(b3())
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await p.waitForSelector("#composer-chips .cchip")
+  assert.equal(await p.locator("#composer-chips .cchip--device").count(), 0)
+  await p.context().close()
+  p = await page(d4(), { width: 390, height: 844 })
+  await p.evaluate(() => document.getElementById("new-chat-btn").click())
+  await p.click(".kind__tab >> text=Agent")
+  await pickDevice(p, "studio")
+  await p.waitForFunction(() => /studio/.test(document.querySelector("#composer-chips .cchip--device")?.textContent || ""))
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "d4-device-390")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""
@@ -900,6 +988,8 @@ for (const { name, fn } of tests) {
   } catch (err) {
     failed++
     console.log(`FAIL ${name}\n     ${String(err?.stack || err).split("\n").slice(0, 6).join("\n     ")}`)
+    // On GitHub Actions, also as an annotation: readable without the job's log.
+    if (process.env.GITHUB_ACTIONS) console.log(`::error title=tests/ui::${`${name}: ${String(err?.message || err)}`.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").slice(0, 900)}`)
   }
 }
 await browser.close()
