@@ -14,7 +14,7 @@ import { initExplorer, showLocal, showFilesTab } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
 import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer } from "./chat.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
-import { applyTheme, noteAccountTheme } from "./look.js"
+import { applyTheme, noteMe } from "./look.js"
 import { initAttach, allowAttach } from "./attach.js"
 import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
@@ -92,7 +92,7 @@ async function startApp() {
   started = true
   try {
     me = await get("/me")
-    noteAccountTheme(me.theme)
+    noteMe(me)
   } catch (err) {
     $("thread-note").textContent = why(err)
     $("thread-note").hidden = false

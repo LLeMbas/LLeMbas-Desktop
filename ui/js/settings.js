@@ -6,7 +6,8 @@
 import { $, h, clear, icon, ICONS } from "./dom.js"
 import { invoke, listen } from "./bridge.js"
 import { agentBlock, onAgentChange, link } from "./agent.js"
-import { chosenTheme, chooseTheme, accountTheme, chosenLanguage, chooseLanguage } from "./look.js"
+import { localTheme, chooseTheme, accountTheme, accountThemes, chosenLanguage, chooseLanguage, accountLanguage } from "./look.js"
+import { why } from "./bridge.js"
 
 let folderError = ""
 let current = () => null
@@ -148,27 +149,61 @@ export function renderSettings(s) {
   )
 }
 
-/** The language and the theme: this app's choice over the system's language and the account's theme. */
+let lookError = ""
+
+/**
+ * The language and the theme. The language: the account's (the default), this computer's, or one
+ * the app has, kept here. The theme: the account's, saved to it; kept here where the server
+ * cannot be told.
+ */
 function lookSection() {
   const named = (code) => LEMBAS_LANGS[code] || code
+  const account = accountLanguage()
+  const languages = [
+    ["", t("The account's (%(language)s)", { language: named(account || LEMBAS_SYSTEM_LANG) })],
+    ["system", t("This computer's (%(language)s)", { language: named(LEMBAS_SYSTEM_LANG) })],
+    ...Object.keys(LEMBAS_LANGS).map((code) => [code, named(code)]),
+  ]
   const language = h(
     "select",
     { id: "set-language", "aria-label": t("Language"), onchange: (e) => chooseLanguage(e.target.value) },
-    [["", t("This computer's (%(language)s)", { language: named(LEMBAS_SYSTEM_LANG) })], ...Object.keys(LEMBAS_LANGS).map((code) => [code, named(code)])].map(([v, label]) =>
-      h("option", { value: v, text: label, selected: chosenLanguage() === v, lang: v || undefined }),
-    ),
+    languages.map(([v, label]) => h("option", { value: v, text: label, selected: chosenLanguage() === v, lang: v && v !== "system" ? v : undefined })),
   )
-  const label = (name) => `${name === "shire" ? "Shire" : "Moria"} — ${name === "shire" ? t("light") : t("dark")}`
+  const scheme = (s) => (s === "light" ? t("light") : t("dark"))
+  const offered = accountThemes()
+  const themes = offered
+    ? offered.map((th) => [th.id, `${th.label || th.id} — ${scheme(th.scheme)}`])
+    : [
+        ["", t("The account's (%(theme)s)", { theme: accountTheme() === "shire" ? `Shire — ${t("light")}` : `Moria — ${t("dark")}` })],
+        ["moria", `Moria — ${t("dark")}`],
+        ["shire", `Shire — ${t("light")}`],
+      ]
+  const chosen = offered ? accountTheme() : localTheme()
   const theme = h(
     "select",
-    { id: "set-theme", "aria-label": t("Theme"), onchange: (e) => chooseTheme(e.target.value) },
-    [["", t("The account's (%(theme)s)", { theme: label(accountTheme()) })], ["moria", label("moria")], ["shire", label("shire")]].map(([v, text]) => h("option", { value: v, text, selected: chosenTheme() === v })),
+    {
+      id: "set-theme",
+      "aria-label": t("Theme"),
+      onchange: async (e) => {
+        const el = e.target
+        el.disabled = true
+        try {
+          await chooseTheme(el.value)
+          lookError = ""
+        } catch (err) {
+          lookError = why(err)
+        }
+        renderSettings(current())
+      },
+    },
+    themes.map(([v, text]) => h("option", { value: v, text, selected: chosen === v })),
   )
   return section(
     "look",
     t("Appearance"),
     line(t("Language"), `${t("The interface only. Models answer in the language you write to them in, whatever this says.")} ${t("Kept in this app on this computer. The window opens again in the language chosen.")}`, language),
-    line(t("Theme"), t("Kept in this app on this computer; the account's theme stays as it is."), theme),
+    line(t("Theme"), offered ? t("Saved to your account: the web interface and the phone follow it too.") : t("Kept in this app on this computer; the account's theme stays as it is."), theme),
+    lookError ? h("p", { class: "status is-error", role: "alert", text: lookError }) : null,
   )
 }
 

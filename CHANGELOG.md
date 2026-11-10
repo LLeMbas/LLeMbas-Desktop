@@ -16,9 +16,10 @@ All notable changes to LLeMbas Desktop. The format follows
   the account has another computer linked, a chip before the folder chooses it (this computer is
   the default). Its folder is one its agent chats have worked in, or a path typed in; the Terminal
   before the first message opens there too.
-- **Language and theme in Settings.** Under Appearance: the language (this computer's, or any of
-  the app's nine; the window opens again in it) and the theme (the account's, or Moria or Shire).
-  Both are kept in the app on this computer; the account's own stay as they are.
+- **Language and theme in Settings.** Under Appearance. The language is the account's, as the
+  server says it, unless this computer's or another of the app's nine is chosen (kept in the app;
+  the window opens again in it). The theme is the account's, and choosing one saves it there, so
+  the web interface and the phone follow; on a server that cannot be told, it is kept in the app.
 
 ### Fixed
 

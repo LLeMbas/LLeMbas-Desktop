@@ -994,57 +994,89 @@ test("D4: with no other computer linked there is no choice to make; at 390 px th
   assert.deepEqual(p.errors, [])
 })
 
-// E5: the language and the theme, chosen in Settings and kept in this app.
+// E5: the language and the theme. The server's /me (fixture me.json) offers its themes and takes
+// one on PATCH /me; its language is the app's unless Settings chose this computer's or another.
+
+const ME = fixture("me")
+const meAs = (over = {}) => ({ ...ME, account: { id: "u1", name: "Ada Example", email: "ada@example.org" }, permissions: {}, ...over })
 
 async function openSettings(p) {
   await p.click("#settings-btn")
   await p.waitForSelector("#set-look")
 }
 
-test("E5: the theme is the account's until one is chosen here; chosen, it is drawn at once and kept", async () => {
+test("E5: the theme is the account's, as /me offers them; chosen, PATCH /me saves it and it is drawn at once", async () => {
+  const p = await page({ status: status(), routes: baseRoutes({ "GET /me": meAs({ language: "en" }), "PATCH /me": meAs({ language: "en", theme: "moria" }) }), streams: {} })
+  await p.waitForFunction(() => document.documentElement.dataset.theme === "shire")
+  await openSettings(p)
+  assert.equal(await p.inputValue("#set-theme"), "shire")
+  assert.deepEqual(await p.$$eval("#set-theme option", (o) => o.map((x) => x.textContent)), ["Moria — dark", "Shire — light"])
+  await p.selectOption("#set-theme", "moria")
+  await p.waitForFunction(() => document.documentElement.dataset.theme === "moria")
+  const [saved] = await p.evaluate(() => window.__mock.api("PATCH", "/me"))
+  assert.deepEqual(saved.args.body, { theme: "moria" })
+  const painted = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "set_theme").map((c) => c.args.name))
+  assert.equal(painted.at(-1), "moria", "the window is painted in it too")
+  assert.equal(await p.inputValue("#set-theme"), "moria")
+  assert.deepEqual(p.errors, [])
+})
+
+test("E5: a theme the server refuses is said, and the look stays", async () => {
+  const p = await page({ status: status(), routes: baseRoutes({ "GET /me": meAs({ language: "en" }), "PATCH /me": { __error: { status: 400, detail: "That theme is not offered." } } }), streams: {} })
+  await openSettings(p)
+  await p.selectOption("#set-theme", "moria")
+  await p.waitForSelector("#set-look [role=alert]")
+  assert.match(await p.textContent("#set-look [role=alert]"), /not offered/)
+  assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), "shire")
+  assert.equal(await p.inputValue("#set-theme"), "shire")
+  assert.deepEqual(p.errors, [])
+})
+
+test("E5: a server that cannot be told: the theme chosen is kept in the app, over the account's", async () => {
   const p = await page({ status: status(), routes: baseRoutes({ "GET /me": { id: "u1", name: "Ada Example", email: "ada@example.org", theme: "shire", language: "en", permissions: {} } }), streams: {} })
   await p.waitForFunction(() => document.documentElement.dataset.theme === "shire")
   await openSettings(p)
   assert.equal(await p.inputValue("#set-theme"), "")
   assert.match(await p.textContent("#set-theme option[value='']"), /account.*Shire/)
   await p.selectOption("#set-theme", "moria")
-  assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), "moria")
-  const painted = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "set_theme").map((c) => c.args.name))
-  assert.equal(painted.at(-1), "moria", "the window is painted in it too")
-  // Opened again: still Moria, over the account's Shire.
+  await p.waitForFunction(() => document.documentElement.dataset.theme === "moria")
+  assert.equal(await p.evaluate(() => window.__mock.api("PATCH", "/me").length), 0, "nothing sent")
   await p.reload()
   await p.waitForSelector("#shell:not([hidden])")
   await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "set_theme"))
   assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), "moria")
   await openSettings(p)
-  assert.equal(await p.inputValue("#set-theme"), "moria")
   await p.selectOption("#set-theme", "")
-  assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), "shire", "back to the account's")
+  await p.waitForFunction(() => document.documentElement.dataset.theme === "shire")
   assert.deepEqual(p.errors, [])
 })
 
-test("E5: a language chosen here opens the window again in it, the shells let go first; the system's again undoes it", async () => {
-  const p = await page(b3())
-  assert.equal(await p.evaluate(() => document.documentElement.lang), "en")
+test("E5: the account's language is the app's; this computer's or another, chosen, opens the window again in it, the shells let go first", async () => {
+  const p = await page({ ...b3(), routes: { ...b3().routes, "GET /me": meAs({ language: "de", theme: "moria" }) } })
+  // The account says German: the window opens again in it, once.
+  await p.waitForFunction(() => document.documentElement.lang === "de", null, { timeout: 15000 })
+  await p.waitForSelector("#shell:not([hidden])")
+  assert.equal((await p.textContent("#settings-btn .navrow__label")).trim(), "Einstellungen")
   await openChatRow(p, "chat2")
   await p.click('#chat-tools [data-terminal-toggle]')
   await p.waitForFunction(() => window.__mock.terminals().length === 1)
   // What the page let go of before it loaded again, kept across the load.
   await p.evaluate(() => addEventListener("beforeunload", () => localStorage.setItem("test.calls", JSON.stringify(window.__mock.calls.map((c) => c.cmd)))))
   await openSettings(p)
-  assert.match(await p.textContent("#set-language option[value='']"), /English/)
-  await Promise.all([p.waitForEvent("load"), p.selectOption("#set-language", "de")])
-  await p.waitForSelector("#shell:not([hidden])")
-  assert.equal(await p.evaluate(() => document.documentElement.lang), "de")
-  assert.equal((await p.textContent("#settings-btn .navrow__label")).trim(), "Einstellungen")
-  const before = await p.evaluate(() => JSON.parse(localStorage.getItem("test.calls") || "[]"))
-  assert.ok(before.includes("terminal_close"), "the shell was let go")
-  await openSettings(p)
-  assert.equal(await p.inputValue("#set-language"), "de")
-  assert.match(await p.textContent("#set-look"), /Sprache/)
-  await Promise.all([p.waitForEvent("load"), p.selectOption("#set-language", "")])
+  assert.equal(await p.inputValue("#set-language"), "")
+  assert.match(await p.textContent("#set-language option[value='']"), /Deutsch/)
+  await Promise.all([p.waitForEvent("load"), p.selectOption("#set-language", "system")])
   await p.waitForSelector("#shell:not([hidden])")
   assert.equal(await p.evaluate(() => document.documentElement.lang), "en")
+  const before = await p.evaluate(() => JSON.parse(localStorage.getItem("test.calls") || "[]"))
+  assert.ok(before.includes("terminal_close"), "the shell was let go")
+  await p.waitForTimeout(300)
+  assert.equal(await p.evaluate(() => document.documentElement.lang), "en", "the account's German does not take it back")
+  await openSettings(p)
+  assert.equal(await p.inputValue("#set-language"), "system")
+  await Promise.all([p.waitForEvent("load"), p.selectOption("#set-language", "fr")])
+  await p.waitForSelector("#shell:not([hidden])")
+  assert.equal(await p.evaluate(() => document.documentElement.lang), "fr")
   assert.deepEqual(p.errors, [])
 })
 

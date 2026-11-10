@@ -3,9 +3,10 @@
 // script's own table. Do not edit; run the script.
 //
 // `t(text, fields)` is the page's English with `%(name)s` fields, as on the server; a
-// missing entry is the English. The language is the one chosen in Settings (kept in
-// localStorage as `lembas.language`), else the system's (navigator.language), English
-// unless it is one of these. Elements marked `data-i18n` (their text) and
+// missing entry is the English. The language is the account's (kept from /me as
+// `lembas.account-language`) unless Settings chose this computer's or another
+// (`lembas.language`); the system's is navigator.language. English unless it is one of
+// these. Elements marked `data-i18n` (their text) and
 // `data-i18n-title`, `data-i18n-aria-label`, `data-i18n-placeholder` (that attribute)
 // are translated once the page is parsed; this script is deferred, before the page's.
 "use strict"
@@ -253,6 +254,7 @@ const LEMBAS_I18N = {
     "Running {{tool}}: {{what}}": "Spouští {{tool}}: {{what}}",
     "Runs": "Spuštění",
     "Save": "Uložit",
+    "Saved to your account: the web interface and the phone follow it too.": "Uloženo do vašeho účtu: řídí se jím i webové rozhraní a telefon.",
     "Saving starts the reply again; everything after this message is dropped.": "Uložením se odpověď spustí znovu; vše po této zprávě se zahodí.",
     "Say what should happen and when — “every weekday at 8:00, summarise the news on my reading list” — and the server runs it for you.": "Řekněte, co se má stát a kdy — „každý pracovní den v 8:00 shrň zprávy z mého seznamu ke čtení“ — a server to udělá za vás.",
     "Scheduled": "Naplánováno",
@@ -298,6 +300,7 @@ const LEMBAS_I18N = {
     "Tell me": "Upozornit mě",
     "Tell me when a reply or an agent's work is finished while I am elsewhere": "Upozornit mě, když je odpověď nebo práce agenta hotová, zatímco jsem jinde",
     "Terminal": "Terminál",
+    "The account's (%(language)s)": "Podle účtu (%(language)s)",
     "The account's (%(theme)s)": "Podle účtu (%(theme)s)",
     "The agent asks to run %(tool)s:": "Agent žádá o spuštění %(tool)s:",
     "The agent asks:": "Agent se ptá:",
@@ -671,6 +674,7 @@ const LEMBAS_I18N = {
     "Running {{tool}}: {{what}}": "Führe {{tool}} aus: {{what}}",
     "Runs": "Läufe",
     "Save": "Speichern",
+    "Saved to your account: the web interface and the phone follow it too.": "In Ihrem Konto gespeichert: Die Weboberfläche und das Telefon folgen ihm auch.",
     "Saving starts the reply again; everything after this message is dropped.": "Speichern startet die Antwort neu; alles nach dieser Nachricht wird verworfen.",
     "Say what should happen and when — “every weekday at 8:00, summarise the news on my reading list” — and the server runs it for you.": "Sagen Sie, was wann geschehen soll — „jeden Werktag um 8:00 die Nachrichten auf meiner Leseliste zusammenfassen“ — und der Server erledigt es für Sie.",
     "Scheduled": "Geplant",
@@ -716,6 +720,7 @@ const LEMBAS_I18N = {
     "Tell me": "Benachrichtigen",
     "Tell me when a reply or an agent's work is finished while I am elsewhere": "Benachrichtigen, wenn eine Antwort oder die Arbeit des Agenten fertig ist, während ich woanders bin",
     "Terminal": "Terminal",
+    "The account's (%(language)s)": "Wie das Konto (%(language)s)",
     "The account's (%(theme)s)": "Wie das Konto (%(theme)s)",
     "The agent asks to run %(tool)s:": "Der Agent möchte %(tool)s ausführen:",
     "The agent asks:": "Der Agent fragt:",
@@ -1089,6 +1094,7 @@ const LEMBAS_I18N = {
     "Running {{tool}}: {{what}}": "Ejecutando {{tool}}: {{what}}",
     "Runs": "Ejecuciones",
     "Save": "Guardar",
+    "Saved to your account: the web interface and the phone follow it too.": "Se guarda en su cuenta: la interfaz web y el teléfono también lo siguen.",
     "Saving starts the reply again; everything after this message is dropped.": "Al guardar, la respuesta empieza de nuevo; se descarta todo lo que hay después de este mensaje.",
     "Say what should happen and when — “every weekday at 8:00, summarise the news on my reading list” — and the server runs it for you.": "Diga qué debe ocurrir y cuándo —«cada día laborable a las 8:00, resume las noticias de mi lista de lectura»— y el servidor lo hará por usted.",
     "Scheduled": "Programado",
@@ -1134,6 +1140,7 @@ const LEMBAS_I18N = {
     "Tell me": "Avisarme",
     "Tell me when a reply or an agent's work is finished while I am elsewhere": "Avisarme cuando una respuesta o el trabajo de un agente termine mientras estoy en otra parte",
     "Terminal": "Terminal",
+    "The account's (%(language)s)": "El de la cuenta (%(language)s)",
     "The account's (%(theme)s)": "El de la cuenta (%(theme)s)",
     "The agent asks to run %(tool)s:": "El agente pide ejecutar %(tool)s:",
     "The agent asks:": "El agente pregunta:",
@@ -1507,6 +1514,7 @@ const LEMBAS_I18N = {
     "Running {{tool}}: {{what}}": "Exécution de {{tool}} : {{what}}",
     "Runs": "Exécutions",
     "Save": "Enregistrer",
+    "Saved to your account: the web interface and the phone follow it too.": "Enregistré dans votre compte : l’interface web et le téléphone le suivent aussi.",
     "Saving starts the reply again; everything after this message is dropped.": "Enregistrer relance la réponse ; tout ce qui suit ce message est supprimé.",
     "Say what should happen and when — “every weekday at 8:00, summarise the news on my reading list” — and the server runs it for you.": "Dites ce qui doit se passer et quand — « chaque jour ouvré à 8 h, résume les nouvelles de ma liste de lecture » — et le serveur s’en charge pour vous.",
     "Scheduled": "Planifié",
@@ -1552,6 +1560,7 @@ const LEMBAS_I18N = {
     "Tell me": "Me prévenir",
     "Tell me when a reply or an agent's work is finished while I am elsewhere": "Me prévenir quand une réponse ou le travail d'un agent est terminé pendant que je suis ailleurs",
     "Terminal": "Terminal",
+    "The account's (%(language)s)": "Celle du compte (%(language)s)",
     "The account's (%(theme)s)": "Celui du compte (%(theme)s)",
     "The agent asks to run %(tool)s:": "L'agent demande à exécuter %(tool)s :",
     "The agent asks:": "L'agent demande :",
@@ -1925,6 +1934,7 @@ const LEMBAS_I18N = {
     "Running {{tool}}: {{what}}": "{{tool}} futtatása: {{what}}",
     "Runs": "Futások",
     "Save": "Mentés",
+    "Saved to your account: the web interface and the phone follow it too.": "A fiókjába mentve: a webes felület és a telefon is ezt követi.",
     "Saving starts the reply again; everything after this message is dropped.": "A mentés újraindítja a választ; minden, ami ez után az üzenet után jön, elvész.",
     "Say what should happen and when — “every weekday at 8:00, summarise the news on my reading list” — and the server runs it for you.": "Mondja el, mi történjen és mikor — „minden hétköznap 8:00-kor foglald össze az olvasólistám híreit” —, és a szerver elvégzi Ön helyett.",
     "Scheduled": "Ütemezett",
@@ -1970,6 +1980,7 @@ const LEMBAS_I18N = {
     "Tell me": "Értesítés",
     "Tell me when a reply or an agent's work is finished while I am elsewhere": "Szóljon, ha egy válasz vagy az ügynök munkája elkészül, amíg máshol vagyok",
     "Terminal": "Terminál",
+    "The account's (%(language)s)": "A fióké (%(language)s)",
     "The account's (%(theme)s)": "A fióké (%(theme)s)",
     "The agent asks to run %(tool)s:": "Az ügynök a(z) %(tool)s futtatását kéri:",
     "The agent asks:": "Az ügynök kérdezi:",
@@ -2343,6 +2354,7 @@ const LEMBAS_I18N = {
     "Running {{tool}}: {{what}}": "Esecuzione di {{tool}}: {{what}}",
     "Runs": "Esecuzioni",
     "Save": "Salva",
+    "Saved to your account: the web interface and the phone follow it too.": "Salvato nel tuo account: anche l’interfaccia web e il telefono lo seguono.",
     "Saving starts the reply again; everything after this message is dropped.": "Salvando, la risposta riparte; tutto ciò che segue questo messaggio viene scartato.",
     "Say what should happen and when — “every weekday at 8:00, summarise the news on my reading list” — and the server runs it for you.": "Di’ cosa deve succedere e quando — «ogni giorno feriale alle 8:00, riassumi le notizie della mia lista di lettura» — e il server lo fa per te.",
     "Scheduled": "Pianificato",
@@ -2388,6 +2400,7 @@ const LEMBAS_I18N = {
     "Tell me": "Avvisami",
     "Tell me when a reply or an agent's work is finished while I am elsewhere": "Avvisami quando una risposta o il lavoro di un agente è finito mentre sono altrove",
     "Terminal": "Terminale",
+    "The account's (%(language)s)": "Quella dell’account (%(language)s)",
     "The account's (%(theme)s)": "Quello dell’account (%(theme)s)",
     "The agent asks to run %(tool)s:": "L'agente chiede di eseguire %(tool)s:",
     "The agent asks:": "L'agente chiede:",
@@ -2761,6 +2774,7 @@ const LEMBAS_I18N = {
     "Running {{tool}}: {{what}}": "Uruchamianie {{tool}}: {{what}}",
     "Runs": "Uruchomienia",
     "Save": "Zapisz",
+    "Saved to your account: the web interface and the phone follow it too.": "Zapisane na koncie: interfejs WWW i telefon też się do niego stosują.",
     "Saving starts the reply again; everything after this message is dropped.": "Zapisanie uruchamia odpowiedź od nowa; wszystko po tej wiadomości zostanie odrzucone.",
     "Say what should happen and when — “every weekday at 8:00, summarise the news on my reading list” — and the server runs it for you.": "Powiedz, co ma się stać i kiedy — „w każdy dzień roboczy o 8:00 streść wiadomości z mojej listy do czytania” — a serwer zrobi to za Ciebie.",
     "Scheduled": "Zaplanowane",
@@ -2806,6 +2820,7 @@ const LEMBAS_I18N = {
     "Tell me": "Powiadamiaj",
     "Tell me when a reply or an agent's work is finished while I am elsewhere": "Powiadom mnie, gdy odpowiedź lub praca agenta jest gotowa, a ja jestem gdzie indziej",
     "Terminal": "Terminal",
+    "The account's (%(language)s)": "Jak na koncie (%(language)s)",
     "The account's (%(theme)s)": "Jak na koncie (%(theme)s)",
     "The agent asks to run %(tool)s:": "Agent prosi o uruchomienie %(tool)s:",
     "The agent asks:": "Agent pyta:",
@@ -3179,6 +3194,7 @@ const LEMBAS_I18N = {
     "Running {{tool}}: {{what}}": "Spúšťa {{tool}}: {{what}}",
     "Runs": "Spustenia",
     "Save": "Uložiť",
+    "Saved to your account: the web interface and the phone follow it too.": "Uložené do vášho účtu: riadi sa ním aj webové rozhranie a telefón.",
     "Saving starts the reply again; everything after this message is dropped.": "Uložením sa odpoveď spustí znova; všetko po tejto správe sa zahodí.",
     "Say what should happen and when — “every weekday at 8:00, summarise the news on my reading list” — and the server runs it for you.": "Povedzte, čo sa má stať a kedy — „každý pracovný deň o 8:00 zhrň správy z môjho zoznamu na čítanie“ — a server to urobí za vás.",
     "Scheduled": "Naplánované",
@@ -3224,6 +3240,7 @@ const LEMBAS_I18N = {
     "Tell me": "Upozorniť ma",
     "Tell me when a reply or an agent's work is finished while I am elsewhere": "Upozorniť ma, keď je odpoveď alebo práca agenta hotová, kým som inde",
     "Terminal": "Terminál",
+    "The account's (%(language)s)": "Podľa účtu (%(language)s)",
     "The account's (%(theme)s)": "Podľa účtu (%(theme)s)",
     "The agent asks to run %(tool)s:": "Agent žiada spustiť %(tool)s:",
     "The agent asks:": "Agent sa pýta:",
@@ -3365,12 +3382,23 @@ const LEMBAS_SYSTEM_LANG = (() => {
   const code = String(navigator.language || "").slice(0, 2).toLowerCase()
   return Object.prototype.hasOwnProperty.call(LEMBAS_I18N, code) ? code : "en"
 })()
-const LEMBAS_CHOSEN_LANG = (() => {
-  let code = ""
+// Settings' choice: "" for the account's language (as /me last said it), "system", or a code.
+const LEMBAS_CHOICE = (() => {
   try {
-    code = localStorage.getItem("lembas.language") || ""
+    return localStorage.getItem("lembas.language") || ""
+  } catch {
+    return ""
+  }
+})()
+const LEMBAS_CHOSEN_LANG = (() => {
+  const has = (code) => Object.prototype.hasOwnProperty.call(LEMBAS_LANGS, code)
+  if (LEMBAS_CHOICE === "system") return ""
+  if (has(LEMBAS_CHOICE)) return LEMBAS_CHOICE
+  let account = ""
+  try {
+    account = localStorage.getItem("lembas.account-language") || ""
   } catch {}
-  return Object.prototype.hasOwnProperty.call(LEMBAS_LANGS, code) ? code : ""
+  return has(account) ? account : ""
 })()
 const LEMBAS_LANG = LEMBAS_CHOSEN_LANG || LEMBAS_SYSTEM_LANG
 document.documentElement.lang = LEMBAS_LANG

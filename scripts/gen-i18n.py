@@ -469,6 +469,8 @@ KEYS = (
     "The account's (%(theme)s)",
     "Kept in this app on this computer. The window opens again in the language chosen.",
     "Kept in this app on this computer; the account's theme stays as it is.",
+    "The account's (%(language)s)",
+    "Saved to your account: the web interface and the phone follow it too.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -710,6 +712,8 @@ OWN: dict[str, dict[str, str]] = {
         "The account's (%(theme)s)": "Podle účtu (%(theme)s)",
         "Kept in this app on this computer. The window opens again in the language chosen.": "Uloženo v této aplikaci na tomto počítači. Okno se znovu otevře ve zvoleném jazyce.",
         "Kept in this app on this computer; the account's theme stays as it is.": "Uloženo v této aplikaci na tomto počítači; vzhled účtu zůstává, jak je.",
+        "The account's (%(language)s)": "Podle účtu (%(language)s)",
+        "Saved to your account: the web interface and the phone follow it too.": "Uloženo do vašeho účtu: řídí se jím i webové rozhraní a telefon.",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -946,6 +950,8 @@ OWN: dict[str, dict[str, str]] = {
         "The account's (%(theme)s)": "Wie das Konto (%(theme)s)",
         "Kept in this app on this computer. The window opens again in the language chosen.": "In dieser App auf diesem Computer gespeichert. Das Fenster öffnet sich in der gewählten Sprache neu.",
         "Kept in this app on this computer; the account's theme stays as it is.": "In dieser App auf diesem Computer gespeichert; das Design des Kontos bleibt, wie es ist.",
+        "The account's (%(language)s)": "Wie das Konto (%(language)s)",
+        "Saved to your account: the web interface and the phone follow it too.": "In Ihrem Konto gespeichert: Die Weboberfläche und das Telefon folgen ihm auch.",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1182,6 +1188,8 @@ OWN: dict[str, dict[str, str]] = {
         "The account's (%(theme)s)": "El de la cuenta (%(theme)s)",
         "Kept in this app on this computer. The window opens again in the language chosen.": "Se guarda en esta aplicación en este equipo. La ventana se vuelve a abrir en el idioma elegido.",
         "Kept in this app on this computer; the account's theme stays as it is.": "Se guarda en esta aplicación en este equipo; el tema de la cuenta no cambia.",
+        "The account's (%(language)s)": "El de la cuenta (%(language)s)",
+        "Saved to your account: the web interface and the phone follow it too.": "Se guarda en su cuenta: la interfaz web y el teléfono también lo siguen.",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1418,6 +1426,8 @@ OWN: dict[str, dict[str, str]] = {
         "The account's (%(theme)s)": "Celui du compte (%(theme)s)",
         "Kept in this app on this computer. The window opens again in the language chosen.": "Enregistré dans cette application sur cet ordinateur. La fenêtre se rouvre dans la langue choisie.",
         "Kept in this app on this computer; the account's theme stays as it is.": "Enregistré dans cette application sur cet ordinateur ; le thème du compte reste tel quel.",
+        "The account's (%(language)s)": "Celle du compte (%(language)s)",
+        "Saved to your account: the web interface and the phone follow it too.": "Enregistré dans votre compte : l’interface web et le téléphone le suivent aussi.",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1654,6 +1664,8 @@ OWN: dict[str, dict[str, str]] = {
         "The account's (%(theme)s)": "A fióké (%(theme)s)",
         "Kept in this app on this computer. The window opens again in the language chosen.": "Ebben az alkalmazásban, ezen a számítógépen tárolva. Az ablak a választott nyelven nyílik meg újra.",
         "Kept in this app on this computer; the account's theme stays as it is.": "Ebben az alkalmazásban, ezen a számítógépen tárolva; a fiók témája változatlan marad.",
+        "The account's (%(language)s)": "A fióké (%(language)s)",
+        "Saved to your account: the web interface and the phone follow it too.": "A fiókjába mentve: a webes felület és a telefon is ezt követi.",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -1890,6 +1902,8 @@ OWN: dict[str, dict[str, str]] = {
         "The account's (%(theme)s)": "Quello dell’account (%(theme)s)",
         "Kept in this app on this computer. The window opens again in the language chosen.": "Salvato in questa app su questo computer. La finestra si riapre nella lingua scelta.",
         "Kept in this app on this computer; the account's theme stays as it is.": "Salvato in questa app su questo computer; il tema dell’account resta com’è.",
+        "The account's (%(language)s)": "Quella dell’account (%(language)s)",
+        "Saved to your account: the web interface and the phone follow it too.": "Salvato nel tuo account: anche l’interfaccia web e il telefono lo seguono.",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2126,6 +2140,8 @@ OWN: dict[str, dict[str, str]] = {
         "The account's (%(theme)s)": "Jak na koncie (%(theme)s)",
         "Kept in this app on this computer. The window opens again in the language chosen.": "Zapisane w tej aplikacji na tym komputerze. Okno otworzy się ponownie w wybranym języku.",
         "Kept in this app on this computer; the account's theme stays as it is.": "Zapisane w tej aplikacji na tym komputerze; motyw konta pozostaje bez zmian.",
+        "The account's (%(language)s)": "Jak na koncie (%(language)s)",
+        "Saved to your account: the web interface and the phone follow it too.": "Zapisane na koncie: interfejs WWW i telefon też się do niego stosują.",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2362,6 +2378,8 @@ OWN: dict[str, dict[str, str]] = {
         "The account's (%(theme)s)": "Podľa účtu (%(theme)s)",
         "Kept in this app on this computer. The window opens again in the language chosen.": "Uložené v tejto aplikácii na tomto počítači. Okno sa znova otvorí vo zvolenom jazyku.",
         "Kept in this app on this computer; the account's theme stays as it is.": "Uložené v tejto aplikácii na tomto počítači; vzhľad účtu zostáva, ako je.",
+        "The account's (%(language)s)": "Podľa účtu (%(language)s)",
+        "Saved to your account: the web interface and the phone follow it too.": "Uložené do vášho účtu: riadi sa ním aj webové rozhranie a telefón.",
     },
 }
 
@@ -2426,9 +2444,10 @@ def main() -> None:
         "// script's own table. Do not edit; run the script.\n"
         "//\n"
         "// `t(text, fields)` is the page's English with `%(name)s` fields, as on the server; a\n"
-        "// missing entry is the English. The language is the one chosen in Settings (kept in\n"
-        "// localStorage as `lembas.language`), else the system's (navigator.language), English\n"
-        "// unless it is one of these. Elements marked `data-i18n` (their text) and\n"
+        "// missing entry is the English. The language is the account's (kept from /me as\n"
+        "// `lembas.account-language`) unless Settings chose this computer's or another\n"
+        "// (`lembas.language`); the system's is navigator.language. English unless it is one of\n"
+        "// these. Elements marked `data-i18n` (their text) and\n"
         "// `data-i18n-title`, `data-i18n-aria-label`, `data-i18n-placeholder` (that attribute)\n"
         "// are translated once the page is parsed; this script is deferred, before the page's.\n"
         '"use strict"\n'
@@ -2443,12 +2462,23 @@ def main() -> None:
         '  const code = String(navigator.language || "").slice(0, 2).toLowerCase()\n'
         '  return Object.prototype.hasOwnProperty.call(LEMBAS_I18N, code) ? code : "en"\n'
         "})()\n"
-        "const LEMBAS_CHOSEN_LANG = (() => {\n"
-        '  let code = ""\n'
+        "// Settings' choice: \"\" for the account's language (as /me last said it), \"system\", or a code.\n"
+        "const LEMBAS_CHOICE = (() => {\n"
         "  try {\n"
-        '    code = localStorage.getItem("lembas.language") || ""\n'
+        '    return localStorage.getItem("lembas.language") || ""\n'
+        "  } catch {\n"
+        '    return ""\n'
+        "  }\n"
+        "})()\n"
+        "const LEMBAS_CHOSEN_LANG = (() => {\n"
+        "  const has = (code) => Object.prototype.hasOwnProperty.call(LEMBAS_LANGS, code)\n"
+        '  if (LEMBAS_CHOICE === "system") return ""\n'
+        "  if (has(LEMBAS_CHOICE)) return LEMBAS_CHOICE\n"
+        '  let account = ""\n'
+        "  try {\n"
+        '    account = localStorage.getItem("lembas.account-language") || ""\n'
         "  } catch {}\n"
-        '  return Object.prototype.hasOwnProperty.call(LEMBAS_LANGS, code) ? code : ""\n'
+        '  return has(account) ? account : ""\n'
         "})()\n"
         "const LEMBAS_LANG = LEMBAS_CHOSEN_LANG || LEMBAS_SYSTEM_LANG\n"
         "document.documentElement.lang = LEMBAS_LANG\n"
