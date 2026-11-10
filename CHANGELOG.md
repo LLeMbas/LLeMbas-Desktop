@@ -52,6 +52,11 @@ All notable changes to LLeMbas Desktop. The format follows
 - **The release your server recommends.** Settings › About names the Desktop release that goes
   with the server's version when it is newer than this one (a beta only to a beta install), with
   a link to its release page.
+- **Scheduled tasks on a linked computer.** A task's page says where it runs: on the server, or
+  on a computer, in a folder and mode, with how long an approval waits, and whether that computer
+  is away or does not accept scheduled work. A run waiting for its computer says so. The form
+  offers "Where it runs" where the server can: this computer or another linked one that accepts
+  scheduled work, its folder (this computer's agent folder to begin with), mode and wait.
 
 ### Fixed
 

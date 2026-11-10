@@ -27,6 +27,15 @@
 //                                              by the app (Rust, watch.rs), handed here as the
 //                                              `schedules` event
 //
+//   GET    /devices                           { devices: [{ id, name, host, scheduled, max_mode }] }:
+//                                              the linked computers, each saying whether it
+//                                              accepts scheduled work
+//
+// Where it runs (`runs_on`, server 2.0.0-beta.9): null on the server, else `{ device, device_name,
+// cwd, mode, approval_wait_minutes }` -- an agent chat on that linked computer, in that folder and
+// mode (never Plan). A run waiting for the computer says `waiting_for: "device"`; one it refused
+// (it does not accept scheduled work) fails with the computer's own words.
+//
 // A server without them answers 404: the page says this server has no scheduled tasks yet.
 // Everything a task says (its title, instruction, a run's result or error) is the person's or a
 // model's words, set as text; a result's Markdown goes through markdown.js.
@@ -37,7 +46,7 @@ import { ask, menu, popover } from "./popup.js"
 import { avatar, levelsOf, levelWord } from "./models.js"
 import { markdown } from "./markdown.js"
 
-let ctx = null // { status(), models(), me(), openChat(id), show() }
+let ctx = null // { status(), models(), me(), thisDevices(), openChat(id), show() }
 let view = { name: "list" } // { name: "list" } | { name: "task", id } | { name: "form", task? }
 let tasks = []
 let missing = false // the server has no scheduling routes
@@ -83,7 +92,7 @@ const RUNS_PAGE = 20
 function statusChip(run, running) {
   if (running) return h("span", { class: "schip is-running", text: STATUS.running() })
   if (!run) return h("span", { class: "schip", text: t("Not run yet") })
-  const word = STATUS[run.status]?.() || run.status
+  const word = run.status === "waiting" && run.waiting_for === "device" ? t("Waiting for the computer") : STATUS[run.status]?.() || run.status
   // A missed run counts the slots that passed unrun; any other run says how many it followed.
   const n = run.status === "missed" ? (run.missed > 1 ? ` ×${run.missed}` : "") : run.missed > 0 ? ` · ${t("%(n)s missed", { n: run.missed })}` : ""
   return h("span", { class: `schip is-${run.status}`, title: `${word}${n}`, text: `${word}${n}` })
@@ -326,7 +335,8 @@ async function drawTask(id) {
       icon(ICONS.more),
     ),
   )
-  const models = (await schedulingModels())?.models || ctx.models()
+  const [smodels, devices] = await Promise.all([schedulingModels(), linkedDevices()])
+  const models = smodels?.models || ctx.models()
   const body = clear($("scheduled-body"))
   body.append(
     h(
@@ -344,11 +354,52 @@ async function drawTask(id) {
         fact(t("Subagents"), h("span", { text: task.agents ? t("Up to %(n)s at once", { n: task.agents }) : t("None") })),
         fact(t("Tell me"), h("span", { text: NOTIFY[task.notify]?.() || NOTIFY.matters() })),
         fact(t("Runs"), h("span", { text: MODE[task.mode]?.() || MODE.fresh() })),
+        "runs_on" in task ? whereFact(task.runs_on, devices) : null,
       ),
       h("div", { class: "sched__what" }, h("h2", { class: "sched__h", text: t("What it does") }), h("p", { class: "sched__instruction", text: task.instruction || task.request || "" }), task.request && task.request !== task.instruction ? h("p", { class: "sched__asked", text: t("You asked: “%(text)s”", { text: task.request }) }) : null),
       upcoming(task.next_runs || []),
     ),
     history(task, page.runs || [], page.more),
+  )
+}
+
+// --- Where it runs ------------------------------------------------------------------------------
+
+const RUN_MODES = {
+  manual: () => t("Manual — asks first"),
+  edit: () => t("Edit — asks before commands"),
+  auto: () => t("Auto — asks nothing"),
+}
+
+/** The account's linked computers (`GET /devices`), or null where the server cannot say. */
+async function linkedDevices() {
+  try {
+    return (await get("/devices")).devices || []
+  } catch {
+    return null
+  }
+}
+
+function deviceLabel(d) {
+  const name = d.name || d.host || d.id
+  return (ctx.thisDevices?.() || []).includes(d.id) ? t("This computer (%(name)s)", { name }) : name
+}
+
+/** "Where it runs": the server, or a computer and a folder, with what it is doing about it now. */
+function whereFact(on, devices) {
+  if (!on) return fact(t("Where it runs"), h("span", { text: t("On this server") }))
+  const d = (devices || []).find((x) => x.id === on.device)
+  const name = d ? deviceLabel(d) : on.device_name || t("A linked computer")
+  let state = ""
+  if (devices && !d) state = t("Away now: a run waits for it, then counts as missed.")
+  else if (d && d.scheduled === false) state = t("It does not accept scheduled work: turn on Accept scheduled work there.")
+  const hint = [RUN_MODES[on.mode]?.() || on.mode, t("approvals wait %(n)s min", { n: on.approval_wait_minutes }), state].filter(Boolean).join(" · ")
+  return h(
+    "div",
+    { class: `fact${state ? " is-warning" : ""}` },
+    h("span", { class: "fact__label", text: t("Where it runs") }),
+    h("span", { class: "fact__value" }, h("bdi", { text: name }), h("span", { class: "fact__path", title: on.cwd }, h("bdi", { text: on.cwd }))),
+    h("span", { class: "fact__hint", text: hint }),
   )
 }
 
@@ -448,7 +499,7 @@ function runRow(task, run) {
       h("span", { text: stamp(run.started_at || run.due_at) }),
       TIMING[run.timing] ? h("span", { class: "run__late", text: TIMING[run.timing]() }) : null,
     ),
-    h("span", { class: "run__model", title: switched }, h("span", { text: model.name || "" }), switched ? h("span", { class: "run__switched", text: t("switched") }) : null),
+    h("span", { class: "run__model", title: switched }, h("span", { text: model.name || (task.runs_on ? task.runs_on.device_name || "" : "") }), switched ? h("span", { class: "run__switched", text: t("switched") }) : null),
     open || h("span", { class: "run__error", title: note, text: note }),
     detail,
   )
@@ -488,7 +539,10 @@ async function drawForm(task) {
   const editing = !!task
   header(editing ? t("Edit %(title)s", { title: task.title }) : t("New scheduled task"), () => go(editing ? { name: "task", id: task.id } : { name: "list" }))
   clear($("scheduled-tools"))
-  const smodels = (await schedulingModels())?.models || []
+  const [sm, devices] = await Promise.all([schedulingModels(), linkedDevices()])
+  const smodels = sm?.models || []
+  // Offered where the server can run a schedule on a computer: its devices say whether they accept.
+  const canPlace = !!devices && (devices.some((d) => "scheduled" in d) || !!task?.runs_on)
   // What will be saved: the rule only from the server's reading of words (or the task's own).
   const draft = {
     request: task?.request || "",
@@ -501,6 +555,7 @@ async function drawForm(task) {
     agents: task?.agents || null,
     notify: task?.notify || "matters",
     mode: task?.mode || "fresh",
+    runs_on: task?.runs_on ? { device: task.runs_on.device, cwd: task.runs_on.cwd, mode: task.runs_on.mode, approval_wait_minutes: task.runs_on.approval_wait_minutes } : null,
   }
   let reading = editing ? await post("/schedules/preview", { rule: task.rule }).catch(() => null) : null
 
@@ -555,6 +610,47 @@ async function drawForm(task) {
     saveBtn.disabled = !(draft.rule && Object.keys(draft.rule).length)
   }
 
+  /** Where it runs: the server, or a linked computer that accepts scheduled work, its folder and mode. */
+  const whereFields = () => {
+    const on = draft.runs_on
+    const listed = devices || []
+    const where = h(
+      "select",
+      {
+        id: "sched-where",
+        onchange: (e) => {
+          const id = e.target.value
+          if (!id) draft.runs_on = null
+          else {
+            const mine = (ctx.thisDevices?.() || []).includes(id)
+            const roots = ctx.status?.()?.remote?.roots || []
+            draft.runs_on = { device: id, cwd: draft.runs_on?.cwd || (mine ? roots[0] || "" : ""), mode: draft.runs_on?.mode || "edit", approval_wait_minutes: draft.runs_on?.approval_wait_minutes || 30 }
+          }
+          drawSettings()
+          settings.querySelector(draft.runs_on ? "#sched-cwd" : "#sched-where")?.focus()
+        },
+      },
+      h("option", { value: "", text: t("On this server"), selected: !on }),
+      listed.map((d) => h("option", { value: d.id, text: d.scheduled === false ? `${deviceLabel(d)} — ${t("does not accept scheduled work")}` : deviceLabel(d), disabled: d.scheduled === false && on?.device !== d.id, selected: on?.device === d.id })),
+      on && !listed.some((d) => d.id === on.device) ? h("option", { value: on.device, text: `${task?.runs_on?.device_name || on.device} — ${t("not linked now")}`, selected: true }) : null,
+    )
+    const out = [field(t("Where it runs"), where, on ? t("A run on a computer is an agent chat there. The computer must allow it: “Accept scheduled work” in its LLeMbas CLI (lembas service scheduled on).") : "", "sched-where")]
+    if (!on) return out
+    const cwd = h("input", { type: "text", id: "sched-cwd", value: on.cwd, placeholder: "/home/…", spellcheck: "false", oninput: (e) => (on.cwd = e.target.value.trim()) })
+    const mode = h(
+      "select",
+      { id: "sched-runmode", onchange: (e) => (on.mode = e.target.value) },
+      Object.entries(RUN_MODES).map(([v, word]) => h("option", { value: v, text: word(), selected: on.mode === v })),
+    )
+    const wait = h("input", { type: "number", id: "sched-wait", min: "1", max: "1440", step: "1", value: String(on.approval_wait_minutes || 30), oninput: (e) => (on.approval_wait_minutes = Number(e.target.value) || 30) })
+    out.push(
+      field(t("Folder on the computer"), cwd, t("A full path, inside a folder the computer allows remote work in."), "sched-cwd"),
+      field(t("Mode"), mode, t("Edit unless you choose otherwise; Auto runs commands without asking. The computer may lower it."), "sched-runmode"),
+      field(t("An approval waits (minutes)"), wait, t("A command the run needs approved comes to your phone as a card. Unanswered by then, it counts as denied."), "sched-wait"),
+    )
+    return out
+  }
+
   const drawSettings = () => {
     const model = smodels.find((m) => m.id === draft.model) || ctx.models().find((m) => m.id === draft.model)
     const select = (id, table, key, onChange) =>
@@ -586,6 +682,7 @@ async function drawForm(task) {
       Array.from({ length: MAX_AGENTS - 1 }, (_, i) => i + 2).map((n) => h("option", { value: String(n), text: t("Up to %(n)s at once", { n }), selected: draft.agents === n })),
     )
     settings.replaceChildren(
+      ...(canPlace ? whereFields() : []),
       field(t("Tell me"), select("sched-notify", NOTIFY, "notify", () => (settings.querySelector("#sched-notify-hint").textContent = NOTIFY_HINT[draft.notify]())), NOTIFY_HINT[draft.notify]?.() || "", "sched-notify", "sched-notify-hint"),
       field(t("Runs"), select("sched-mode", MODE, "mode"), draft.mode === "continue" ? t("Each run sees the ones before it.") : t("Each run starts with nothing but the instruction."), "sched-mode"),
       field(t("Model"), modelSelect, t("A busy model is waited for, then the next free one is used."), "sched-model"),
@@ -656,6 +753,7 @@ async function drawForm(task) {
       notify: draft.notify,
       mode: draft.mode,
     }
+    if (canPlace) body.runs_on = draft.runs_on ? { ...draft.runs_on } : null
     try {
       const r = editing ? await patch(`/schedules/${enc(task.id)}`, body) : await post("/schedules", body)
       go({ name: "task", id: r.schedule.id })

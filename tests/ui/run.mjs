@@ -1586,6 +1586,102 @@ test("K8: nothing is offered that is not newer, a beta to a stable install, or a
   }
 })
 
+// L8: where a scheduled task runs (runs_on, fixture schedule_on_device.json; /devices `scheduled`).
+
+function l8(devices) {
+  const on = fixture("schedule_on_device")
+  const id = on.schedule.id
+  return {
+    status: status({ host: "workbench" }),
+    routes: baseRoutes({
+      "GET /devices": { devices },
+      "GET /schedules": { schedules: [on.schedule] },
+      [`GET /schedules/${id}`]: on,
+      [`GET /schedules/${id}/runs`]: { runs: [on.schedule.last_run], more: false },
+      "GET /schedules/models": { models: [], instance: [], mine: [] },
+      "POST /schedules/compile": { ok: true, reason: "", title: "Build check", instruction: "Check the build.", target: "chat", rule: { at: { times: ["07:30"] } }, description: "Every day at 07:30", next_runs: [], timezone: "UTC" },
+      "POST /schedules": { schedule: { ...on.schedule, id: "sched9" } },
+      "GET /schedules/sched9": { schedule: { ...on.schedule, id: "sched9" } },
+      "GET /schedules/sched9/runs": { runs: [], more: false },
+    }),
+    streams: {},
+  }
+}
+
+const bagEnd = (over = {}) => ({ id: "tok1", name: "bag-end", host: "bag-end", platform: "linux", terminal: true, scheduled: true, max_mode: "", ...over })
+
+async function openTask(p) {
+  await p.waitForSelector("#composer")
+  await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" }))
+  await p.waitForSelector(".fact >> text=Where it runs")
+}
+
+test("L8: a task on a linked computer says the computer, the folder and mode; a run waits for it", async () => {
+  const p = await page(l8([bagEnd()]))
+  await openTask(p)
+  const where = await p.textContent(".fact:has-text('Where it runs')")
+  assert.match(where, /bag-end/)
+  assert.match(where, /\/home\/frodo\/waybread/)
+  assert.match(where, /Edit — asks before commands · approvals wait 30 min/)
+  assert.equal(await p.locator(".fact.is-warning").count(), 0)
+  assert.match(await p.textContent(".run[data-id='run5']"), /Waiting for the computer/)
+  assert.match(await p.textContent(".run[data-id='run5']"), /Waiting for bag-end to be linked\./)
+  await shot(p, "l8-task-1280")
+  assert.deepEqual(p.errors, [])
+})
+
+test("L8: a computer away, or not accepting scheduled work, is said on the task", async () => {
+  for (const [devices, words] of [
+    [[], /Away now/],
+    [[bagEnd({ scheduled: false })], /does not accept scheduled work/],
+  ]) {
+    const p = await page(l8(devices))
+    await openTask(p)
+    assert.match(await p.textContent(".fact.is-warning"), words)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+test("L8: a new task can run on this computer, in a folder and mode; one not accepting cannot be chosen", async () => {
+  const p = await page(l8([bagEnd({ scheduled: false }), bagEnd({ id: "token1", name: "workbench", host: "workbench" })]))
+  await p.waitForSelector("#composer")
+  await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" }))
+  await p.waitForSelector("#page-scheduled:not([hidden])")
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "New scheduled")
+  await p.keyboard.press("Enter")
+  await p.fill("#sched-words", "every day at 7:30 check the build")
+  await p.click(".sched--new button[type=submit]")
+  await p.waitForSelector("#sched-where")
+  const options = await p.$$eval("#sched-where option", (l) => l.map((o) => [o.textContent, o.disabled]))
+  assert.deepEqual(options, [["On this server", false], ["bag-end — does not accept scheduled work", true], ["This computer (workbench)", false]])
+  await p.selectOption("#sched-where", "token1")
+  assert.equal(await p.inputValue("#sched-cwd"), "/home/dev/project")
+  await p.selectOption("#sched-runmode", "auto")
+  await p.fill("#sched-wait", "45")
+  await shot(p, "l8-form-1280")
+  await p.click("#sched-save")
+  await p.waitForFunction(() => window.__mock.api("POST", "/schedules").some((c) => c.args.path === "/schedules"))
+  const body = (await p.evaluate(() => window.__mock.api("POST", "/schedules").find((c) => c.args.path === "/schedules"))).args.body
+  assert.deepEqual(body.runs_on, { device: "token1", cwd: "/home/dev/project", mode: "auto", approval_wait_minutes: 45 })
+  assert.deepEqual(p.errors, [])
+})
+
+test("L8: at 390 px the form with a computer chosen stays inside the window", async () => {
+  const p = await page(l8([bagEnd()]), { width: 390, height: 844 })
+  await p.waitForSelector("#composer")
+  await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" }))
+  await p.waitForSelector(".fact >> text=Where it runs")
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "l8-task-390")
+  await p.click("#sched-edit")
+  await p.waitForSelector("#sched-cwd")
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "l8-form-390")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

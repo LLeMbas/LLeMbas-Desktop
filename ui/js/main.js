@@ -320,7 +320,7 @@ async function boot() {
     openFile: (path, name) => openServerFile(path, name),
     openMemory: (id) => showMemoryPage(id),
   })
-  initScheduled({ status: () => status, models: () => models, me: () => me, openChat: (id) => showChat(id), show: () => showPage("scheduled") })
+  initScheduled({ status: () => status, models: () => models, me: () => me, thisDevices, openChat: (id) => showChat(id), show: () => showPage("scheduled") })
   onViewer((on) => {
     $("shell").dataset.viewer = String(on)
   })

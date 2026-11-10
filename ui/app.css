@@ -1550,6 +1550,9 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .sched + .sched__history { margin-top: var(--sp-6); }
 .sched__trouble { padding: var(--sp-3) var(--sp-4); color: var(--warning); background: var(--warning-soft); border-radius: var(--radius-soft); overflow-wrap: anywhere; }
 .fact__hint { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
+/* Where it runs: the computer over its folder; a computer that cannot take the run says so in colour. */
+.fact__path { display: block; font: var(--text-xs) var(--font-mono); color: var(--ink-muted); overflow-wrap: anywhere; }
+.fact.is-warning .fact__hint { color: var(--warning); }
 /* The form: the When field's words on the control's track, one line, the time zone as its hint. */
 .sched__desc { align-self: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-sm); }
 .sched__desc.is-error { color: var(--warning); }
