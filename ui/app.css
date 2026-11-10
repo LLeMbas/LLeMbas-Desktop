@@ -1205,6 +1205,11 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .palette__icon { display: grid; place-items: center; color: var(--ink-muted); }
 .palette__label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .palette__hint { font-size: var(--text-xs); color: var(--ink-faint); white-space: nowrap; }
+/* A hit found inside: its title over the snippet, the words that matched marked. */
+.palette__label--two { display: grid; padding: var(--sp-1) 0; white-space: normal; }
+.palette__title, .palette__snippet { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.palette__snippet { font-size: var(--text-xs); color: var(--ink-muted); }
+.palette__snippet mark { color: var(--ink); background: var(--surface-active); border-radius: var(--radius-sm); }
 .palette__none { padding: var(--sp-3); font-size: var(--text-sm); color: var(--ink-muted); }
 
 
@@ -1690,6 +1695,28 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .arch__more { margin-top: var(--sp-3); }
 .arch__page { display: grid; gap: var(--sp-3); }
 .head__unarchive { white-space: nowrap; }
+
+/* --- Memory: a new one on top, then each record over its group and date · Edit · more. */
+
+.mnew { display: grid; gap: var(--sp-2); }
+.mnew textarea { width: 100%; }
+.mnew__foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; }
+.mnew__foot select { justify-self: start; max-width: 100%; }
+.mrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto var(--control-h-sm);
+  gap: var(--sp-3);
+  align-items: center;
+  min-height: var(--control-h);
+  padding: var(--sp-2) 0;
+  border-bottom: var(--border-w) solid var(--border);
+}
+.mrow.is-editing { grid-template-columns: minmax(0, 1fr); }
+.mrow.is-editing textarea { width: 100%; }
+.mrow.is-marked { background: var(--surface-active); border-radius: var(--radius-lg); padding-inline: var(--sp-2); }
+.mrow__words { display: grid; gap: var(--sp-1); min-width: 0; }
+.mrow__text { margin: 0; font: var(--text-sm) / var(--leading-normal) var(--font-body); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mrow__sub { margin: 0; font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
 
 /* --- Narrower windows ---------------------------------------------------------------------- */
 

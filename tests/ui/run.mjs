@@ -1200,6 +1200,99 @@ test("F8: at 390 px the folders stay inside the sidebar", async () => {
   assert.deepEqual(p.errors, [])
 })
 
+// G8: search inside (GET /search, fixture search.json) and the memory page (memories.json).
+
+function g8(over = {}) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /search": fixture("search"),
+      "GET /memories": fixture("memories"),
+      "POST /memories": { memory: { ...fixture("memory").memory, id: "mem2", content: "Walks to Bree on Sundays." } },
+      "PATCH /memories/mem1": { memory: { ...fixture("memory").memory, content: "Prefers lembas cold." } },
+      "DELETE /memories/mem1": null,
+      "GET /files/content": { name: "bread.md", path: "/home/frodo/bread.md", text: "# Lembas recipe", kind: "markdown" },
+      ...over,
+    }),
+    streams: {},
+  }
+}
+
+test("G8: the palette finds words inside chats, files and memory through the server, the matches marked as text", async () => {
+  const p = await page(g8())
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "lembas")
+  await p.waitForSelector(".palette__snippet")
+  const [q] = await p.evaluate(() => window.__mock.api("GET", "/search"))
+  assert.match(q.args.path, /^\/search\?q=lembas&in=all&limit=8$/)
+  const hits = await p.$$eval(".palette__item:has(.palette__snippet)", (l) => l.map((x) => ({ title: x.querySelector(".palette__title").textContent, mark: x.querySelector("mark")?.textContent, hint: x.querySelector(".palette__hint").textContent })))
+  assert.deepEqual(hits.map((x) => x.hint), ["Chats", "Files", "Memory"])
+  assert.equal(hits[0].title, "Waybread")
+  assert.equal(hits[0].mark, "lembas")
+  assert.equal(hits[2].mark, "lembas")
+  await shot(p, "g8-search-1280")
+  // A memory opens the memory page at it.
+  await p.click(".palette__item:has(.palette__hint:text('Memory'))")
+  await p.waitForSelector('#page-memory:not([hidden]) .mrow.is-marked[data-id="mem1"]')
+  assert.deepEqual(p.errors, [])
+})
+
+test("G8: a chat found inside opens; a server without search finds nothing more, and says nothing", async () => {
+  let p = await page(g8())
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "lembas")
+  await p.waitForSelector(".palette__snippet")
+  await p.click(".palette__item:has(.palette__hint:text('Chats'))")
+  await p.waitForFunction(() => window.__mock.api("GET", "/chats/chat1").length > 0)
+  await p.context().close()
+  p = await page(g8({ "GET /search": { __error: { status: 404, detail: "Not Found" } } }))
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "lembas")
+  await p.waitForFunction(() => window.__mock.api("GET", "/search").length === 1)
+  await p.waitForTimeout(100)
+  assert.equal(await p.locator(".palette__snippet").count(), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("G8: the memory page adds, changes and removes what the models remember", async () => {
+  const p = await page(g8())
+  await p.click("#nav-memory")
+  await p.waitForSelector('.mrow[data-id="mem1"]')
+  assert.match(await p.textContent('.mrow[data-id="mem1"]'), /Prefers lembas warm\./)
+  await p.fill("#memory-new", "Walks to Bree on Sundays.")
+  await p.click(".mnew button[type=submit]")
+  await p.waitForSelector('.mrow[data-id="mem2"]')
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/memories")))[0].args.body, { content: "Walks to Bree on Sundays." })
+  assert.equal(await p.inputValue("#memory-new"), "")
+  await p.click('.mrow[data-id="mem1"] .btn >> text=Edit')
+  await p.fill(".mrow.is-editing textarea", "Prefers lembas cold.")
+  await p.click(".mrow.is-editing .btn--primary")
+  await p.waitForFunction(() => /cold/.test(document.querySelector('.mrow[data-id="mem1"]').textContent))
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/memories/mem1")))[0].args.body, { content: "Prefers lembas cold." })
+  await p.click('.mrow[data-id="mem1"] .tool')
+  await p.click(".menu .menu__item >> text=Remove")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => !document.querySelector('.mrow[data-id="mem1"]'))
+  assert.deepEqual(p.errors, [])
+})
+
+test("G8: at 390 px the memory page and the palette's hits stay inside the window", async () => {
+  const p = await page(g8(), { width: 390, height: 844 })
+  await p.evaluate(() => document.getElementById("nav-memory").click())
+  await p.waitForSelector('.mrow[data-id="mem1"]')
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "g8-memory-390")
+  await p.setViewportSize({ width: 1280, height: 860 })
+  await shot(p, "g8-memory-1280")
+  await p.setViewportSize({ width: 390, height: 844 })
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "lembas")
+  await p.waitForSelector(".palette__snippet")
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "g8-search-390")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

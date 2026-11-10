@@ -24,6 +24,13 @@ All notable changes to LLeMbas Desktop. The format follows
   folders, nested and folded as the server keeps them, then the rest by day. A chat's menu pins
   it and moves it into a folder or a new one; a folder's menu renames it, makes one inside it, or
   deletes it (its chats stay, back in the list). The search line still lists every match.
+- **Memory.** A page in the sidebar (and in Ctrl+K) lists what the account's models remember about
+  the person, as the web's Settings → Memory does: add a record (into a data group, where there is
+  more than one), change it, remove it. A record a model noted says so.
+- **Search inside.** Ctrl+K finds more than titles: once two letters are typed it asks the
+  server's search, and lists below the titles what it found inside chats, in the file library and
+  in memory, each with the words around the match, the match marked. A chat opens, a file opens
+  in the viewer, a memory opens the Memory page at it. A server without search finds titles only.
 
 ### Fixed
 

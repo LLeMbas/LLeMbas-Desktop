@@ -10,7 +10,7 @@ import { renderBar, initBar } from "./titlebar.js"
 import { renderSetup, initSetup } from "./setup.js"
 import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
-import { initExplorer, showLocal, showFilesTab } from "./explorer.js"
+import { initExplorer, showLocal, showFilesTab, openServerFile } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
 import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer } from "./chat.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
@@ -21,12 +21,13 @@ import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
 import { initAgent, link } from "./agent.js"
 import { initScheduled, showScheduled, scheduledCommands } from "./scheduled.js"
 import { initArchived, showArchived } from "./archived.js"
+import { showMemory } from "./memory.js"
 import { closePopover } from "./popup.js"
 import { noteSubagentsCap } from "./models.js"
 
 let status = null
 let view = "" // "setup" | "app"
-let page = "chat" // "chat" | "files" | "scheduled" | "archived" | "settings"
+let page = "chat" // "chat" | "files" | "scheduled" | "archived" | "memory" | "settings"
 let me = null
 let models = []
 let devices = [] // this account's linked devices
@@ -156,6 +157,7 @@ function showPage(name) {
   $("page-files").hidden = name !== "files"
   $("page-scheduled").hidden = name !== "scheduled"
   $("page-archived").hidden = name !== "archived"
+  $("page-memory").hidden = name !== "memory"
   $("settings").hidden = name !== "settings"
   for (const b of document.querySelectorAll(".navrow[data-view]")) b.setAttribute("aria-current", String(b.dataset.view === name))
   if (name !== "chat") {
@@ -208,6 +210,11 @@ function showArchivedPage() {
   showArchived()
 }
 
+function showMemoryPage(focus) {
+  showPage("memory")
+  showMemory(focus || "")
+}
+
 function showFiles(which) {
   showPage("files")
   if (which) showFilesTab(which)
@@ -223,6 +230,7 @@ function commands() {
     ...scheduledCommands(),
     { label: t("Files"), run: () => showFiles() },
     { label: t("Archived"), run: showArchivedPage },
+    { label: t("Memory"), run: () => showMemoryPage() },
     { label: t("Settings"), run: () => showSettings(true) },
   ]
   if (openChatId()) out.push({ label: panelOpen() ? t("Close the activity panel") : t("Open the activity panel"), run: togglePanel })
@@ -301,7 +309,12 @@ async function boot() {
     // Back in the sidebar: the list again.
     changed: () => refreshList(),
   })
-  initPalette({ commands, open: (c) => showChat(c.id) })
+  initPalette({
+    commands,
+    open: (c) => showChat(c.id),
+    openFile: (path, name) => openServerFile(path, name),
+    openMemory: (id) => showMemoryPage(id),
+  })
   initScheduled({ status: () => status, models: () => models, me: () => me, openChat: (id) => showChat(id), show: () => showPage("scheduled") })
   onViewer((on) => {
     $("shell").dataset.viewer = String(on)
@@ -340,6 +353,10 @@ async function boot() {
   $("nav-archived").addEventListener("click", showArchivedPage)
   $("archived-refresh").replaceChildren(icon(ICONS.refresh))
   $("archived-refresh").addEventListener("click", () => showArchived())
+  $("nav-memory").querySelector(".navrow__icon").replaceChildren(icon(ICONS.bulb))
+  $("nav-memory").addEventListener("click", () => showMemoryPage())
+  $("memory-refresh").replaceChildren(icon(ICONS.refresh))
+  $("memory-refresh").addEventListener("click", () => showMemory())
   accountButton()
   $("settings-btn").addEventListener("click", () => showSettings(page !== "settings"))
   $("settings-close").replaceChildren(icon(ICONS.close))
