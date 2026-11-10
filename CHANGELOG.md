@@ -4,6 +4,15 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Archived chats.** Archive chat was one-way: an archived chat left the sidebar and could not be
+  found again in the app. Archived, under Files in the sidebar, lists them newest first; each opens
+  as any chat does, goes back into the sidebar with Restore chat, or is deleted. An archived chat
+  that is open says so in its header, with Restore chat beside it and in its menu.
+
 ## [1.0.0-beta.6] — 2026-11-10
 
 LLeMbas CLI 2.0.0-beta.6 inside, the look and words of LLeMbas 2.0.0-beta.8.

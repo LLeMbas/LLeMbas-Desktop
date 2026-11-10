@@ -822,6 +822,71 @@ test("C4: the tree at 390 px stays inside the window", async () => {
   assert.deepEqual(p.errors, [])
 })
 
+// --- D: parity (beta.9) ------------------------------------------------------------------------
+
+const shot = (p, name) => (process.env.SHOTS ? p.screenshot({ path: join(process.env.SHOTS, `${name}.png`) }) : null)
+const noSideways = (p, width) => p.evaluate((w) => document.documentElement.scrollWidth <= w, width)
+
+function archivedRoutes(over = {}) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /chats?archived=true&limit=50": {
+        chats: [
+          chatRow({ id: "old1", title: "Lembas for the road, a recipe with a title long enough to be cut short", archived: true }),
+          agentChat({ id: "old2", title: "Old refactor", archived: true, running: false }),
+        ],
+        more: false,
+      },
+      "PATCH /chats/old1": { chat: chatRow({ id: "old1", title: "Lembas for the road", archived: false }) },
+      "GET /chats/old2": { chat: agentChat({ id: "old2", title: "Old refactor", archived: true, running: false }), messages: [userMessage("m9", "Tidy it")], more: false, live: null },
+      "PATCH /chats/old2": { chat: agentChat({ id: "old2", title: "Old refactor", archived: false, running: false }) },
+      ...over,
+    }),
+    streams: {},
+  }
+}
+
+test("D2: Archived lists the archived chats; Restore chat takes one back and the sidebar is read again", async () => {
+  const p = await page(archivedRoutes())
+  await p.click("#nav-archived")
+  await p.waitForSelector("#page-archived:not([hidden]) .arow")
+  assert.equal(await p.locator("#page-archived .arow").count(), 2)
+  assert.match(await p.textContent('.arow[data-id="old2"]'), /project/, "an agent chat names its folder")
+  await shot(p, "d2-archived-1280")
+  const before = await p.evaluate(() => window.__mock.api("GET", "/chats?limit").length)
+  await p.click('.arow[data-id="old1"] .arow__unarchive')
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/old1").length === 1)
+  const [call] = await p.evaluate(() => window.__mock.api("PATCH", "/chats/old1"))
+  assert.deepEqual(call.args.body, { archived: false })
+  await p.waitForFunction(() => !document.querySelector('.arow[data-id="old1"]'))
+  await p.waitForFunction((n) => window.__mock.api("GET", "/chats?limit").length > n, before)
+  assert.deepEqual(p.errors, [])
+})
+
+test("D2: an archived chat opens from the page and says so in its header; Restore chat there too", async () => {
+  const p = await page(archivedRoutes())
+  await p.click("#nav-archived")
+  await p.waitForSelector('.arow[data-id="old2"] .arow__open')
+  await p.click('.arow[data-id="old2"] .arow__open')
+  await p.waitForSelector("#main:not([hidden]) #messages .msg")
+  await p.click("#chat-tools .head__unarchive")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/old2").length === 1)
+  await p.waitForSelector("#chat-tools .head__unarchive", { state: "detached" })
+  assert.deepEqual(p.errors, [])
+})
+
+test("D2: at 390 px the archived page stays inside the window, its buttons reachable", async () => {
+  const p = await page(archivedRoutes(), { width: 390, height: 844 })
+  await p.evaluate(() => document.getElementById("nav-archived").click())
+  await p.waitForSelector("#page-archived:not([hidden]) .arow")
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  const b = await p.locator('.arow[data-id="old1"] .arow__unarchive').boundingBox()
+  assert.ok(b && b.x + b.width <= 390, `Unarchive is on the screen: ${JSON.stringify(b)}`)
+  await shot(p, "d2-archived-390")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

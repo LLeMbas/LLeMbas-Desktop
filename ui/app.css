@@ -1629,6 +1629,40 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .findings__item { min-width: 0; overflow-wrap: anywhere; }
 .ask__subagent { color: var(--ink); }
 
+/* --- Archived chats: icon · title over its folder and date · Unarchive · more, on known tracks. */
+
+.arch { list-style: none; margin: 0; padding: 0; display: grid; }
+.arow {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto var(--control-h-sm);
+  gap: var(--sp-3);
+  align-items: center;
+  min-height: var(--control-h);
+  padding: var(--sp-1) 0;
+  border-bottom: var(--border-w) solid var(--border);
+}
+.arow__icon { display: grid; place-items: center; color: var(--ink-faint); }
+.arow__icon.is-agent { color: var(--leaf); }
+.arow__icon .icon { width: 14px; height: 14px; }
+.arow__open {
+  display: grid;
+  min-width: 0;
+  min-height: var(--control-h);
+  padding: var(--sp-1) 0;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.arow__open:hover .arow__title { text-decoration: underline; }
+.arow__title, .arow__sub { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.arow__title { font: var(--text-sm) / var(--leading-tight) var(--font-body); }
+.arow__sub { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
+.arch__more { margin-top: var(--sp-3); }
+.arch__page { display: grid; gap: var(--sp-3); }
+.head__unarchive { white-space: nowrap; }
+
 /* --- Narrower windows ---------------------------------------------------------------------- */
 
 /* 64rem (--bp-wide): a panel goes over the chat instead of beside it. */

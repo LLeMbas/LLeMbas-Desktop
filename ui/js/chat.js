@@ -18,6 +18,7 @@ import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton, treeChanged } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
 import { folderName } from "./list.js"
+import { unarchive } from "./archived.js"
 import { isProgress, progressLine, progressTicks } from "./progress.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 
@@ -691,6 +692,8 @@ function renderHead(chat) {
     // "Continue in a terminal" stays in the chat's menu.
     if (deviceOf(chat.device.token_id)?.terminal) tools.append(terminalButton())
   }
+  // An archived chat says so where it is read, with the way back into the sidebar.
+  if (chat.archived) tools.append(h("button", { type: "button", class: "btn btn--sm head__unarchive", text: t("Restore chat"), title: t("Archived"), onclick: () => unarchiveChat(open?.chat || chat) }))
   tools.append(activityButton())
   tools.append(h("button", { type: "button", class: "tool", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)))
 }
@@ -947,7 +950,7 @@ export function chatMenu(anchor, chat) {
   const items = [{ label: t("Rename…"), run: () => renameChat(chat) }]
   if (chat.kind === "agent" && chat.device_session_id) items.push({ label: t("Continue in a terminal…"), run: () => continueInTerminal(chat) })
   if (base) items.push({ label: t("Open in the web interface"), run: () => openLink(`${base}/chat/${encodeURIComponent(chat.id)}`) })
-  items.push(null, { label: t("Archive chat"), run: () => archiveChat(chat) })
+  items.push(null, chat.archived ? { label: t("Restore chat"), run: () => unarchiveChat(chat) } : { label: t("Archive chat"), run: () => archiveChat(chat) })
   if (mayDelete) items.push({ label: t("Delete chat"), danger: true, run: () => deleteChat(chat) })
   menu(anchor, items)
 }
@@ -1001,6 +1004,15 @@ async function archiveChat(chat) {
     ctx.gone(chat)
   } catch (err) {
     alertIn(why(err))
+  }
+}
+
+/** An archived chat, open or in its page's menu, back into the sidebar. */
+async function unarchiveChat(chat) {
+  if (!(await unarchive(chat))) return
+  if (open?.chat?.id === chat.id) {
+    open.chat = { ...open.chat, archived: false }
+    renderHead(open.chat)
   }
 }
 

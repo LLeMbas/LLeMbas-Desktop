@@ -445,6 +445,10 @@ KEYS = (
     "Stop %(name)s and the subagents under it?",
     "This device is not linked right now.",
     "Subagent %(name)s (%(id)s), %(position)s, asks:",
+    # archived.js
+    "Archived",
+    "Restore chat",
+    "No archived chats.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -673,6 +677,7 @@ OWN: dict[str, dict[str, str]] = {
         "Days": "Dny",
         "Time": "Čas",
         "No day ticked: every day.": "Žádný den nezaškrtnutý: každý den.",
+        "No archived chats.": "Žádné archivované konverzace.",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -896,6 +901,7 @@ OWN: dict[str, dict[str, str]] = {
         "Days": "Tage",
         "Time": "Uhrzeit",
         "No day ticked: every day.": "Kein Tag angehakt: jeden Tag.",
+        "No archived chats.": "Keine archivierten Chats.",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1119,6 +1125,7 @@ OWN: dict[str, dict[str, str]] = {
         "Days": "Días",
         "Time": "Hora",
         "No day ticked: every day.": "Ningún día marcado: todos los días.",
+        "No archived chats.": "No hay chats archivados.",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1342,6 +1349,7 @@ OWN: dict[str, dict[str, str]] = {
         "Days": "Jours",
         "Time": "Heure",
         "No day ticked: every day.": "Aucun jour coché : tous les jours.",
+        "No archived chats.": "Aucune conversation archivée.",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1565,6 +1573,7 @@ OWN: dict[str, dict[str, str]] = {
         "Days": "Napok",
         "Time": "Időpont",
         "No day ticked: every day.": "Ha egy nap sincs bejelölve: minden nap.",
+        "No archived chats.": "Nincs archivált beszélgetés.",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -1788,6 +1797,7 @@ OWN: dict[str, dict[str, str]] = {
         "Days": "Giorni",
         "Time": "Ora",
         "No day ticked: every day.": "Nessun giorno spuntato: ogni giorno.",
+        "No archived chats.": "Nessuna chat archiviata.",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2011,6 +2021,7 @@ OWN: dict[str, dict[str, str]] = {
         "Days": "Dni",
         "Time": "Godzina",
         "No day ticked: every day.": "Żaden dzień niezaznaczony: codziennie.",
+        "No archived chats.": "Brak zarchiwizowanych czatów.",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2234,6 +2245,7 @@ OWN: dict[str, dict[str, str]] = {
         "Days": "Dni",
         "Time": "Čas",
         "No day ticked: every day.": "Žiadny deň nezaškrtnutý: každý deň.",
+        "No archived chats.": "Žiadne archivované konverzácie.",
     },
 }
 

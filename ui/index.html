@@ -53,6 +53,7 @@
       <div class="side__nav">
         <button type="button" class="navrow" id="nav-scheduled" data-view="scheduled"><span class="navrow__icon"></span><span data-i18n>Scheduled</span></button>
         <button type="button" class="navrow" id="nav-files" data-view="files"><span class="navrow__icon"></span><span data-i18n>Files</span></button>
+        <button type="button" class="navrow" id="nav-archived" data-view="archived"><span class="navrow__icon"></span><span data-i18n>Archived</span></button>
       </div>
       <ul class="list" id="chat-list" aria-label="Chats" data-i18n-aria-label></ul>
       <div class="side__foot">
@@ -121,6 +122,15 @@
         <div class="head__tools" id="scheduled-tools"></div>
       </header>
       <div class="page__body" id="scheduled-body"></div>
+    </section>
+
+    <section class="page" id="page-archived" hidden aria-labelledby="archived-title">
+      <header class="head">
+        <h1 class="head__title" id="archived-title" data-i18n>Archived</h1>
+        <div class="head__place"></div>
+        <div class="head__tools"><button type="button" class="tool" id="archived-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button></div>
+      </header>
+      <div class="page__body" id="archived-body"></div>
     </section>
 
     <section class="page settings" id="settings" hidden aria-labelledby="settings-title">

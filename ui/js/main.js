@@ -19,12 +19,13 @@ import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
 import { initAgent, link } from "./agent.js"
 import { initScheduled, showScheduled, scheduledCommands } from "./scheduled.js"
+import { initArchived, showArchived } from "./archived.js"
 import { closePopover } from "./popup.js"
 import { noteSubagentsCap } from "./models.js"
 
 let status = null
 let view = "" // "setup" | "app"
-let page = "chat" // "chat" | "files" | "scheduled" | "settings"
+let page = "chat" // "chat" | "files" | "scheduled" | "archived" | "settings"
 let me = null
 let models = []
 let devices = [] // this account's linked devices
@@ -154,7 +155,7 @@ function accountButton() {
 
 // --- The pages ----------------------------------------------------------------------------------
 
-/** Show one page in the main area: the chat, the files, the scheduled tasks, or the settings. */
+/** Show one page in the main area: the chat, the files, the scheduled tasks, the archived chats, or the settings. */
 function showPage(name) {
   page = name
   closePopover()
@@ -162,6 +163,7 @@ function showPage(name) {
   $("main").hidden = name !== "chat"
   $("page-files").hidden = name !== "files"
   $("page-scheduled").hidden = name !== "scheduled"
+  $("page-archived").hidden = name !== "archived"
   $("settings").hidden = name !== "settings"
   for (const b of document.querySelectorAll(".navrow[data-view]")) b.setAttribute("aria-current", String(b.dataset.view === name))
   if (name !== "chat") {
@@ -209,6 +211,11 @@ function showSettings(on, section) {
   if (section) scrollToSection(section)
 }
 
+function showArchivedPage() {
+  showPage("archived")
+  showArchived()
+}
+
 function showFiles(which) {
   showPage("files")
   if (which) showFilesTab(which)
@@ -223,6 +230,7 @@ function commands() {
     { label: t("Scheduled"), run: () => (showPage("scheduled"), showScheduled()) },
     ...scheduledCommands(),
     { label: t("Files"), run: () => showFiles() },
+    { label: t("Archived"), run: showArchivedPage },
     { label: t("Settings"), run: () => showSettings(true) },
   ]
   if (openChatId()) out.push({ label: panelOpen() ? t("Close the activity panel") : t("Open the activity panel"), run: togglePanel })
@@ -291,6 +299,12 @@ async function boot() {
     },
   })
   initAttach({ chat: () => openChatId() || "", allowed: () => me?.permissions?.["files.upload"] !== false })
+  initArchived({
+    me: () => me,
+    open: (id) => showChat(id),
+    // Back in the sidebar: the list again.
+    changed: () => refreshList(),
+  })
   initPalette({ commands, open: (c) => showChat(c.id) })
   initScheduled({ status: () => status, models: () => models, me: () => me, openChat: (id) => showChat(id), show: () => showPage("scheduled") })
   onViewer((on) => {
@@ -326,6 +340,10 @@ async function boot() {
   })
   $("nav-files").querySelector(".navrow__icon").replaceChildren(icon(ICONS.folder))
   $("nav-files").addEventListener("click", () => showFiles())
+  $("nav-archived").querySelector(".navrow__icon").replaceChildren(icon(ICONS.archive))
+  $("nav-archived").addEventListener("click", showArchivedPage)
+  $("archived-refresh").replaceChildren(icon(ICONS.refresh))
+  $("archived-refresh").addEventListener("click", () => showArchived())
   accountButton()
   $("settings-btn").addEventListener("click", () => showSettings(page !== "settings"))
   $("settings-close").replaceChildren(icon(ICONS.close))
