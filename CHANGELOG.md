@@ -42,7 +42,8 @@ All notable changes to LLeMbas Desktop. The format follows
   every second. From a server that sends no such line (before 2.0.0-beta.8), the app shows the
   server's own words as before. Translations come with the server's.
 - `tests/ui/`: the page under a headless browser against a stand-in for the app's bridge, with
-  the server's answers as a table (`node tests/ui/run.mjs`, needs Playwright and a Chromium).
+  the server's answers as a table (`node tests/ui/run.mjs`, needs Playwright and a Chromium). CI
+  runs it on every push (the `ui` job), with Playwright and its Chromium installed for the run.
 
 ## [1.0.0-beta.5] — 2026-11-09
 
