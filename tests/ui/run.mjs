@@ -1398,6 +1398,134 @@ test("H8: at 390 px the server's pane and the switches stay inside the window", 
   assert.deepEqual(p.errors, [])
 })
 
+// I8: voice (/v1/audio, through Rust) and drawing a picture (/v1/images, through Rust).
+
+const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+function i8({ stt = true, tts = true, images = true, scopes = ["app", "models"] } = {}, commands = {}) {
+  const reply = { id: "m6", role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", metrics: null, steps: [{ kind: "text", markdown: "Lembas is **baked** in leaves.\n\n```\nsecret\n```" }] }
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /me": { id: "u1", name: "Ada Example", email: "ada@example.org", theme: "moria", language: "en", permissions: {}, services: { stt, tts, images, search: false, fetch: false }, scopes },
+      "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?"), reply], more: false, live: null },
+    }),
+    commands: { transcribe: "baked in leaves", speak: "data:audio/mpeg;base64,SUQz", draw: [PNG, "https://elsewhere.example/x.png"], ...commands },
+    streams: {},
+  }
+}
+
+// A microphone and a recorder that record two bytes: the page's own, the browser's untouched.
+async function fakeMicrophone(p) {
+  await p.evaluate(() => {
+    const track = { stop() {} }
+    // The test's page is not a secure context, so it has no mediaDevices of its own.
+    if (!navigator.mediaDevices) Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true })
+    navigator.mediaDevices.getUserMedia = async () => ({ getTracks: () => [track] })
+    window.MediaRecorder = class extends EventTarget {
+      static isTypeSupported(x) {
+        return x === "audio/webm;codecs=opus"
+      }
+      constructor(stream, options) {
+        super()
+        this.mimeType = options?.mimeType || ""
+        this.state = "inactive"
+      }
+      start() {
+        this.state = "recording"
+      }
+      stop() {
+        this.state = "inactive"
+        const data = new Event("dataavailable")
+        data.data = new Blob([new Uint8Array([1, 2])], { type: this.mimeType })
+        this.dispatchEvent(data)
+        this.dispatchEvent(new Event("stop"))
+      }
+    }
+    HTMLMediaElement.prototype.play = async function () {}
+  })
+}
+
+test("I8: Dictate records, asks Rust for the microphone first, and puts the words where the cursor is", async () => {
+  const p = await page(i8())
+  await p.waitForSelector("#dictate:not([hidden])")
+  await fakeMicrophone(p)
+  await p.fill("#composer-text", "Lembas is")
+  await p.click("#dictate")
+  await p.waitForSelector('#dictate.is-recording[aria-pressed="true"]')
+  const order = await p.evaluate(() => window.__mock.calls.map((c) => c.cmd).filter((c) => c === "voice_arm"))
+  assert.deepEqual(order, ["voice_arm"])
+  await shot(p, "i8-dictate-1280")
+  await p.click("#dictate")
+  await p.waitForFunction(() => document.getElementById("composer-text").value === "Lembas is baked in leaves")
+  assert.equal(await p.getAttribute("#dictate", "aria-pressed"), "false")
+  assert.ok(await p.evaluate(() => window.__mock.calls.some((c) => c.cmd === "transcribe")))
+  assert.deepEqual(p.errors, [])
+})
+
+test("I8: no Dictate, Read aloud or Draw where the server has none of them, or the token lacks models", async () => {
+  let p = await page(i8({ stt: false, tts: false, images: false }))
+  await p.click('.chatrow[data-id="chat1"]')
+  await p.waitForSelector('.msg--assistant[data-id="m6"]')
+  assert.equal(await p.isHidden("#dictate"), true)
+  assert.equal(await p.locator(".msg__speak").count(), 0)
+  await p.keyboard.press("Control+k")
+  assert.equal(await p.locator(".palette__item >> text=Draw a picture").count(), 0)
+  await p.context().close()
+  p = await page(i8({ scopes: ["app"] }))
+  await p.waitForSelector("#composer")
+  await p.waitForFunction(() => window.__mock.api("GET", "/me").length === 1)
+  assert.equal(await p.isHidden("#dictate"), true)
+  assert.deepEqual(p.errors, [])
+})
+
+test("I8: Read aloud speaks a reply's words without its markdown or code, and stops when pressed again", async () => {
+  const p = await page(i8())
+  await fakeMicrophone(p)
+  await p.click('.chatrow[data-id="chat1"]')
+  await p.waitForSelector('.msg--assistant[data-id="m6"] .msg__speak')
+  await p.click('.msg--assistant[data-id="m6"] .msg__speak')
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "speak"))
+  assert.deepEqual((await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "speak").args)), { text: "Lembas is baked in leaves." })
+  await p.waitForSelector('.msg__speak[aria-pressed="true"]:not(.is-busy)')
+  await p.click('.msg--assistant[data-id="m6"] .msg__speak')
+  await p.waitForSelector('.msg__speak[aria-pressed="false"]')
+  assert.deepEqual(p.errors, [])
+})
+
+test("I8: Draw a picture shows only the server's own pictures, as Rust read them", async () => {
+  const p = await page(i8())
+  await p.waitForFunction(() => window.__mock.api("GET", "/me").length === 1)
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "draw")
+  await p.click(".palette__item >> text=Draw a picture")
+  await p.fill(".draw__prompt", "A lembas loaf on a leaf")
+  await p.selectOption(".draw__size", "1344x768")
+  await p.click(".draw button[type=submit]")
+  await p.waitForSelector(".draw__pic img")
+  assert.deepEqual((await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "draw").args)), { prompt: "A lembas loaf on a leaf", size: "1344x768" })
+  const srcs = await p.$$eval(".draw__pic img", (l) => l.map((x) => x.getAttribute("src")))
+  assert.deepEqual(srcs, [PNG])
+  await shot(p, "i8-draw-1280")
+  assert.deepEqual(p.errors, [])
+})
+
+test("I8: at 390 px the composer with Dictate and the drawing dialog stay inside the window", async () => {
+  const p = await page(i8(), { width: 390, height: 844 })
+  await p.waitForSelector("#dictate:not([hidden])")
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "i8-composer-390")
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "draw")
+  await p.click(".palette__item >> text=Draw a picture")
+  await p.fill(".draw__prompt", "A lembas loaf")
+  await p.click(".draw button[type=submit]")
+  await p.waitForSelector(".draw__pic img")
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "i8-draw-390")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

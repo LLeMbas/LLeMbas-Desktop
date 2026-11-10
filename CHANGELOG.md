@@ -38,6 +38,12 @@ All notable changes to LLeMbas Desktop. The format follows
 - **A chat's tools and skills.** Tools and skills… in a chat's menu switches the tool families
   (web search among them) and the skills on or off for that chat only, as the web's chat settings
   do, and lists the commands it was told to always allow, with Ask me about these again.
+- **Voice.** Dictate, beside Send, records a message and writes down what was said where the
+  cursor is, through the server's speech to text; a reply's Read this aloud reads it in the
+  account's own voice (without its code), and stops when pressed again. Each shows only where the
+  server has it on for the account. The microphone is allowed only right after Dictate is pressed.
+- **Draw a picture.** From Ctrl+K, where the server can draw for the account: a prompt and a
+  shape, and the picture under it. Only the account's own pictures on its own server are shown.
 
 ### Fixed
 

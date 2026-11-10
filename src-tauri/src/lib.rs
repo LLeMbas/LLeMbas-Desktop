@@ -36,6 +36,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::window::Color;
 use tauri::{
     AppHandle, DragDropEvent, Emitter, LogicalPosition, Manager, RunEvent, Url, WebviewUrl,
@@ -122,6 +123,9 @@ struct App {
     watch: watch::Watch,
     /// The files last dropped on the window: what `attach_dropped` may send, and nothing else.
     dropped: Mutex<Vec<PathBuf>>,
+    /// Until when the page's own Dictate button may have the microphone (`voice_arm`): a request
+    /// for it at any other moment is refused.
+    mic_until: Mutex<Option<std::time::Instant>>,
 }
 
 struct TrayItems {
@@ -151,6 +155,13 @@ impl App {
         let server = self.server.lock().unwrap().clone()?;
         let account = self.account.lock().unwrap().clone()?;
         Some((server.app, account.token))
+    }
+
+    /// The server's own address and the app's token: for the `/v1` routes (voice, pictures).
+    fn door_v1(&self) -> Option<(String, String)> {
+        let server = self.server.lock().unwrap().clone()?;
+        let account = self.account.lock().unwrap().clone()?;
+        Some((server.base, account.token))
     }
 
     /// The folders the agent may use: what the explorer and the viewer may read.
@@ -450,6 +461,77 @@ async fn model_image(handle: AppHandle, path: String) -> Result<String, ApiError
     tauri::async_runtime::spawn_blocking(move || server::request_image(&app_url, &token, &path))
         .await
         .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+// --- Voice and pictures (`/v1`, the app's token holds the `models` scope) -----------------------
+
+/// Run a `/v1` call off the page's thread, as the signed-in account; a 401 signs the app out.
+async fn on_v1<T: Send + 'static>(
+    handle: &AppHandle,
+    f: impl FnOnce(&str, &str) -> Result<T, ApiError> + Send + 'static,
+) -> Result<T, ApiError> {
+    let Some((base, token)) = handle.state::<App>().door_v1() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || f(&base, &token))
+        .await
+        .map_err(|e| ApiError::new(0, e.to_string()))?;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(handle);
+    }
+    result
+}
+
+/// The page is about to ask for the microphone, because the person pressed Dictate: for the
+/// next few seconds a request for it is allowed (`permission`), and at no other time.
+#[tauri::command]
+fn voice_arm(app: tauri::State<'_, App>) {
+    *app.mic_until.lock().unwrap() =
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(10));
+}
+
+/// A recording made in the composer, in words: its bytes as the raw body of the call, its media
+/// type in `x-type`.
+#[tauri::command]
+async fn transcribe(
+    handle: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, ApiError> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(ApiError::new(400, "No recording."));
+    };
+    if bytes.len() as u64 > server::RECORDING_LIMIT {
+        return Err(ApiError::new(413, "That recording is too long."));
+    }
+    let kind = request
+        .headers()
+        .get("x-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let bytes = bytes.clone();
+    on_v1(&handle, move |base, token| {
+        server::transcribe(base, token, &kind, &bytes)
+    })
+    .await
+}
+
+/// A reply read aloud, as a `data:` URL of its audio.
+#[tauri::command]
+async fn speak(handle: AppHandle, text: String) -> Result<String, ApiError> {
+    on_v1(&handle, move |base, token| {
+        server::speak(base, token, &text)
+    })
+    .await
+}
+
+/// Pictures drawn by the instance for `prompt`, as `data:` URLs.
+#[tauri::command]
+async fn draw(handle: AppHandle, prompt: String, size: String) -> Result<Vec<String>, ApiError> {
+    on_v1(&handle, move |base, token| {
+        server::draw(base, token, &prompt, &size)
+    })
+    .await
 }
 
 /// How the CLI is started in a terminal here (`lembas`, or the bundled one by its path): the
@@ -1249,7 +1331,39 @@ fn build_main(handle: &AppHandle) -> tauri::Result<WebviewWindow> {
         .decorations(false)
         .background_color(theme.background())
         .on_navigation(allowed)
+        .on_permission_request(permission)
         .build()
+        .inspect(media_stream)
+}
+
+/// WebKitGTK answers no permission request its app does not, and has no prompt of its own. The
+/// microphone is allowed when the page's own Dictate button has just asked for it (`voice_arm`,
+/// which only the app's page can call: sealed frames have no bridge), once; nothing else is.
+fn permission(view: tauri::Webview, kind: PermissionKind) -> PermissionResponse {
+    if kind != PermissionKind::Microphone {
+        return PermissionResponse::Default;
+    }
+    let app = view.app_handle().state::<App>();
+    let armed = app.mic_until.lock().unwrap().take();
+    if armed.is_some_and(|until| std::time::Instant::now() <= until) {
+        PermissionResponse::Allow
+    } else {
+        PermissionResponse::Deny
+    }
+}
+
+/// `getUserMedia` is off in WebKitGTK unless the app turns it on (it is on in other webviews).
+/// The settings are read with their own getter: the `settings` property is write-only.
+fn media_stream(window: &WebviewWindow) {
+    #[cfg(target_os = "linux")]
+    let _ = window.with_webview(|pv| {
+        use webkit2gtk::{SettingsExt, WebViewExt};
+        if let Some(settings) = pv.inner().settings() {
+            settings.set_enable_media_stream(true);
+        }
+    });
+    #[cfg(not(target_os = "linux"))]
+    let _ = window;
 }
 
 /// The window shows the app's own page, and the sealed frames inside it; nothing else, ever.
@@ -1710,6 +1824,10 @@ pub fn run() {
             sealed_close,
             attach_pick,
             library_upload,
+            voice_arm,
+            transcribe,
+            speak,
+            draw,
             attach_dropped,
             attach_bytes,
             set_theme,
@@ -1770,6 +1888,7 @@ pub fn run() {
                 sealed: sealed::Pages::default(),
                 watch: watch::Watch::default(),
                 dropped: Mutex::new(Vec::new()),
+                mic_until: Mutex::new(None),
             });
             // Without a tray (no AppIndicator library, no StatusNotifier host) the app still
             // starts: the title bar's menu has every item the tray has.

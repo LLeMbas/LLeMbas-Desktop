@@ -32,6 +32,11 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# The webview's own settings: getUserMedia is off in WebKitGTK until the app turns it on.
+# The same crate and version wry already builds on.
+webkit2gtk = { version = "2.0", features = ["v2_4"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

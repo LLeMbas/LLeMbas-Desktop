@@ -22,6 +22,7 @@ import { unarchive } from "./archived.js"
 import { isProgress, progressLine, progressTicks } from "./progress.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 import { scopePopover } from "./scope.js"
+import { readAloudButton } from "./voice.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
@@ -292,6 +293,7 @@ function assistantMessage(m, chat) {
         "div",
         { class: "msg__actions" },
         action(ICONS.copy, t("Copy"), () => copyText(replyText(m))),
+        readAloudButton(m.id, () => replyText(m)),
         // Only the last reply: CSS shows it there and nowhere else (app.css, .msg__regen).
         action(ICONS.refresh, t("Regenerate reply"), () => regenerate(m), "msg__regen"),
       ),

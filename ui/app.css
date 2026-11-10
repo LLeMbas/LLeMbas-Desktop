@@ -1168,6 +1168,18 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   box-shadow: var(--shadow-lg);
 }
 .dialog::backdrop { background: var(--scrim); }
+.dialog--wide { width: min(var(--w-prose), calc(100vw - 2 * var(--sp-4))); }
+
+/* Draw a picture (draw.js): the prompt, a shape and two buttons on one line, the pictures below. */
+.draw .dialog__title { display: flex; gap: var(--sp-2); align-items: center; }
+.draw__prompt { width: 100%; }
+.draw__bar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--sp-2); align-items: center; }
+.draw__size { justify-self: start; max-width: 100%; }
+.draw__out { display: grid; gap: var(--sp-3); max-height: 60vh; overflow-y: auto; }
+.draw__out:empty { display: none; }
+.draw__pic { display: grid; gap: var(--sp-1); margin: 0; }
+.draw__pic img { display: block; width: 100%; height: auto; border-radius: var(--radius-lg); background: var(--surface); }
+.draw__pic figcaption { font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
 .dialog__body { display: grid; gap: var(--sp-3); padding: var(--sp-4); }
 .dialog__title { font: 600 var(--text-md) / var(--leading-tight) var(--font-ui); }
 /* A line to copy: as it is, on one line that scrolls on its own rather than the dialog. */
@@ -1276,11 +1288,16 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .composer__files { justify-content: start; }
 .composer__bar {
   display: grid;
-  grid-template-columns: var(--chip-h) minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--chip-h) minmax(0, 1fr) auto auto auto;
   gap: var(--sp-2);
   align-items: center;
 }
-.composer[data-attach="false"] .composer__bar { grid-template-columns: minmax(0, 1fr) auto auto; }
+.composer[data-attach="false"] .composer__bar { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+/* Dictate: a round tool beside Send; while it records it says so in the accent. */
+.composer__mic { width: var(--round); height: var(--round); border-radius: var(--radius-full); }
+.composer .composer__mic.is-recording { color: var(--accent-ink); background: var(--accent); }
+.composer__mic.is-busy, .msg__speak.is-busy { opacity: 0.6; cursor: progress; }
+.msg__speak[aria-pressed="true"] { color: var(--accent); }
 .composer__attach { width: var(--chip-h); height: var(--chip-h); border: var(--border-w) solid var(--border); border-radius: var(--radius-full); }
 /* The chips stay on one line; where they do not fit, the line scrolls by itself. */
 .composer__chips { display: flex; flex-wrap: nowrap; gap: var(--sp-1); min-width: 0; align-items: center; overflow-x: auto; scrollbar-width: none; }

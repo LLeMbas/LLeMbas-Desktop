@@ -22,6 +22,8 @@ import { initAgent, link } from "./agent.js"
 import { initScheduled, showScheduled, scheduledCommands } from "./scheduled.js"
 import { initArchived, showArchived } from "./archived.js"
 import { showMemory } from "./memory.js"
+import { initVoice, voiceFor } from "./voice.js"
+import { canDraw, openDraw } from "./draw.js"
 import { closePopover } from "./popup.js"
 import { noteSubagentsCap } from "./models.js"
 
@@ -94,6 +96,7 @@ async function startApp() {
   try {
     me = await get("/me")
     noteMe(me)
+    voiceFor(me)
   } catch (err) {
     $("thread-note").textContent = why(err)
     $("thread-note").hidden = false
@@ -233,6 +236,7 @@ function commands() {
     { label: t("Memory"), run: () => showMemoryPage() },
     { label: t("Settings"), run: () => showSettings(true) },
   ]
+  if (canDraw(me)) out.push({ label: t("Draw a picture"), run: openDraw })
   if (openChatId()) out.push({ label: panelOpen() ? t("Close the activity panel") : t("Open the activity panel"), run: togglePanel })
   if (terminalAvailable()) out.push({ label: terminalOpen() ? t("Close terminal") : t("Terminal"), run: toggleTerminal })
   if (status?.linked) out.push({ label: status.agent_wanted ? t("Stop the agent") : t("Start the agent"), run: () => invoke("set_agent", { on: !status.agent_wanted }) })
@@ -280,6 +284,7 @@ async function boot() {
       $("thread-note").hidden = !text
     },
   })
+  initVoice()
   initChat({
     status: () => status,
     thisDevices,

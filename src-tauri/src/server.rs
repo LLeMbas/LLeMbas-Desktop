@@ -652,10 +652,15 @@ fn header_name(name: &str) -> String {
 
 /// The body of a `multipart/form-data` request with one file in the field `field`.
 fn multipart(boundary: &str, field: &str, name: &str, bytes: &[u8]) -> Vec<u8> {
+    multipart_typed(boundary, field, name, "application/octet-stream", bytes)
+}
+
+/// The same, with the file's own media type (a recording says what it is: `audio/webm`).
+fn multipart_typed(boundary: &str, field: &str, name: &str, kind: &str, bytes: &[u8]) -> Vec<u8> {
     let mut body = Vec::with_capacity(bytes.len() + 256);
     body.extend_from_slice(
         format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"\r\nContent-Type: {kind}\r\n\r\n",
             header_name(name)
         )
         .as_bytes(),
@@ -705,6 +710,192 @@ pub fn upload_to_library(
     }
     let path = format!("/files/upload?path={}", crate::terminal::encode(dir));
     send_file(app, token, &path, "files", name, bytes)
+}
+
+// --- Voice and pictures: the OpenAI-compatible routes of `/v1`, under the `models` scope ------------
+
+/// The most a recording may be here: the server's own limit is 25 MB.
+pub const RECORDING_LIMIT: u64 = 25 * 1024 * 1024;
+/// The most a reply read aloud may be, as audio.
+pub const SPEECH_LIMIT: u64 = 32 * 1024 * 1024;
+/// The most a generated picture may be.
+pub const DRAWN_LIMIT: u64 = 24 * 1024 * 1024;
+/// The media types a recording may say it is; anything else goes as `audio/webm`.
+const RECORDING_TYPES: [&str; 5] = [
+    "audio/webm",
+    "audio/ogg",
+    "audio/wav",
+    "audio/mpeg",
+    "audio/mp4",
+];
+
+/// A recording's media type as it may be sent: one of ours, its parameters (`;codecs=opus`) off.
+pub fn recording_type(kind: &str) -> &'static str {
+    let bare = kind
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    RECORDING_TYPES
+        .iter()
+        .find(|t| **t == bare)
+        .copied()
+        .unwrap_or("audio/webm")
+}
+
+/// A recording, in words: `POST /v1/audio/transcriptions` (the instance's own model, the
+/// account's language). The text the server heard.
+pub fn transcribe(base: &str, token: &str, kind: &str, bytes: &[u8]) -> Result<String, ApiError> {
+    if bytes.is_empty() {
+        return Err(ApiError::new(400, "The recording was empty."));
+    }
+    let kind = recording_type(kind);
+    let ext = kind
+        .rsplit('/')
+        .next()
+        .unwrap_or("webm")
+        .replace("mpeg", "mp3");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let boundary = format!("llembas-desktop-{nanos:x}");
+    let res = agent(Duration::from_secs(300))
+        .post(&format!("{base}/v1/audio/transcriptions"))
+        .set("authorization", &format!("Bearer {token}"))
+        .set("accept", "application/json")
+        .set(
+            "content-type",
+            &format!("multipart/form-data; boundary={boundary}"),
+        )
+        .send_bytes(&multipart_typed(
+            &boundary,
+            "file",
+            &format!("speech.{ext}"),
+            kind,
+            bytes,
+        ))?;
+    let v: Value = res
+        .into_json()
+        .map_err(|_| ApiError::new(0, "The server's answer was not JSON.".to_string()))?;
+    Ok(v.get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string())
+}
+
+/// `bytes` of a media type of `kinds` (by its prefix), as a `data:` URL; at most `limit`.
+fn as_data_url(res: ureq::Response, prefix: &str, limit: u64) -> Result<String, ApiError> {
+    let kind = res
+        .content_type()
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let fits = if prefix == "image/" {
+        IMAGE_TYPES.contains(&kind.as_str())
+    } else {
+        kind.starts_with(prefix)
+            && kind
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "/-+.".contains(c))
+    };
+    if !fits {
+        return Err(ApiError::new(
+            415,
+            format!("Not what was asked for: {kind}"),
+        ));
+    }
+    let mut bytes = Vec::new();
+    res.into_reader()
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|e| ApiError::new(0, format!("The server's answer could not be read: {e}")))?;
+    if bytes.len() as u64 >= limit {
+        return Err(ApiError::new(413, "The server's answer is too large."));
+    }
+    Ok(format!("data:{kind};base64,{}", base64(&bytes)))
+}
+
+/// A reply read aloud: `POST /v1/audio/speech` in the account's own voice and speed. The audio,
+/// as a `data:` URL the page plays.
+pub fn speak(base: &str, token: &str, text: &str) -> Result<String, ApiError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(ApiError::new(400, "There is nothing to read aloud."));
+    }
+    let res = agent(Duration::from_secs(300))
+        .post(&format!("{base}/v1/audio/speech"))
+        .set("authorization", &format!("Bearer {token}"))
+        .send_json(serde_json::json!({ "input": text, "response_format": "mp3" }))?;
+    as_data_url(res, "audio/", SPEECH_LIMIT)
+}
+
+/// The id of one of the person's own files in a URL `/v1/images/generations` answered with:
+/// `…/v1/files/<id>/content`, and nothing else. The picture is then fetched from this app's own
+/// server by that id -- never from the address the answer named.
+pub fn own_file_id(url: &str) -> Option<String> {
+    let rest = url.split(['?', '#']).next()?;
+    let tail = rest.strip_suffix("/content")?;
+    let (head, id) = tail.rsplit_once('/')?;
+    let ok = head.ends_with("/v1/files")
+        && !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    ok.then(|| id.to_string())
+}
+
+/// Sizes a picture may be asked for: the instance rounds to what its workflow takes.
+const SIZES: [&str; 3] = ["1024x1024", "1344x768", "768x1344"];
+
+/// Pictures drawn by the instance: `POST /v1/images/generations` (its own workflow and default
+/// checkpoint), each then read from the person's own files on this server. `data:` URLs.
+pub fn draw(base: &str, token: &str, prompt: &str, size: &str) -> Result<Vec<String>, ApiError> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err(ApiError::new(400, "Say what to draw."));
+    }
+    let mut body = serde_json::json!({ "prompt": prompt, "n": 1, "response_format": "url" });
+    if SIZES.contains(&size) {
+        body["size"] = Value::String(size.to_string());
+    }
+    let res = agent(Duration::from_secs(900))
+        .post(&format!("{base}/v1/images/generations"))
+        .set("authorization", &format!("Bearer {token}"))
+        .set("accept", "application/json")
+        .send_json(body)?;
+    let v: Value = res
+        .into_json()
+        .map_err(|_| ApiError::new(0, "The server's answer was not JSON.".to_string()))?;
+    let ids: Vec<String> = v
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|i| i.get("url").and_then(Value::as_str).and_then(own_file_id))
+                .collect()
+        })
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return Err(ApiError::new(
+            0,
+            "The server's answer had no picture of yours in it.",
+        ));
+    }
+    ids.iter()
+        .map(|id| {
+            let res = agent(Duration::from_secs(60))
+                .get(&format!("{base}/v1/files/{id}/content"))
+                .set("authorization", &format!("Bearer {token}"))
+                .call()?;
+            as_data_url(res, "image/", DRAWN_LIMIT)
+        })
+        .collect()
 }
 
 /// One `multipart/form-data` POST of one file to `path` on the app's door; the JSON answer.
@@ -983,6 +1174,42 @@ mod tests {
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
         assert_eq!(base64(&[0xfb, 0xff]), "+/8=");
+    }
+
+    #[test]
+    fn a_drawn_picture_is_read_only_as_one_of_the_persons_own_files() {
+        assert_eq!(
+            own_file_id("https://ai.example/v1/files/abc_12-3/content").as_deref(),
+            Some("abc_12-3")
+        );
+        assert_eq!(
+            own_file_id("http://other/v1/files/x/content?t=1").as_deref(),
+            Some("x")
+        );
+        assert_eq!(own_file_id("https://ai.example/v1/files/../content"), None);
+        assert_eq!(own_file_id("https://ai.example/v1/files//content"), None);
+        assert_eq!(own_file_id("https://ai.example/uploads/x/content"), None);
+        assert_eq!(
+            own_file_id("https://ai.example/v1/files/a%2Fb/content"),
+            None
+        );
+        assert_eq!(own_file_id("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn a_recording_says_one_of_the_known_types() {
+        assert_eq!(recording_type("audio/webm;codecs=opus"), "audio/webm");
+        assert_eq!(recording_type("Audio/OGG"), "audio/ogg");
+        assert_eq!(recording_type("text/html"), "audio/webm");
+        let body = String::from_utf8(multipart_typed(
+            "B",
+            "file",
+            "speech.webm",
+            "audio/webm",
+            b"x",
+        ))
+        .unwrap();
+        assert!(body.contains("filename=\"speech.webm\"\r\nContent-Type: audio/webm\r\n"));
     }
 
     #[test]

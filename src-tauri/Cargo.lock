@@ -2149,6 +2149,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tungstenite",
  "ureq",
+ "webkit2gtk",
 ]
 
 [[package]]
