@@ -8,6 +8,18 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ### Changed
 
+- **The chat's settings moved to the top right of its header; the composer keeps the message.**
+  The model picker, how hard it thinks, the subagents and an agent chat's mode sat as chips inside
+  the composer, where with a long model name or every chip on they were cut off and some could not
+  be reached. They are now in the chat's header, beside the Terminal, the activity panel, the
+  chat's tools and skills (a button of its own now, still in the chat's menu too) and the menu; a
+  new agent chat's computer and folder sit beside the title, where an open one says where it
+  works. The composer holds only the message's own: the text, attach, Dictate, Draw a picture and
+  Send/Stop. Where the header has no room for the settings -- measured, so a long model name
+  counts -- they fold behind Chat settings, which opens them as a wrapped row under the header:
+  nothing is cut off or drawn over another at any width (checked at 1920, 1280, 1024, 800 and
+  390 px with long model names and every chip on).
+
 - **Files, in the web explorer's shape, using the window's width.** Both tabs (This computer and
   Server) are now where you are (crumbs, each part a way back), the folder tree, the list in
   columns -- name with an icon by kind, type, size, changed -- and, on a wide window, the chosen

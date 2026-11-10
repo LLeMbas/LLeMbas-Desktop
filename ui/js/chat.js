@@ -731,8 +731,49 @@ function renderHead(chat) {
   }
   // An archived chat says so where it is read, with the way back into the sidebar.
   if (chat.archived) tools.append(h("button", { type: "button", class: "btn btn--sm head__unarchive", text: t("Restore chat"), title: t("Archived"), onclick: () => unarchiveChat(open?.chat || chat) }))
+  if (!chat.archived) tools.append(h("button", { type: "button", class: "tool", id: "scope-open", "aria-label": t("Tools and skills…"), title: t("Tools and skills…"), "aria-haspopup": "dialog", onclick: (e) => scopePopover(e.currentTarget, open?.chat || chat) }, icon(ICONS.tools)))
   tools.append(activityButton())
   tools.append(h("button", { type: "button", class: "tool", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)))
+  fitHead()
+}
+
+// --- The chat's settings, top right ---------------------------------------------------------------
+//
+// The model, how hard it thinks, the subagents and an agent chat's mode sit in the chat's header,
+// beside the Terminal, the activity panel, the tools and skills and the chat's menu; the composer
+// keeps only what belongs to the message. Where the header has no room for them all on its line,
+// they fold behind one button (Chat settings), which opens them as a row of their own under the
+// header -- wrapped, every one reachable, never a line cut off at its end. Whether they fit is
+// measured, not guessed: a long model name or one more chip folds them at any width.
+
+function fitHead() {
+  const head = $("chat-head")
+  const box = $("chat-settings")
+  if (!head || !box) return
+  const any = box.childElementCount > 0
+  head.dataset.fold = "false"
+  // Folded when the settings are cut at their end, or when they leave where the chat works (its
+  // folder) less than its own width or 10rem, whichever is less.
+  const place = $("chat-place")
+  const room = Math.min(place.scrollWidth, 10 * parseFloat(getComputedStyle(document.documentElement).fontSize))
+  const squeezed = place.childElementCount > 0 && place.clientWidth + 1 < room
+  const fold = any && (box.scrollWidth > box.clientWidth + 1 || squeezed)
+  head.dataset.fold = String(fold)
+  if (!fold) head.dataset.unfold = "false"
+  $("chat-fold").hidden = !fold
+  $("chat-fold").setAttribute("aria-expanded", String(head.dataset.unfold === "true"))
+}
+
+function initHead() {
+  $("chat-fold").replaceChildren(icon(ICONS.sliders))
+  $("chat-fold").hidden = true
+  $("chat-fold").addEventListener("click", () => {
+    const head = $("chat-head")
+    head.dataset.unfold = String(head.dataset.unfold !== "true")
+    $("chat-fold").setAttribute("aria-expanded", head.dataset.unfold)
+    if (head.dataset.unfold === "true") $("chat-settings").querySelector("button")?.focus()
+  })
+  new ResizeObserver(() => fitHead()).observe($("chat-head"))
 }
 
 /** The models this chat may switch to (its data group's), or the account's when that fails. */
@@ -966,7 +1007,8 @@ let chipsDrawn = 0 // which drawing is the latest: an older one's late answers a
 
 /** The chips for what the composer is writing to: a new chat (`draft`) or the open chat. */
 async function renderChips() {
-  const box = $("composer-chips")
+  const box = $("chat-settings")
+  const message = $("composer-chips")
   const drawing = ++chipsDrawn
   const mayPick = ctx.me()?.permissions?.["chat.model_select"] !== false
   if (draft) {
@@ -974,18 +1016,20 @@ async function renderChips() {
     const models = ctx.models()
     const model = models.find((m) => m.id === draft.model)
     const parts = []
+    const where = [] // an agent chat's computer and folder: where it works, beside the title
     if (draft.kind === "agent") {
       const others = otherDevices()
-      if (others.length) parts.push(deviceChip(others))
+      if (others.length) where.push(deviceChip(others))
       if (draftHere()) {
         const roots = s?.remote?.enabled ? s.remote.roots : []
         if (!roots.includes(draft.dir)) draft.dir = roots[0] || ""
-        parts.push(folderChip(roots, draft.dir, (d) => ((draft.dir = d), renderChips())))
+        where.push(folderChip(roots, draft.dir, (d) => ((draft.dir = d), renderChips())))
       } else {
-        parts.push(elsewhereFolderChip(draftDevice(), draft.dir, (d) => ((draft.dir = d), renderChips())))
+        where.push(elsewhereFolderChip(draftDevice(), draft.dir, (d) => ((draft.dir = d), renderChips())))
       }
       parts.push(modeChip(draft.mode, (m) => ((draft.mode = m), renderChips())))
     }
+    $("chat-place").replaceChildren(...where)
     const shell = terminalTarget()
     aimTerminal(shell)
     parts.push(modelChip(models, draft.model, (id) => {
@@ -994,8 +1038,11 @@ async function renderChips() {
       renderChips()
     }, mayPick))
     if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), renderChips())))
-    if (draft.kind === "chat" && picturesOffered()) parts.push(pictureChip())
-    else wantPicture = false
+    if (draft.kind === "chat" && picturesOffered()) message.replaceChildren(pictureChip())
+    else {
+      wantPicture = false
+      message.replaceChildren()
+    }
     if (draft.kind === "chat" && teamPossible(model)) parts.push(agentsChip(draft.agents, (a) => ((draft.agents = a), renderChips()), { cap: subagentsCap(), own: namedOnly(model?.subagents) }))
     // An agent chat's subagents run on its device: offered as the server says for that device.
     const device = draft.kind === "agent" ? draftDevice() : ""
@@ -1007,20 +1054,20 @@ async function renderChips() {
         if (f && drawing === chipsDrawn && draft?.kind === "agent") renderChips()
       })
     }
-    // Last, so the chat's own settings come first where the line scrolls.
-    if (shell) {
-      const b = chip({ ico: ICONS.terminal, label: t("Terminal"), menuish: false, cls: "cchip--terminal", onclick: toggleTerminal })
-      b.dataset.terminalToggle = ""
-      b.setAttribute("aria-pressed", String(terminalOpen()))
-      b.setAttribute("aria-controls", "terminal")
-      parts.push(b)
-    }
+    // The Terminal, as an open chat has it: in the header's tools.
+    $("chat-tools").replaceChildren(...(shell ? [terminalButton()] : []))
     box.replaceChildren(...parts.filter(Boolean))
+    fitHead()
     return
   }
   const chat = open?.chat
   aimTerminal(terminalTarget())
-  if (!chat?.kind) return box.replaceChildren()
+  if (!chat?.kind) {
+    box.replaceChildren()
+    message.replaceChildren()
+    fitHead()
+    return
+  }
   const save = async (body) => {
     try {
       const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, body)
@@ -1041,12 +1088,17 @@ async function renderChips() {
   if (chat.kind === "agent") parts.push(modeChip(chat.mode || "edit", (m) => save({ mode: m })))
   if (chat.model) parts.push(modelChip(models, chat.model, (id) => save({ model: id }), mayPick))
   parts.push(effortChip(current, chat.effort || levelsOf(current).start, (l) => save({ effort: l })))
-  if (chat.kind === "chat" && picturesOffered()) parts.push(pictureChip())
-  else wantPicture = false
+  if (chat.kind === "chat" && picturesOffered() && !chat.archived) message.replaceChildren(pictureChip())
+  else {
+    wantPicture = false
+    message.replaceChildren()
+  }
   box.replaceChildren(...parts.filter(Boolean))
+  fitHead()
   const offer = await teamOffered(chat)
   if (!offer || drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
   box.append(agentsChip(open.chat.agents || chat.agents, (a) => save({ agents: a }), offer))
+  fitHead()
 }
 
 /**
@@ -1505,5 +1557,6 @@ export function initChat(context) {
     }
   })
   onAgentChange(renderNotice)
+  initHead()
   showComposer(false)
 }

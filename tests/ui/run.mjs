@@ -355,11 +355,11 @@ async function newChatOn(p, kind, modelName) {
 async function subagentsChip(p) {
   // The chip comes after the others (an open chat's waits for the server's word).
   await p.waitForTimeout(150)
-  return p.locator("#composer-chips .cchip--subagents")
+  return p.locator("#chat-settings .cchip--subagents")
 }
 
 async function openSlider(p) {
-  await p.click("#composer-chips .cchip--subagents")
+  await p.click("#chat-settings .cchip--subagents")
   await p.waitForSelector(".range2")
   return {
     min: await p.getAttribute(".range2__input--min", "max"),
@@ -413,7 +413,7 @@ test("A5: subagents switched on while the app stays open: the next new chat offe
   await p.evaluate((m) => (window.__mockConfig.routes["GET /models"] = m), models())
   await p.waitForTimeout(5200)
   await p.click("#new-chat-btn")
-  await p.waitForSelector("#composer-chips .cchip--subagents")
+  await p.waitForSelector("#chat-settings .cchip--subagents")
   assert.deepEqual(p.errors, [])
 })
 
@@ -470,9 +470,9 @@ test("B3: a new agent chat offers the Terminal once its folder is chosen, and op
   const p = await page(b3())
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
-  await p.waitForSelector("#composer-chips .cchip--terminal")
+  await p.waitForSelector("#chat-tools [data-terminal-toggle]")
   assert.equal(await p.evaluate(() => window.__mock.terminals().length), 0, "nothing is opened until asked")
-  await p.click("#composer-chips .cchip--terminal")
+  await p.click("#chat-tools [data-terminal-toggle]")
   await p.waitForSelector("#terminal:not([hidden]) .xterm")
   await p.waitForFunction(() => window.__mock.terminals().length === 1)
   const [shell] = await p.evaluate(() => window.__mock.terminals())
@@ -480,7 +480,7 @@ test("B3: a new agent chat offers the Terminal once its folder is chosen, and op
   await p.waitForFunction(() => document.querySelector("#terminal .xterm-rows")?.textContent.includes("dev@workbench"))
   assert.equal(await p.textContent("#terminal-message"), "Connected.")
   assert.equal(await p.textContent("#terminal-title"), "workbench")
-  assert.equal(await p.getAttribute("#composer-chips .cchip--terminal", "aria-pressed"), "true")
+  assert.equal(await p.getAttribute("#chat-tools [data-terminal-toggle]", "aria-pressed"), "true")
   // Keys go up through the bridge, never a socket of the page's own.
   await p.click("#terminal .xterm")
   await p.keyboard.type("ls")
@@ -571,22 +571,22 @@ test("B3: no Terminal where the device opens none, for a chat on the server, or 
   let p = await page(b3(off))
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
-  await p.waitForSelector("#composer-chips .cchip")
-  assert.equal(await p.locator("#composer-chips .cchip--terminal").count(), 0, "the device opens no terminal")
+  await p.waitForSelector("#chat-settings .cchip")
+  assert.equal(await p.locator("#chat-tools [data-terminal-toggle]").count(), 0, "the device opens no terminal")
   await openChatRow(p, "chat2")
   assert.equal(await p.locator("#chat-tools [data-terminal-toggle]").count(), 0)
   await p.context().close()
   p = await page(b3({}))
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Chat")
-  await p.waitForSelector("#composer-chips .cchip")
-  assert.equal(await p.locator("#composer-chips .cchip--terminal").count(), 0, "a chat on the server has no shell")
+  await p.waitForSelector("#chat-settings .cchip")
+  assert.equal(await p.locator("#chat-tools [data-terminal-toggle]").count(), 0, "a chat on the server has no shell")
   await p.context().close()
   p = await page({ ...b3({}), status: status({ remote: { enabled: true, roots: [] } }) })
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
-  await p.waitForSelector("#composer-chips .cchip")
-  assert.equal(await p.locator("#composer-chips .cchip--terminal").count(), 0, "no folder yet")
+  await p.waitForSelector("#chat-settings .cchip")
+  assert.equal(await p.locator("#chat-tools [data-terminal-toggle]").count(), 0, "no folder yet")
   assert.deepEqual(p.errors, [])
 })
 
@@ -802,30 +802,30 @@ test("C4: Subagents for a new agent chat as /models?kind=agent says for this dev
     const p = await page(c4({ "GET /models?kind=agent&device=token1": models }))
     await p.click("#new-chat-btn")
     await p.click(".kind__tab >> text=Agent")
-    await p.waitForSelector("#composer-chips .cchip")
+    await p.waitForSelector("#chat-settings .cchip")
     await p.waitForTimeout(200)
     return p
   }
   let p = await newAgent(facts)
-  assert.equal(await p.locator("#composer-chips .cchip--subagents").count(), 1, "offered, and the device runs them")
-  await p.click("#composer-chips .cchip--subagents")
+  assert.equal(await p.locator("#chat-settings .cchip--subagents").count(), 1, "offered, and the device runs them")
+  await p.click("#chat-settings .cchip--subagents")
   await p.waitForSelector(".range2")
   assert.equal(await p.getAttribute(".range2__input--min", "max"), "32", "the server's cap")
   await p.context().close()
   p = await newAgent({ ...facts, agent_subagents: { offered: true, device_runs: false } })
-  assert.equal(await p.locator("#composer-chips .cchip--subagents").count(), 0, "this computer's CLI cannot run them")
+  assert.equal(await p.locator("#chat-settings .cchip--subagents").count(), 0, "this computer's CLI cannot run them")
   await p.context().close()
   p = await newAgent({ ...facts, agent_subagents: { offered: false, device_runs: true } })
-  assert.equal(await p.locator("#composer-chips .cchip--subagents").count(), 0, "not offered")
+  assert.equal(await p.locator("#chat-settings .cchip--subagents").count(), 0, "not offered")
   await p.context().close()
   p = await newAgent({ __error: { status: 400, detail: "older server" } })
-  assert.equal(await p.locator("#composer-chips .cchip--subagents").count(), 0, "a server before 3.4.0: none, as before")
+  assert.equal(await p.locator("#chat-settings .cchip--subagents").count(), 0, "a server before 3.4.0: none, as before")
   await p.context().close()
   // An open agent chat: its own `subagents` (chat_agent.json offers them).
   const chat = fixture("chat_agent")
   p = await page(c4({ "GET /chats/chat2": { chat: { ...agentChat({ running: false }), subagents: chat.subagents, agents: chat.agents }, messages: [userMessage("m1", "Go")], more: false, live: null } }))
   await openChatRow(p, "chat2")
-  await p.waitForSelector("#composer-chips .cchip--subagents")
+  await p.waitForSelector("#chat-settings .cchip--subagents")
   assert.deepEqual(p.errors, [])
 })
 
@@ -928,7 +928,7 @@ function d4(over = {}) {
 }
 
 async function pickDevice(p, name) {
-  await p.click("#composer-chips .cchip--device")
+  await p.click("#chat-place .cchip--device")
   await p.locator(".menu .menu__item", { hasText: name }).first().click()
 }
 
@@ -936,16 +936,16 @@ test("D4: a new agent chat defaults to this computer and can be sent to another 
   const p = await page(d4())
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
-  await p.waitForSelector("#composer-chips .cchip--device")
-  assert.match(await p.textContent("#composer-chips .cchip--device"), /This computer/)
+  await p.waitForSelector("#chat-place .cchip--device")
+  assert.match(await p.textContent("#chat-place .cchip--device"), /This computer/)
   await pickDevice(p, "studio")
-  await p.waitForFunction(() => /studio/.test(document.querySelector("#composer-chips .cchip--device")?.textContent || ""))
+  await p.waitForFunction(() => /studio/.test(document.querySelector("#chat-place .cchip--device")?.textContent || ""))
   assert.match(await p.textContent("#new-chat .hello__sub"), /studio/, "the greeting names the computer")
-  assert.match(await p.textContent("#composer-chips"), /site/, "the folder its agent chats work in")
+  assert.match(await p.textContent("#chat-place"), /site/, "the folder its agent chats work in")
   assert.ok(await p.isHidden("#link-notice"), "this computer's agent is not in the way")
   await shot(p, "d4-device-1280")
   // The Terminal opens on that computer, in that folder, before the first message.
-  await p.click("#composer-chips .cchip--terminal")
+  await p.click("#chat-tools [data-terminal-toggle]")
   await p.waitForFunction(() => window.__mock.terminals().length === 1)
   const [shell] = await p.evaluate(() => window.__mock.terminals())
   assert.deepEqual(shell.target, { chat: null, device: "token9", directory: "/srv/site" })
@@ -964,18 +964,18 @@ test("D4: on a computer with no known folder the path is typed; back to this com
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
   await pickDevice(p, "studio")
-  await p.waitForSelector("#composer-chips .cchip.is-warn")
+  await p.waitForSelector("#chat-place .cchip.is-warn")
   await p.fill("#composer-text", "Hello")
   await p.click("#send")
   await p.waitForSelector("#thread-note:not([hidden])")
   assert.equal(await p.evaluate(() => window.__mock.api("POST", "/chats").length), 0, "nothing sent without a folder")
-  await p.click("#composer-chips .cchip.is-warn")
+  await p.click("#chat-place .cchip.is-warn")
   await p.waitForSelector("dialog[open] .dialog__input")
   await p.fill("dialog[open] .dialog__input", "/home/dev/other")
   await p.click("dialog[open] .btn--primary")
-  await p.waitForFunction(() => /other/.test(document.querySelector("#composer-chips").textContent))
+  await p.waitForFunction(() => /other/.test(document.querySelector("#chat-place").textContent))
   await pickDevice(p, "This computer")
-  await p.waitForFunction(() => /project/.test(document.querySelector("#composer-chips").textContent))
+  await p.waitForFunction(() => /project/.test(document.querySelector("#chat-place").textContent))
   assert.deepEqual(p.errors, [])
 })
 
@@ -983,14 +983,14 @@ test("D4: with no other computer linked there is no choice to make; at 390 px th
   let p = await page(b3())
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
-  await p.waitForSelector("#composer-chips .cchip")
-  assert.equal(await p.locator("#composer-chips .cchip--device").count(), 0)
+  await p.waitForSelector("#chat-settings .cchip")
+  assert.equal(await p.locator("#chat-place .cchip--device").count(), 0)
   await p.context().close()
   p = await page(d4(), { width: 390, height: 844 })
   await p.evaluate(() => document.getElementById("new-chat-btn").click())
   await p.click(".kind__tab >> text=Agent")
   await pickDevice(p, "studio")
-  await p.waitForFunction(() => /studio/.test(document.querySelector("#composer-chips .cchip--device")?.textContent || ""))
+  await p.waitForFunction(() => /studio/.test(document.querySelector("#chat-place .cchip--device")?.textContent || ""))
   assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
   await shot(p, "d4-device-390")
   assert.deepEqual(p.errors, [])
@@ -1958,6 +1958,138 @@ test("FX: at every width nothing scrolls sideways and nothing is cut off; narrow
     await p.click('#server-list .frow[data-path="/test.py"] .frow__open')
     if (details) await p.waitForSelector("#server-details .fdetails__text")
     else await p.waitForSelector("#viewer:not([hidden])")
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+// CI2: the chat's input overhauled -- the chat's settings (mode, model, effort, subagents) in the
+// header's top right beside Terminal, the activity panel, tools and skills and the menu; the
+// composer keeps the message's own: text, attach, Dictate, Draw a picture, Send/Stop. Nothing is
+// cut off or out of reach at any width: where the settings do not fit they fold behind Chat
+// settings, which opens them as a wrapped row of their own.
+
+const LONG_MODEL = "Qwen3.8 Coder 480B A35B Instruct, long context, tools and vision"
+function ci2(kind) {
+  const cfg = i8()
+  const m = models()
+  m.models[0] = { ...m.models[0], name: LONG_MODEL }
+  m.models[1] = { ...m.models[1], name: "Another model with a long name, served elsewhere" }
+  Object.assign(cfg.routes, {
+    "GET /models": m,
+    "GET /models?chat=chat1": m,
+    "GET /models?chat=chat2": m,
+    "GET /chats/chat2": { chat: agentChat({ subagents: { offered: true, named_only: false, cap: 8 } }), messages: [userMessage("m1", "What is in build?")], more: false, live: null },
+    "GET /chats/chat2/tree": { tree: [], live: true },
+  })
+  return cfg
+}
+
+/** Every visible button of the header and the composer inside the window, none of zero width. */
+async function reachable(p, width) {
+  return p.$$eval(
+    "#chat-head button, #composer button",
+    (l, w) =>
+      l
+        .filter((b) => b.offsetParent !== null && getComputedStyle(b).visibility !== "hidden")
+        .filter((b) => {
+          const r = b.getBoundingClientRect()
+          // A button inside a container that clips it (overflow) is cut off too.
+          let clip = { left: 0, right: w }
+          for (let el = b.parentElement; el; el = el.parentElement) {
+            const cs = getComputedStyle(el)
+            if (cs.overflowX !== "visible") {
+              const c = el.getBoundingClientRect()
+              clip = { left: Math.max(clip.left, c.left), right: Math.min(clip.right, c.right) }
+            }
+          }
+          return r.width < 8 || r.left < clip.left - 1 || r.right > clip.right + 1
+        })
+        .map((b) => b.className || b.id),
+    width,
+  )
+}
+
+/** Pairs of the header's controls (and where the chat works) drawn over each other. */
+async function overlapping(p) {
+  return p.$$eval("#chat-head button, #chat-head .place", (l) => {
+    const shown = l.filter((b) => b.offsetParent !== null && b.getBoundingClientRect().width > 0)
+    const out = []
+    for (let i = 0; i < shown.length; i++)
+      for (let j = i + 1; j < shown.length; j++) {
+        const a = shown[i].getBoundingClientRect()
+        const b = shown[j].getBoundingClientRect()
+        if (shown[i].contains(shown[j]) || shown[j].contains(shown[i])) continue
+        if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) out.push(`${shown[i].className} / ${shown[j].className}`)
+      }
+    return out
+  })
+}
+
+test("CI2: the composer holds the message's own controls; the chat's settings are in its header", async () => {
+  const p = await page(ci2(), { width: 1600, height: 900 })
+  await openChatRow(p, "chat1")
+  await p.waitForSelector("#chat-settings .cchip--model")
+  await p.waitForSelector("#chat-settings .cchip--subagents")
+  assert.equal(await p.locator("#composer .cchip--model, #composer .cchip--subagents").count(), 0, "no settings in the composer")
+  assert.equal(await p.locator("#composer-chips .cchip--picture").count(), 1, "Draw a picture stays with the message")
+  assert.ok(await p.isVisible("#chat-tools #activity-open"))
+  assert.ok(await p.isVisible("#chat-tools #scope-open"))
+  assert.ok(await p.isHidden("#chat-fold"), "everything fits: nothing folded")
+  // Tools and skills opens from the header.
+  await p.click("#scope-open")
+  await p.waitForSelector(".scope")
+  await shot(p, "ci2-chat-1600")
+  assert.deepEqual(p.errors, [])
+})
+
+test("CI2: at 1920, 1280, 1024, 800 and 390 px every control is reachable, with long model names and every chip on", async () => {
+  for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844]]) {
+    for (const id of ["chat1", "chat2"]) {
+      const p = await page(ci2(), { width, height })
+      await p.evaluate((x) => document.querySelector(`.chatrow[data-id="${x}"]`).click(), id)
+      await p.waitForSelector("#messages .msg")
+      await p.waitForSelector("#chat-settings .cchip--subagents", { state: "attached" })
+      await p.waitForTimeout(100)
+      assert.ok(await noSideways(p, width), `${width} ${id}: nothing sideways`)
+      assert.deepEqual(await reachable(p, width), [], `${width} ${id}: every control inside`)
+      assert.deepEqual(await overlapping(p), [], `${width} ${id}: nothing drawn over another`)
+      const folded = await p.isVisible("#chat-fold")
+      if (folded) {
+        await p.click("#chat-fold")
+        await p.waitForSelector("#chat-settings .cchip--model", { state: "visible" })
+        assert.deepEqual(await reachable(p, width), [], `${width} ${id}: unfolded, every setting inside`)
+        assert.deepEqual(await overlapping(p), [], `${width} ${id}: unfolded, nothing drawn over another`)
+      }
+      // Every setting is there and can be used: the model's menu opens.
+      const names = await p.$$eval("#chat-settings .cchip", (l) => l.map((x) => x.className))
+      assert.ok(names.some((n) => n.includes("cchip--model")) && names.some((n) => n.includes("cchip--subagents")), `${width} ${id}: ${names}`)
+      if (id === "chat2") assert.ok(await p.isVisible("#chat-tools [data-terminal-toggle]"), `${width}: the Terminal`)
+      await p.click("#chat-settings .cchip--model")
+      await p.waitForSelector(".menu")
+      assert.match(await p.textContent(".menu"), /Another model/)
+      await p.keyboard.press("Escape")
+      await shot(p, `ci2-${id}-${width}${folded ? "-unfolded" : ""}`)
+      assert.deepEqual(p.errors, [])
+      await p.context().close()
+    }
+  }
+})
+
+test("CI2: a new agent chat says where it works beside the title and its settings at the right; the composer only the message", async () => {
+  for (const width of [1280, 390]) {
+    const p = await page(ci2(), { width, height: 844 })
+    await p.waitForSelector("#chat-settings .cchip--model", { state: "attached" })
+    await p.click(".kind__tab >> text=Agent")
+    await p.waitForSelector("#chat-place .cchip")
+    assert.equal(await p.locator("#composer .cchip").count(), 0, "nothing but the message in an agent chat's composer")
+    assert.ok(await noSideways(p, width))
+    assert.deepEqual(await reachable(p, width), [], `${width}: every control inside`)
+    assert.deepEqual(await overlapping(p), [], `${width}: nothing drawn over another`)
+    if (await p.isVisible("#chat-fold")) await p.click("#chat-fold")
+    assert.deepEqual(await overlapping(p), [], `${width}: unfolded, nothing drawn over another`)
+    assert.deepEqual(await reachable(p, width), [], `${width}: unfolded, every control inside`)
+    await shot(p, `ci2-new-agent-${width}`)
     assert.deepEqual(p.errors, [])
     await p.context().close()
   }

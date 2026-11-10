@@ -497,7 +497,29 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
 .head__title { font: 600 var(--text-base) / var(--leading-tight) var(--font-body); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .head__place { display: flex; gap: var(--sp-2); align-items: center; min-width: 0; }
 .head__tools { display: flex; gap: var(--sp-1); align-items: center; justify-content: end; }
-.main[data-new="true"] .head { display: none; }
+/* The chat's header: the title, where it works, then its settings and tools at the right. The
+   settings take what room is left after the title's minimum; where they do not fit they fold
+   behind Chat settings (chat.js `fitHead`, measured), which opens them as a wrapped row of their
+   own under the header. */
+.head.chathead {
+  grid-template-columns: minmax(min(6rem, 30%), max-content) minmax(0, 1fr) minmax(0, max-content) auto auto;
+  grid-template-areas: "title place set fold tools";
+  column-gap: var(--sp-2);
+}
+.chathead > .head__title { grid-area: title; }
+.chathead > .head__place { grid-area: place; overflow: hidden; }
+.chathead > .head__tools { grid-area: tools; }
+.chathead__fold { grid-area: fold; }
+.chathead__fold[hidden] { display: none; }
+.chathead__settings { grid-area: set; display: flex; flex-wrap: nowrap; gap: var(--sp-1); align-items: center; justify-content: start; min-width: 0; overflow: hidden; }
+.chathead__settings > * { flex: none; }
+.chathead__settings:empty { display: none; }
+.chathead[data-fold="true"] .chathead__settings { display: none; }
+.head.chathead[data-fold="true"][data-unfold="true"] { grid-template-areas: "title place set fold tools" "row row row row row"; row-gap: var(--sp-2); }
+.chathead[data-fold="true"][data-unfold="true"] .chathead__settings { grid-area: row; display: flex; flex-wrap: wrap; justify-content: start; overflow: visible; padding-bottom: var(--sp-1); }
+.chathead__settings .cchip { max-width: min(var(--w-field), 100%); }
+.head__place .cchip { min-width: 0; }
+.head__place > .cchip:last-child { flex: 0 1 auto; }
 .main > .head { grid-row: 1; }
 .main > .thread { grid-row: 2; }
 .main > .dock { grid-row: 3; }
@@ -530,7 +552,7 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
 
 /* A new chat is the same page, empty: the greeting low in the space above the composer, which
    sits in the middle of the window rather than at its foot. */
-.main[data-new="true"] { grid-template-rows: 0 minmax(0, 1fr) auto minmax(0, 0.8fr); }
+.main[data-new="true"] { grid-template-rows: auto minmax(0, 1fr) auto minmax(0, 0.8fr); }
 .main[data-new="true"] .thread { display: grid; align-content: end; padding-bottom: var(--sp-6); }
 .hello { display: grid; justify-items: center; gap: var(--sp-3); text-align: center; }
 .hello__mark { width: var(--sp-10); height: var(--sp-10); }
@@ -1928,6 +1950,8 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   .head__place { grid-column: 1 / -1; grid-row: 2; }
   .head__place:empty { display: none; }
   .cchip { max-width: var(--w-field-xs); }
+  .head.chathead { grid-template-columns: minmax(min(6rem, 30%), 1fr) minmax(0, max-content) auto auto; grid-template-areas: "title set fold tools" "place place place place"; }
+  .head.chathead[data-fold="true"][data-unfold="true"] { grid-template-areas: "title set fold tools" "place place place place" "row row row row"; }
 }
 
 /* 48rem (--bp-narrow): the sidebar is a drawer over the page, opened from the title bar. */

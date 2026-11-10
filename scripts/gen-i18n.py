@@ -564,6 +564,8 @@ KEYS = (
     "Path",
     "Choose a file to see it here.",
     "Details",
+    # chat.js: the chat's settings in its header, folded behind one button where they do not fit
+    "Chat settings",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the

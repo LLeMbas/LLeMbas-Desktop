@@ -64,9 +64,11 @@
     <div class="scrim" id="scrim" aria-hidden="true"></div>
 
     <main class="main" id="main" aria-labelledby="chat-title" data-new="false">
-      <header class="head">
+      <header class="head chathead" id="chat-head" data-fold="false" data-unfold="false">
         <h1 class="head__title" id="chat-title"></h1>
         <div class="head__place" id="chat-place"></div>
+        <div class="chathead__settings" id="chat-settings" role="toolbar" aria-label="Chat settings" data-i18n-aria-label></div>
+        <button type="button" class="tool chathead__fold" id="chat-fold" aria-expanded="false" aria-controls="chat-settings" aria-label="Chat settings" title="Chat settings" data-i18n-aria-label data-i18n-title></button>
         <div class="head__tools" id="chat-tools"></div>
       </header>
       <div class="thread" id="thread">
