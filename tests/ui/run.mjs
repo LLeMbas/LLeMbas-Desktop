@@ -658,6 +658,50 @@ test("B1: a reply being written draws the stream's progress, its clock moving, a
   assert.deepEqual(p.errors, [])
 })
 
+// --- C4 (ahead of the server): the subagent tree as spec 3.4.0 §12 gives it ---------------------
+//
+// ui/js/tree.js draws subagents.md §12's data; the activity panel takes it up once the server's
+// /api/v2 carries the tree. Until then it is checked here on the spec's own example.
+
+const TREE = {
+  min: 2, max: 4, size: 3, open_slots: 1,
+  agents: [
+    { id: "lead", name: "lead", position: "the main agent", parent: null, state: "working", model: "qwen-27b", mode: "edit", request: [], manager: true, context: { used: 41200, window: 131072 }, progress: { phase: "thinking", since: 0 } },
+    { id: "s1", name: "parser", position: "reviews the parser", parent: "lead", state: "working", model: "qwen-27b", mode: "manual", request: ["write"], manager: true, task: "Read src/parse.ts", context: { used: 9100, window: 131072 }, progress: { phase: "running_tool", since: 0, tool: "read", what: "src/parse.ts" }, findings: 2, messages: 3 },
+    { id: "s3", name: "lexer", position: "the lexer's tests", parent: "s1", state: "waiting", model: "qwen-27b", mode: "manual", request: [], manager: false, context: { used: 0, window: 131072 }, progress: null, findings: 0, messages: 0 },
+  ],
+  ended: [{ id: "s0", name: "scout", position: "maps the repository", parent: "lead", state: "out_of_context", ended: 0, findings: 1 }],
+}
+
+test("C4: the tree in order, each agent's position, state, mode, context and phase; slots; the ended ones apart", async () => {
+  const p = await page(b3())
+  const got = await p.evaluate(async (tree) => {
+    const m = await import("/js/tree.js")
+    const calls = []
+    const box = m.treePart(tree, { room: [{ n: 1, from: "lead", to: ["parser"], text: "Start with the grammar.\nThen the lexer." }], now: 65000, act: { open: (a) => calls.push(["open", a.id]), findings: (a) => calls.push(["findings", a.id]), stop: (a) => calls.push(["stop", a.id]) } })
+    document.body.append(box)
+    const rows = [...box.querySelectorAll(".subagents__list > .subagent:not(.subagent--slot)")].map((r) => ({ id: r.dataset.id, depth: r.style.getPropertyValue("--depth"), text: r.textContent }))
+    box.querySelector('[data-id="s1"] .subagent__actions .btn').click()
+    box.querySelector('[data-id="s0"] .subagent__actions .btn:last-child').click()
+    box.querySelector('[data-id="s1"] .agent__stop').click()
+    return { rows, slots: box.querySelectorAll(".subagent--slot").length, endedStop: box.querySelectorAll('[data-id="s0"] button.agent__stop').length, calls }
+  }, TREE)
+  assert.deepEqual(got.rows.map((r) => [r.id, r.depth]), [["lead", "0"], ["s1", "1"], ["s3", "2"], ["s0", "0"]])
+  const parser = got.rows[1].text
+  assert.match(parser, /parser \(s1\) — reviews the parser/)
+  assert.match(parser, /6%/, "context: floor(9100 × 100 / 131072)")
+  assert.match(parser, /manual \+ write/)
+  assert.match(parser, /Running read: src\/parse\.ts · 1m 05s/)
+  assert.match(parser, /Messages: 3/)
+  assert.match(parser, /lead: Start with the grammar\./)
+  assert.match(got.rows[2].text, /waiting for a slot/)
+  assert.match(got.rows[3].text, /out of context/)
+  assert.equal(got.slots, 1)
+  assert.equal(got.endedStop, 0, "an ended subagent cannot be stopped")
+  assert.deepEqual(got.calls, [["open", "s1"], ["findings", "s0"], ["stop", "s1"]])
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""
