@@ -24,6 +24,16 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ### Added
 
+- **Terminal.** An agent chat has a Terminal panel: a shell on the computer the chat works on, in
+  its folder, beside the chat (over it in a narrow window). A new agent chat offers it as soon as
+  the folder is chosen, before the first message -- and the chat that message makes carries on in
+  the same shell. An open agent chat opens its own from the header, the same shell the web
+  interface shows. **Send to chat** puts the selection, or the last command and its output, into
+  the message box to read before sending; the panel copies them too, and steps between commands
+  where the shell marks them. The terminal and the activity panel take turns beside the chat;
+  closing either keeps the shell. Offered where the computer allows a terminal (needs the server's
+  2.0.0-beta.8). The app opens the connection itself, with its sign-in: the page never holds it.
+  "Continue in a terminal" is now in the chat's menu only.
 - `tests/ui/`: the page under a headless browser against a stand-in for the app's bridge, with
   the server's answers as a table (`node tests/ui/run.mjs`, needs Playwright and a Chromium).
 

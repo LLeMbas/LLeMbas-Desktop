@@ -175,7 +175,7 @@ function baseRoutes(over = {}) {
   return {
     "GET /me": { id: "u1", name: "Ada Example", email: "ada@example.org", theme: "moria", language: "en", permissions: {} },
     "GET /models": models(),
-    "GET /devices": { devices: [{ id: "token1", name: "workbench", host: "workbench", linked: true }] },
+    "GET /devices": { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true }] },
     "GET /chats": { chats: [chatRow(), agentChat()], more: false },
     "GET /schedules": { schedules: [] },
     ...over,
@@ -431,6 +431,188 @@ test("A5: an open chat follows its own `subagents`: offered, offered with the no
     assert.deepEqual(p.errors, [])
     await p.context().close()
   }
+})
+
+// --- B3: the Terminal panel -------------------------------------------------------------------
+//
+// The server's two sockets for an app (`api/v2/terminal.py`): an agent chat's
+// (`/chats/{chat}/terminal/ws`) and one before the chat exists, on the device and folder chosen
+// (`/devices/{device}/terminal/ws?directory=`), which the chat's first message takes over.
+// `GET /devices` says per device whether it opens a terminal. The socket is Rust's: the page asks
+// `terminal_open` and gets the frames as `terminal` events (mock-tauri.js plays the server).
+
+const READY = ["control", { t: "ready", label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false }]
+
+function b3(over = {}, terminal = [READY, ["output", "dev@workbench:~/project$ "]]) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /chats/chat2": { chat: agentChat({ running: false }), messages: [userMessage("m1", "What is in build?")], more: false, live: null },
+      "GET /models?chat=chat2": models(),
+      "POST /chats": { chat: agentChat({ running: false }), message: userMessage("m9", "Build it"), reply: null },
+      ...over,
+    }),
+    streams: {},
+    terminal,
+  }
+}
+
+async function screenText(p) {
+  return p.evaluate(() => document.querySelector("#terminal .xterm-rows")?.textContent || "")
+}
+
+test("B3: a new agent chat offers the Terminal once its folder is chosen, and opens a shell there before the first message", async () => {
+  const p = await page(b3())
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await p.waitForSelector("#composer-chips .cchip--terminal")
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 0, "nothing is opened until asked")
+  await p.click("#composer-chips .cchip--terminal")
+  await p.waitForSelector("#terminal:not([hidden]) .xterm")
+  await p.waitForFunction(() => window.__mock.terminals().length === 1)
+  const [shell] = await p.evaluate(() => window.__mock.terminals())
+  assert.deepEqual(shell.target, { chat: null, device: "token1", directory: "/home/dev/project" })
+  await p.waitForFunction(() => document.querySelector("#terminal .xterm-rows")?.textContent.includes("dev@workbench"))
+  assert.equal(await p.textContent("#terminal-message"), "Connected.")
+  assert.equal(await p.textContent("#terminal-title"), "workbench")
+  assert.equal(await p.getAttribute("#composer-chips .cchip--terminal", "aria-pressed"), "true")
+  // Keys go up through the bridge, never a socket of the page's own.
+  await p.click("#terminal .xterm")
+  await p.keyboard.type("ls")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.typed().includes("ls\r"))
+  assert.equal(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "terminal_open").length), 1)
+  if (process.env.SHOTS) await p.screenshot({ path: join(process.env.SHOTS, "b3-new-1280.png") })
+  // The first message makes the chat, which takes the shell over: the same socket goes on.
+  await p.click("#composer-text")
+  await p.fill("#composer-text", "Build it")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  const [made] = await p.evaluate(() => window.__mock.api("POST", "/chats"))
+  assert.equal(made.args.body.device, "token1")
+  assert.equal(made.args.body.directory, "/home/dev/project")
+  await p.waitForSelector('#chat-tools [data-terminal-toggle][aria-pressed="true"]')
+  assert.ok(await p.isVisible("#terminal"), "the panel stays open")
+  const shells = await p.evaluate(() => window.__mock.terminals())
+  assert.equal(shells.length, 1, "no second shell: the chat took the first one over")
+  assert.ok(shells[0].open, "and its socket is still open")
+  assert.deepEqual(p.errors, [])
+})
+
+test("B3: an open agent chat opens its own shell from the header; Send to chat fills the composer and sends nothing", async () => {
+  const p = await page(b3())
+  await openChatRow(p, "chat2")
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForFunction(() => window.__mock.terminals().length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.terminals()))[0].target, { chat: "chat2", device: null, directory: null })
+  await p.evaluate(() => window.__mock.shell("output", "\r\ntotal 4\r\n-rw-r--r-- 1 dev dev 12 build.log\r\n"))
+  await p.waitForFunction(() => document.querySelector("#terminal .xterm-rows")?.textContent.includes("build.log"))
+  await p.fill("#composer-text", "Look at this:")
+  await p.click("#terminal-send")
+  const text = await p.inputValue("#composer-text")
+  assert.ok(text.startsWith("Look at this:\n\n```\n"), `after what was typed, as a block: ${JSON.stringify(text.slice(0, 40))}`)
+  assert.match(text, /build\.log/)
+  assert.equal(await p.evaluate(() => window.__mock.api("POST", "/chats/chat2/messages").length), 0, "nothing is sent")
+  // Closing the panel keeps the shell; opening it again does not open another.
+  await p.click("#terminal-close")
+  assert.ok(await p.isHidden("#terminal"))
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForSelector("#terminal:not([hidden])")
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 1)
+  // The server ends it: said, and no new shell in its place.
+  await p.evaluate(() => window.__mock.shell("control", { t: "closed", message: "The shell exited." }))
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "The shell exited.")
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 1)
+  assert.deepEqual(p.errors, [])
+})
+
+test("B3: the terminal and the activity panel take turns in the panel column", async () => {
+  const p = await page(b3({ "GET /chats/chat2/activity": { activity: {} } }))
+  await openChatRow(p, "chat2")
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForSelector("#terminal:not([hidden])")
+  assert.equal(await p.getAttribute("#shell", "data-terminal"), "true")
+  await p.click("#activity-open")
+  await p.waitForSelector("#activity:not([hidden])")
+  assert.ok(await p.isHidden("#terminal"), "the terminal gave way")
+  assert.equal(await p.getAttribute("#shell", "data-terminal"), "false")
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForSelector("#terminal:not([hidden])")
+  assert.ok(await p.isHidden("#activity"), "and the activity panel to it")
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 1, "the shell lived on behind it")
+})
+
+test("B3: no Terminal where the device opens none, for a chat on the server, or before a folder", async () => {
+  const off = { "GET /devices": { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: false }] } }
+  let p = await page(b3(off))
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await p.waitForSelector("#composer-chips .cchip")
+  assert.equal(await p.locator("#composer-chips .cchip--terminal").count(), 0, "the device opens no terminal")
+  await openChatRow(p, "chat2")
+  assert.equal(await p.locator("#chat-tools [data-terminal-toggle]").count(), 0)
+  await p.context().close()
+  p = await page(b3({}))
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Chat")
+  await p.waitForSelector("#composer-chips .cchip")
+  assert.equal(await p.locator("#composer-chips .cchip--terminal").count(), 0, "a chat on the server has no shell")
+  await p.context().close()
+  p = await page({ ...b3({}), status: status({ remote: { enabled: true, roots: [] } }) })
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await p.waitForSelector("#composer-chips .cchip")
+  assert.equal(await p.locator("#composer-chips .cchip--terminal").count(), 0, "no folder yet")
+  assert.deepEqual(p.errors, [])
+})
+
+test("B3: a refused sign-in and an older server are said in words", async () => {
+  let p = await page(b3({}, [["end", { code: 4401, reason: "not allowed", status: null, error: null }]]))
+  await openChatRow(p, "chat2")
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForFunction(() => /Sign in again/.test(document.querySelector("#terminal-message").textContent))
+  assert.ok(await p.evaluate(() => document.querySelector("#terminal-message").classList.contains("is-error")))
+  await p.context().close()
+  p = await page(b3({}, [["end", { code: null, reason: "", status: 404, error: null }]]))
+  await openChatRow(p, "chat2")
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForFunction(() => /needs a newer LLeMbas server/.test(document.querySelector("#terminal-message").textContent))
+  assert.deepEqual(p.errors, [])
+})
+
+test("B3: at 390 px the terminal is a sheet over the chat, inside the window", async () => {
+  const p = await page(b3(), { width: 390, height: 844 })
+  await p.evaluate(() => document.querySelector('.chatrow[data-id="chat2"]').click())
+  await p.waitForSelector('#chat-tools [data-terminal-toggle]')
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForFunction(() => document.querySelector("#terminal .xterm-rows")?.textContent.includes("dev@workbench"))
+  const box = await p.locator("#terminal").boundingBox()
+  assert.ok(box.x >= 0 && box.x + box.width <= 390 && box.y + box.height <= 844, `inside: ${JSON.stringify(box)}`)
+  const send = await p.locator("#terminal-send").boundingBox()
+  assert.ok(send.x + send.width <= 390 && send.y + send.height <= 844, `Send is reachable: ${JSON.stringify(send)}`)
+  const close = await p.locator("#terminal-close").boundingBox()
+  assert.ok(close.x + close.width <= 390, "Close is reachable")
+  assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= 390), "nothing scrolls sideways")
+  if (process.env.SHOTS) await p.screenshot({ path: join(process.env.SHOTS, "b3-chat-390.png") })
+  // Send to chat: the sheet steps aside, and the message box has the block.
+  await p.click("#terminal-send")
+  assert.ok(await p.isHidden("#terminal"))
+  assert.match(await p.inputValue("#composer-text"), /dev@workbench/)
+  assert.deepEqual(p.errors, [])
+})
+
+test("B3: at 1280 px the terminal sits beside the chat, which keeps its column", async () => {
+  const p = await page(b3())
+  await openChatRow(p, "chat2")
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForFunction(() => document.querySelector("#terminal .xterm-rows")?.textContent.includes("dev@workbench"))
+  const term = await p.locator("#terminal").boundingBox()
+  const main = await p.locator("#main").boundingBox()
+  assert.ok(term.x >= main.x + main.width - 1, "beside, not over")
+  assert.ok(main.width >= 400, `the chat keeps room: ${main.width}`)
+  assert.ok(term.width >= 380, `the terminal has its width: ${term.width}`)
+  if (process.env.SHOTS) await p.screenshot({ path: join(process.env.SHOTS, "b3-chat-1280.png") })
+  assert.deepEqual(p.errors, [])
 })
 
 // --- Run ----------------------------------------------------------------------------------------

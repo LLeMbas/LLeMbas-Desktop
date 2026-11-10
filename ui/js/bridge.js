@@ -66,6 +66,61 @@ export async function follow(path, { onFrame, onEnd }) {
   }
 }
 
+// --- The terminal panel's socket -----------------------------------------------------------------
+//
+// Opened by Rust (`terminal_open`), which holds the token and the socket; the page gets the frames
+// as `terminal` events -- `output` (the shell's bytes, base64), `control` (the server's JSON), a last
+// `end` -- and sends keys, sizes and "close" through commands. As with a followed reply, a frame
+// can come before `terminal_open` has answered with its id: those wait.
+
+const terminals = new Map()
+const earlyTerminal = new Map()
+listen("terminal", (e) => {
+  const { id, kind, data } = e.payload
+  const f = terminals.get(id)
+  if (f) deliverTerminal(f, id, kind, data)
+  else {
+    if (!earlyTerminal.has(id)) earlyTerminal.set(id, [])
+    earlyTerminal.get(id).push([kind, data])
+  }
+})
+
+function deliverTerminal(f, id, kind, data) {
+  if (kind === "end") {
+    terminals.delete(id)
+    f.onEnd(data || {})
+  } else if (kind === "output") f.onOutput(data)
+  else if (kind === "control") f.onControl(data)
+}
+
+/**
+ * Open a shell: `target` is `{ chat }` or `{ device, directory }`; `onOutput(base64)`,
+ * `onControl(frame)`, and `onEnd({ code, reason, status, error })` once. The handle sends keys
+ * (`input`), a size (`resize`), and lets go (`close`; onEnd still comes).
+ */
+export async function openTerminal(target, cols, rows, { onOutput, onControl, onEnd }) {
+  const id = await invoke("terminal_open", {
+    chat: target.chat ?? null,
+    device: target.device ?? null,
+    directory: target.directory ?? null,
+    cols,
+    rows,
+  })
+  const f = { onOutput, onControl, onEnd }
+  terminals.set(id, f)
+  for (const [kind, data] of earlyTerminal.get(id) || []) {
+    if (!terminals.has(id)) break
+    deliverTerminal(f, id, kind, data)
+  }
+  earlyTerminal.delete(id)
+  return {
+    id,
+    input: (data) => invoke("terminal_input", { id, data }),
+    resize: (c, r) => invoke("terminal_resize", { id, cols: c, rows: r }),
+    close: () => invoke("terminal_close", { id }),
+  }
+}
+
 /** A web link, in the system's browser. */
 export function openLink(url) {
   return invoke("open_external", { url }).catch(() => {})

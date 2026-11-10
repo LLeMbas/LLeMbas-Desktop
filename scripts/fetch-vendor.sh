@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Put the server's vendored CodeMirror build where the app's own pages read it from:
+# Put the server's vendored CodeMirror build and xterm where the app's own pages read them from:
 #   ui/vendor/*.mjs   (copies of the server's static/vendor/cm-*.mjs and lezer-*.mjs)
+#   ui/vendor/xterm.js, xterm.css, xterm-addon-fit.js   (the terminal panel's, copied unchanged:
+#                     classic scripts the panel loads when it is first opened)
 #
 #   scripts/fetch-vendor.sh <server-ref>      copy the modules at that ref (a tag such as
 #                                             v2.0.0-beta.1, or a branch) and write vendor.lock.json
@@ -47,8 +49,8 @@ if [ $# -eq 0 ]; then
       echo "fetch-vendor: $OUT/$name does not match $LOCK (server $ref)" >&2
       bad=1
     fi
-  done < <(sed -n -E 's/^ *"([a-z0-9-]+\.mjs)": *\{"server": *"[0-9a-f]{64}", *"copy": *"([0-9a-f]{64})"\}.*/\1\t\2/p' "$LOCK")
-  for f in "$OUT"/*.mjs; do
+  done < <(sed -n -E 's/^ *"([a-z0-9-]+\.(mjs|js|css))": *\{"server": *"[0-9a-f]{64}", *"copy": *"([0-9a-f]{64})"\}.*/\1\t\3/p' "$LOCK")
+  for f in "$OUT"/*; do
     grep -q "\"$(basename "$f")\"" "$LOCK" || { echo "fetch-vendor: $f is not in $LOCK" >&2; bad=1; }
   done
   [ "$count" -gt 0 ] || { echo "fetch-vendor: $LOCK lists no file" >&2; exit 1; }
@@ -87,6 +89,16 @@ for name in $names; do
   fi
   entries+=("$(printf '    "%s": {"server": "%s", "copy": "%s"}' "$name" "$have" "$(sha "$work/out/$name")")")
 done
+# xterm and its fit addon, for the terminal panel: copied as they are, each checked against the
+# server's pin like the modules.
+for name in xterm.js xterm.css xterm-addon-fit.js; do
+  git -C "$SERVER" show "$commit:$SOURCE/$name" > "$work/out/$name" \
+    || { echo "fetch-vendor: $name is not in $SOURCE at $REF" >&2; exit 1; }
+  pinned="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], {}).get("sha256", ""))' "$work/server-lock.json" "$name")"
+  have="$(sha "$work/out/$name")"
+  [ "$pinned" = "$have" ] || { echo "fetch-vendor: $name does not match the server's pin ($have, pinned $pinned)" >&2; exit 1; }
+  entries+=("$(printf '    "%s": {"server": "%s", "copy": "%s"}' "$name" "$have" "$have")")
+done
 # The polyfill stub, from the server's own scripts (it is not a download, so it has no pin there).
 stub="src/lembas/web/static/js/node-process.mjs"
 git -C "$SERVER" show "$commit:$stub" > "$work/out/node-process.mjs" \
@@ -101,7 +113,7 @@ done
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
-cp "$work"/out/*.mjs "$OUT/"
+cp "$work"/out/*.mjs "$work"/out/xterm.js "$work"/out/xterm.css "$work"/out/xterm-addon-fit.js "$OUT/"
 {
   printf '{\n  "tag": "%s",\n  "commit": "%s",\n  "files": {\n' "$REF" "$commit"
   last=$((${#entries[@]} - 1))

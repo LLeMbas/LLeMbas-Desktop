@@ -18,10 +18,11 @@ import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
 import { folderName } from "./list.js"
+import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
-let ctx = null // set by initChat: { status(), thisDevices(), models(), me(), changed(chat), opened(chat), gone(chat) }
+let ctx = null // set by initChat: { status(), thisDevices(), devices(), models(), me(), changed(chat), opened(chat), gone(chat) }
 let open = null // { chat, live, more, first }
 
 export function openChatId() {
@@ -32,6 +33,44 @@ export function openChatId() {
 
 export function onThisComputer(chat) {
   return !!chat?.device && ctx.thisDevices().includes(chat.device.token_id)
+}
+
+/** A linked device, as `GET /devices` lists it (with `terminal`: whether it opens one). */
+function deviceOf(id) {
+  return (ctx.devices?.() || []).find((d) => d.id === id) || null
+}
+
+/** The device a new agent chat goes to: this computer's, preferring the one linked right now. */
+function draftDevice() {
+  const mine = ctx.thisDevices()
+  return mine.find((id) => deviceOf(id)) || mine[0] || ""
+}
+
+/**
+ * What the Terminal panel is for, as the page stands: a new agent chat whose device and folder
+ * are chosen (the shell before the first message), an open agent chat on a device that opens
+ * terminals, or nothing.
+ */
+function terminalTarget() {
+  if (draft) {
+    if (draft.kind !== "agent" || !draft.dir) return null
+    const device = deviceOf(draftDevice())
+    if (!device?.terminal) return null
+    return { device: device.id, directory: draft.dir, name: device.name || t("This computer") }
+  }
+  const chat = open?.chat
+  if (chat?.kind !== "agent" || !chat.device) return null
+  const device = deviceOf(chat.device.token_id)
+  if (!device?.terminal) return null
+  return { chat: chat.id, device: device.id, directory: chat.device.directory, name: device.name || t("Terminal") }
+}
+
+/** Text into the message box, after what is there, for the person to read before sending. */
+export function intoComposer(text) {
+  const box = $("composer-text")
+  box.value = box.value.trim() ? `${box.value.replace(/\s*$/, "")}\n\n${text}` : text
+  box.dispatchEvent(new Event("input"))
+  box.focus()
 }
 
 function nearBottom() {
@@ -578,15 +617,9 @@ function renderHead(chat) {
         h("span", { class: "place__where", text: here ? t("This computer") : t("Another device") }),
       ),
     )
-    if (chat.device_session_id) {
-      tools.append(
-        h(
-          "button",
-          { type: "button", class: "tool", "aria-label": t("Continue in a terminal"), title: t("Continue in a terminal"), onclick: () => continueInTerminal(open?.chat || chat) },
-          icon(ICONS.terminal),
-        ),
-      )
-    }
+    // The Terminal panel where the chat's device opens one (`GET /devices` says so per device);
+    // "Continue in a terminal" stays in the chat's menu.
+    if (deviceOf(chat.device.token_id)?.terminal) tools.append(terminalButton())
   }
   tools.append(activityButton())
   tools.append(h("button", { type: "button", class: "tool", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)))
@@ -751,6 +784,8 @@ async function renderChips() {
       parts.push(folderChip(roots, draft.dir, (d) => ((draft.dir = d), renderChips())))
       parts.push(modeChip(draft.mode, (m) => ((draft.mode = m), renderChips())))
     }
+    const shell = terminalTarget()
+    aimTerminal(shell)
     parts.push(modelChip(models, draft.model, (id) => {
       draft.model = id
       draft.effort = levelsOf(models.find((m) => m.id === id)).start
@@ -758,10 +793,19 @@ async function renderChips() {
     }, mayPick))
     if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), renderChips())))
     if (draft.kind === "chat" && teamPossible(model)) parts.push(agentsChip(draft.agents, (a) => ((draft.agents = a), renderChips()), { cap: subagentsCap(), own: namedOnly(model?.subagents) }))
+    // Last, so the chat's own settings come first where the line scrolls.
+    if (shell) {
+      const b = chip({ ico: ICONS.terminal, label: t("Terminal"), menuish: false, cls: "cchip--terminal", onclick: toggleTerminal })
+      b.dataset.terminalToggle = ""
+      b.setAttribute("aria-pressed", String(terminalOpen()))
+      b.setAttribute("aria-controls", "terminal")
+      parts.push(b)
+    }
     box.replaceChildren(...parts.filter(Boolean))
     return
   }
   const chat = open?.chat
+  aimTerminal(terminalTarget())
   if (!chat?.kind) return box.replaceChildren()
   const save = async (body) => {
     try {
@@ -809,6 +853,10 @@ export function statusChanged() {
   if (draft) {
     renderChips()
     renderHello()
+  } else if (open?.chat?.kind) {
+    // The devices were read again: whether this chat's opens a terminal may have changed.
+    renderHead(open.chat)
+    aimTerminal(terminalTarget())
   }
 }
 
@@ -1092,7 +1140,7 @@ async function createChat(text, attachments) {
   const agents = draft.agents
   if (agents && (agents.min || agents.max)) body.agents = agents
   if (draft.kind === "agent") {
-    const device = ctx.thisDevices()[0]
+    const device = draftDevice()
     if (!device || !agentReady(ctx.status())) {
       renderNotice()
       throw { detail: agentState(ctx.status()).sentence }

@@ -19,6 +19,9 @@
     "lezer-common.mjs": {"server": "b63d03ca460cc7a6ce09cbf0de24943fec22bcbe2359dc35978a57b875b2450f", "copy": "b63d03ca460cc7a6ce09cbf0de24943fec22bcbe2359dc35978a57b875b2450f"},
     "lezer-highlight.mjs": {"server": "b74148d673103ae08330a045a464acddf4ee8b563b213ea26e50f2be01a6d19d", "copy": "df21a1741ae80f2ad2b6d25860cad9ff3cda246a4fba171535d9dc92df150c1a"},
     "lezer-lr.mjs": {"server": "4c2dcc61b5c3aedb091dfd60ce8abaeb94704b58fa9036547b0b8d2c75f701e4", "copy": "f41bc21dc3fd874132e1d9862aae57946ae2604d91330303924c03aecfd3bc21"},
+    "xterm.js": {"server": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495", "copy": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495"},
+    "xterm.css": {"server": "ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6", "copy": "ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6"},
+    "xterm-addon-fit.js": {"server": "bdaefa370b1bfc42ee88d46fe6072400902a4d4b2d45cd93438dda9b23c97089", "copy": "bdaefa370b1bfc42ee88d46fe6072400902a4d4b2d45cd93438dda9b23c97089"},
     "node-process.mjs": {"server": "0c7460cbd81d8427a882867726b6db43beff3399f045ad942f4a65fef4705981", "copy": "0c7460cbd81d8427a882867726b6db43beff3399f045ad942f4a65fef4705981"}
   }
 }

@@ -135,6 +135,26 @@
       </div>
     </section>
 
+    <aside class="termpanel" id="terminal" hidden aria-labelledby="terminal-title">
+      <header class="viewer__head termpanel__head">
+        <span class="termpanel__icon" id="terminal-icon" aria-hidden="true"></span>
+        <div class="viewer__id">
+          <h2 class="viewer__name" id="terminal-title" data-i18n>Terminal</h2>
+          <p class="viewer__where termpanel__where" id="terminal-where"></p>
+        </div>
+        <button type="button" class="tool" id="terminal-prev" hidden aria-label="The previous command" title="The previous command (Ctrl+Shift+↑)" data-i18n-aria-label data-i18n-title></button>
+        <button type="button" class="tool" id="terminal-next" hidden aria-label="The next command" title="The next command (Ctrl+Shift+↓)" data-i18n-aria-label data-i18n-title></button>
+        <button type="button" class="tool" id="terminal-copy" aria-label="Copy the last command and its output" title="Copy the last command and its output" data-i18n-aria-label data-i18n-title></button>
+        <button type="button" class="tool" id="terminal-close" aria-label="Close terminal" title="Close terminal" data-i18n-aria-label data-i18n-title></button>
+      </header>
+      <div class="termpanel__screen" id="terminal-screen"></div>
+      <footer class="termpanel__foot">
+        <p class="termpanel__message" id="terminal-message" aria-live="polite"></p>
+        <span class="termpanel__last" id="terminal-last"></span>
+        <button type="button" class="btn btn--sm termpanel__send" id="terminal-send" title="Put the last command and its output into the message box" data-i18n-title><span data-i18n>Send to chat</span></button>
+      </footer>
+    </aside>
+
     <aside class="activity" id="activity" hidden aria-labelledby="activity-title">
       <header class="viewer__head activity__head">
         <button type="button" class="tool" id="activity-back" hidden aria-label="Back" title="Back" data-i18n-aria-label data-i18n-title></button>

@@ -12,7 +12,8 @@ import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged } from "./chat.js"
+import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer } from "./chat.js"
+import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal, terminalThemeChanged } from "./terminal.js"
 import { initAttach, allowAttach } from "./attach.js"
 import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
@@ -67,6 +68,7 @@ function applyTheme(name) {
   const root = document.documentElement
   root.dataset.theme = name
   root.dataset.base = name
+  terminalThemeChanged()
 }
 
 // --- Views ------------------------------------------------------------------------------------
@@ -162,7 +164,10 @@ function showPage(name) {
   $("page-scheduled").hidden = name !== "scheduled"
   $("settings").hidden = name !== "settings"
   for (const b of document.querySelectorAll(".navrow[data-view]")) b.setAttribute("aria-current", String(b.dataset.view === name))
-  if (name !== "chat") showPanel(false)
+  if (name !== "chat") {
+    showPanel(false)
+    showTerminal(false)
+  }
   if (narrow()) sideOpen(false)
 }
 
@@ -221,6 +226,7 @@ function commands() {
     { label: t("Settings"), run: () => showSettings(true) },
   ]
   if (openChatId()) out.push({ label: panelOpen() ? t("Close the activity panel") : t("Open the activity panel"), run: togglePanel })
+  if (terminalAvailable()) out.push({ label: terminalOpen() ? t("Close terminal") : t("Terminal"), run: toggleTerminal })
   if (status?.linked) out.push({ label: status.agent_wanted ? t("Stop the agent") : t("Start the agent"), run: () => invoke("set_agent", { on: !status.agent_wanted }) })
   out.push(
     { label: status?.linked ? t("Link again") : t("Link this computer"), run: link },
@@ -265,6 +271,7 @@ async function boot() {
   initChat({
     status: () => status,
     thisDevices,
+    devices: () => devices,
     models: () => models,
     me: () => me,
     changed: () => refreshList(),
@@ -289,9 +296,18 @@ async function boot() {
   onViewer((on) => {
     $("shell").dataset.viewer = String(on)
   })
+  // One panel column: the activity panel and the terminal take turns in it (the shell stays open).
+  initTerminal({
+    onLayout: (on) => {
+      $("shell").dataset.terminal = String(on)
+      if (on && panelOpen()) showPanel(false)
+    },
+    composer: intoComposer,
+  })
   initActivity({
     onLayout: (on) => {
       $("shell").dataset.activity = String(on)
+      if (on && terminalOpen()) showTerminal(false)
     },
     here: onThisComputer,
     // The conversation as it now stands: the summary's divider, read again, if it is still open.
@@ -353,7 +369,7 @@ async function boot() {
     renderBar(status)
     route()
     // The agent came up or went: which devices are linked changes with it.
-    if (started && before && before.agent.state !== status.agent.state) loadDevices().then(refreshList)
+    if (started && before && before.agent.state !== status.agent.state) loadDevices().then(() => (refreshList(), statusChanged()))
   })
   listen("open-settings", () => {
     if (view === "app") showSettings(true)

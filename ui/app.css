@@ -327,6 +327,8 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
 .shell[data-side="false"] { --side-col: 0px; }
 .shell[data-viewer="true"] { --panel-col: minmax(var(--inspector-width-min), 42%); }
 .shell[data-activity="true"] { --panel-col: var(--inspector-width); }
+/* The terminal: the server's width for it, giving way down to its least before the chat does. */
+.shell[data-terminal="true"] { --panel-col: minmax(var(--terminal-width-min), var(--terminal-width)); }
 
 /* --- The sidebar --------------------------------------------------------------------------- */
 
@@ -1291,6 +1293,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .cchip:hover { color: var(--ink); background: var(--surface-hover); border-color: var(--border); }
 .cchip:disabled { cursor: default; }
+.cchip[aria-pressed="true"], .tool[aria-pressed="true"] { color: var(--ink); background: var(--surface-active); }
 .cchip:disabled:hover { background: transparent; border-color: transparent; }
 .cchip__label { overflow: hidden; text-overflow: ellipsis; }
 .cchip__chev { display: grid; color: var(--ink-faint); }
@@ -1558,12 +1561,65 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .folders .path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left; font: var(--text-sm) var(--font-ui); }
 .folders .empty { display: block; padding: var(--sp-3); color: var(--warning); font-size: var(--text-sm); text-align: left; }
 
+/* --- The terminal panel -------------------------------------------------------------------------
+   The panel column, as the activity panel has it, and never beside it (opening one closes the
+   other; the shell lives on). The viewer goes over the chat while it is open, as with the
+   activity panel. Not `.terminal`: xterm gives its own element that class. The head is the
+   viewer's: an icon, the device's name over the folder, then the buttons on known tracks (the
+   command ones only while the shell marks its commands). */
+
+.shell[data-terminal="true"] .viewer { grid-area: main; z-index: var(--z-panel); border-left: 0; }
+.termpanel {
+  grid-area: panel;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border-left: var(--border-w) solid var(--border);
+  background: var(--bg-sunken);
+}
+.termpanel__head {
+  grid-template-columns: 16px minmax(0, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: var(--control-h-sm);
+}
+.termpanel__icon { display: grid; place-items: center; color: var(--ink-muted); }
+.termpanel__where { font-family: var(--font-mono); }
+/* xterm measures this box: it has a size of its own, and the terminal scrolls inside it. */
+.termpanel__screen { min-height: 0; min-width: 0; overflow: hidden; padding: var(--sp-2); background: var(--code-bg); }
+.termpanel__screen .xterm { height: 100%; }
+/* What happened, the last command, and Send: the words take what is left and wrap; the last
+   command is one clipped line; the button keeps its size. */
+.termpanel__foot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: var(--border-w) solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+}
+.termpanel__message { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.termpanel__message.is-error { color: var(--danger); }
+.termpanel__last {
+  max-width: var(--w-chip);
+  font-family: var(--font-mono);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.termpanel__last:empty { display: none; }
+
 /* --- Narrower windows ---------------------------------------------------------------------- */
 
 /* 64rem (--bp-wide): a panel goes over the chat instead of beside it. */
 @media (max-width: 64rem) {
-  .shell[data-viewer="true"], .shell[data-activity="true"] { --panel-col: 0px; }
-  .viewer, .activity, .shell[data-activity="true"] .viewer { grid-area: main; z-index: var(--z-panel); border-left: 0; }
+  .shell[data-viewer="true"], .shell[data-activity="true"], .shell[data-terminal="true"] { --panel-col: 0px; }
+  .viewer, .activity, .termpanel, .shell[data-activity="true"] .viewer, .shell[data-terminal="true"] .viewer { grid-area: main; z-index: var(--z-panel); border-left: 0; }
   .task__open { grid-template-columns: var(--sp-8) minmax(0, 1fr) var(--w-field-sm); }
   .task__next { display: none; }
 }

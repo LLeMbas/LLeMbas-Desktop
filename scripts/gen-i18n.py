@@ -376,6 +376,29 @@ KEYS = (
     "Nothing runs in the background. Subagents, a team's members and background commands show here while they work.",
     "Team: %(size)s of at most %(max)s subagents",
     "How many work on it at once, the run's own agent among them, on the same model.",
+    # terminal.js
+    "Terminal",
+    "Close terminal",
+    "Send to chat",
+    "Connecting…",
+    "Connected.",
+    "Connected. This shell is also open in another tab, and they share a size.",
+    "Disconnected. Close and reopen to reconnect.",
+    "This terminal closed.",
+    "Reconnecting…",
+    "The terminal could not be loaded.",
+    "Nothing has been run in this shell yet.",
+    "Nothing to send: select some output first.",
+    "Copied the last of the screen, as it appeared. This shell does not mark where commands begin.",
+    "Copied.",
+    "The previous command",
+    "The previous command (Ctrl+Shift+↑)",
+    "The next command",
+    "The next command (Ctrl+Shift+↓)",
+    "Copy the last command and its output",
+    "Put the last command and its output into the message box",
+    "Sign in again: the server no longer accepts this app's sign-in.",
+    "The terminal needs a newer LLeMbas server. Ask its administrator to update it.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -383,6 +406,8 @@ KEYS = (
 # the device, as the server's catalogue has it.
 OWN: dict[str, dict[str, str]] = {
     "cs": {
+        "Sign in again: the server no longer accepts this app's sign-in.": "Přihlaste se znovu: server už nepřijímá přihlášení této aplikace.",
+        "The terminal needs a newer LLeMbas server. Ask its administrator to update it.": "Terminál potřebuje novější server LLeMbas. Požádejte jeho správce o aktualizaci.",
         "This model serves one request at a time: subagents need another model, on another server, named in the chat.": "Tento model vyřizuje najednou jeden požadavek: podagenti potřebují jiný model na jiném serveru, pojmenovaný v konverzaci.",
         "The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.": "Čísla počítají i vlastního agenta konverzace: 1 je agent sám, bez podagentů; Max 4 je agent a až 3 podagenti. Podagent běží na modelu konverzace, na jiném jen tehdy, když ho v konverzaci pojmenujete.",
         "Min": "Min",
@@ -604,6 +629,8 @@ OWN: dict[str, dict[str, str]] = {
         "No day ticked: every day.": "Žádný den nezaškrtnutý: každý den.",
     },
     "de": {
+        "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
+        "The terminal needs a newer LLeMbas server. Ask its administrator to update it.": "Das Terminal braucht einen neueren LLeMbas-Server. Bitten Sie seinen Administrator, ihn zu aktualisieren.",
         "This model serves one request at a time: subagents need another model, on another server, named in the chat.": "Dieses Modell bedient eine Anfrage zur Zeit: Subagenten brauchen ein anderes Modell auf einem anderen Server, im Chat genannt.",
         "The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.": "Die Zahlen zählen den eigenen Agenten des Chats mit: 1 ist der Agent allein, ohne Subagenten; Max 4 ist der Agent und bis zu 3 Subagenten. Ein Subagent läuft auf dem Modell des Chats, auf einem anderen nur, wenn Sie es im Chat nennen.",
         "Min": "Min",
@@ -825,6 +852,8 @@ OWN: dict[str, dict[str, str]] = {
         "No day ticked: every day.": "Kein Tag angehakt: jeden Tag.",
     },
     "es": {
+        "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
+        "The terminal needs a newer LLeMbas server. Ask its administrator to update it.": "El terminal necesita un servidor LLeMbas más reciente. Pida a su administrador que lo actualice.",
         "This model serves one request at a time: subagents need another model, on another server, named in the chat.": "Este modelo atiende una petición a la vez: los subagentes necesitan otro modelo, en otro servidor, nombrado en el chat.",
         "The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.": "Los números cuentan el agente propio del chat: 1 es el agente solo, sin subagentes; Máx. 4 es el agente y hasta 3 subagentes. Un subagente usa el modelo del chat, u otro solo si lo nombra en el chat.",
         "Min": "Mín.",
@@ -1046,6 +1075,8 @@ OWN: dict[str, dict[str, str]] = {
         "No day ticked: every day.": "Ningún día marcado: todos los días.",
     },
     "fr": {
+        "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
+        "The terminal needs a newer LLeMbas server. Ask its administrator to update it.": "Le terminal nécessite un serveur LLeMbas plus récent. Demandez à son administrateur de le mettre à jour.",
         "This model serves one request at a time: subagents need another model, on another server, named in the chat.": "Ce modèle traite une requête à la fois : les sous-agents ont besoin d’un autre modèle, sur un autre serveur, nommé dans la conversation.",
         "The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.": "Les nombres comptent l’agent de la conversation : 1, c’est l’agent seul, sans sous-agents ; Max 4, c’est l’agent et jusqu’à 3 sous-agents. Un sous-agent utilise le modèle de la conversation, ou un autre seulement si vous le nommez dans la conversation.",
         "Min": "Min",
@@ -1267,6 +1298,8 @@ OWN: dict[str, dict[str, str]] = {
         "No day ticked: every day.": "Aucun jour coché : tous les jours.",
     },
     "hu": {
+        "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
+        "The terminal needs a newer LLeMbas server. Ask its administrator to update it.": "A terminálhoz újabb LLeMbas-szerver kell. Kérje meg a rendszergazdáját, hogy frissítse.",
         "This model serves one request at a time: subagents need another model, on another server, named in the chat.": "Ez a modell egyszerre egy kérést szolgál ki: az alügynököknek másik modell kell, másik szerveren, a beszélgetésben megnevezve.",
         "The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.": "A számokba a beszélgetés saját ügynöke is beleszámít: az 1 maga az ügynök, alügynökök nélkül; a Max. 4 az ügynök és legfeljebb 3 alügynök. Az alügynök a beszélgetés modelljén fut, másikon csak akkor, ha megnevezi a beszélgetésben.",
         "Min": "Min.",
@@ -1488,6 +1521,8 @@ OWN: dict[str, dict[str, str]] = {
         "No day ticked: every day.": "Ha egy nap sincs bejelölve: minden nap.",
     },
     "it": {
+        "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
+        "The terminal needs a newer LLeMbas server. Ask its administrator to update it.": "Il terminale richiede un server LLeMbas più recente. Chiedi al suo amministratore di aggiornarlo.",
         "This model serves one request at a time: subagents need another model, on another server, named in the chat.": "Questo modello serve una richiesta alla volta: i sottoagenti hanno bisogno di un altro modello, su un altro server, nominato nella chat.",
         "The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.": "I numeri contano anche l’agente della chat: 1 è l’agente da solo, senza sottoagenti; Max 4 è l’agente più fino a 3 sottoagenti. Un sottoagente usa il modello della chat, o un altro solo se lo nomini nella chat.",
         "Min": "Min",
@@ -1709,6 +1744,8 @@ OWN: dict[str, dict[str, str]] = {
         "No day ticked: every day.": "Nessun giorno spuntato: ogni giorno.",
     },
     "pl": {
+        "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
+        "The terminal needs a newer LLeMbas server. Ask its administrator to update it.": "Terminal wymaga nowszego serwera LLeMbas. Poproś jego administratora o aktualizację.",
         "This model serves one request at a time: subagents need another model, on another server, named in the chat.": "Ten model obsługuje jedno żądanie naraz: podagenci potrzebują innego modelu, na innym serwerze, wskazanego w czacie.",
         "The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.": "Liczby obejmują własnego agenta czatu: 1 to sam agent, bez podagentów; Maks 4 to agent i do 3 podagentów. Podagent działa na modelu czatu, na innym tylko wtedy, gdy wskażesz go w czacie.",
         "Min": "Min",
@@ -1930,6 +1967,8 @@ OWN: dict[str, dict[str, str]] = {
         "No day ticked: every day.": "Żaden dzień niezaznaczony: codziennie.",
     },
     "sk": {
+        "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
+        "The terminal needs a newer LLeMbas server. Ask its administrator to update it.": "Terminál potrebuje novší server LLeMbas. Požiadajte jeho správcu o aktualizáciu.",
         "This model serves one request at a time: subagents need another model, on another server, named in the chat.": "Tento model vybavuje naraz jednu požiadavku: podagenti potrebujú iný model na inom serveri, pomenovaný v konverzácii.",
         "The numbers count this chat's own agent: 1 is the agent alone, with no subagents; Max 4 is the agent and up to 3 subagents. A subagent runs on the chat's model, or on another only when you name it in the chat.": "Čísla počítajú aj vlastného agenta konverzácie: 1 je agent sám, bez podagentov; Max 4 je agent a až 3 podagenti. Podagent beží na modeli konverzácie, na inom len vtedy, keď ho v konverzácii pomenujete.",
         "Min": "Min",

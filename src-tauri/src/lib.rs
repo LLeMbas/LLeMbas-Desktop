@@ -22,6 +22,7 @@ mod remote;
 mod sealed;
 mod server;
 mod settings;
+mod terminal;
 mod watch;
 
 use std::collections::HashMap;
@@ -115,6 +116,8 @@ struct App {
     signing_in: Mutex<Option<Arc<AtomicBool>>>,
     streams: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     next_stream: AtomicU64,
+    /// The terminal panel's sockets (`terminal.rs`), by the page's id for each.
+    terminals: terminal::Sessions,
     sealed: sealed::Pages,
     watch: watch::Watch,
     /// The files last dropped on the window: what `attach_dropped` may send, and nothing else.
@@ -271,6 +274,7 @@ async fn set_server(handle: AppHandle, address: String) -> Result<Status, String
     if before.as_deref() != Some(d.base.as_str()) {
         app.agent.stop();
         app.watch.reset();
+        app.terminals.close_all();
     }
     *app.account.lock().unwrap() = server::load_account(&app.config_dir, &d.base);
     *app.server.lock().unwrap() = Some(d);
@@ -380,6 +384,7 @@ fn sign_out(handle: AppHandle) {
     let account = app.account.lock().unwrap().take();
     server::forget_account(&app.config_dir);
     app.watch.reset();
+    app.terminals.close_all();
     if let Some(a) = account {
         std::thread::spawn(move || server::sign_out(&a.server, &a.token));
     }
@@ -391,6 +396,7 @@ fn token_refused(handle: &AppHandle) {
     let app = handle.state::<App>();
     if app.account.lock().unwrap().take().is_some() {
         server::forget_account(&app.config_dir);
+        app.terminals.close_all();
         announce(handle);
     }
 }
@@ -509,6 +515,69 @@ fn stream_close(app: tauri::State<'_, App>, id: u64) {
     if let Some(stop) = app.streams.lock().unwrap().remove(&id) {
         stop.store(true, Ordering::SeqCst);
     }
+}
+
+// --- The terminal panel ------------------------------------------------------------------------
+
+/// Open a shell on a linked device, as the terminal panel asks: an agent chat's (`chat`), or the
+/// one before the chat exists (`device` and `directory`). The socket is opened here, with the
+/// app's token in its handshake; the page gets its frames as `terminal` events with this id --
+/// `output` (base64), `control` (the server's JSON), and a last `end`.
+#[tauri::command]
+fn terminal_open(
+    handle: AppHandle,
+    chat: Option<String>,
+    device: Option<String>,
+    directory: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<u64, ApiError> {
+    let app = handle.state::<App>();
+    let Some((app_url, token)) = app.door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let target = match (chat, device) {
+        (Some(chat), None) => terminal::Target::Chat(chat),
+        (None, Some(device)) => terminal::Target::Device {
+            device,
+            directory: directory.unwrap_or_default(),
+        },
+        _ => return Err(ApiError::new(400, "A chat or a device, not both.")),
+    };
+    let url = terminal::url(&app_url, &target, cols, rows)?;
+    let h = handle.clone();
+    Ok(app.terminals.open(url, token, move |down| {
+        if down.kind == "end" {
+            h.state::<App>().terminals.forget(down.id);
+            let refused = down.data.get("code").and_then(Value::as_u64)
+                == Some(u64::from(terminal::CLOSE_UNAUTHORIZED))
+                || down.data.get("status").and_then(Value::as_u64) == Some(401);
+            if refused {
+                token_refused(&h);
+            }
+        }
+        let _ = h.emit("terminal", down);
+    }))
+}
+
+/// Keys typed (or pasted) into a terminal, as text: sent to the shell as its bytes.
+#[tauri::command]
+fn terminal_input(app: tauri::State<'_, App>, id: u64, data: String) -> bool {
+    app.terminals
+        .send(id, terminal::Up::Keys(data.into_bytes()))
+}
+
+/// The terminal's size changed.
+#[tauri::command]
+fn terminal_resize(app: tauri::State<'_, App>, id: u64, cols: u16, rows: u16) -> bool {
+    app.terminals.send(id, terminal::Up::Resize(cols, rows))
+}
+
+/// The page let go of a terminal: its socket is closed (the shell on the device lives on, as
+/// the server keeps it).
+#[tauri::command]
+fn terminal_close(app: tauri::State<'_, App>, id: u64) {
+    app.terminals.close(id);
 }
 
 // --- Attachments ----------------------------------------------------------------------------------
@@ -1560,6 +1629,10 @@ pub fn run() {
             terminal_word,
             stream_open,
             stream_close,
+            terminal_open,
+            terminal_input,
+            terminal_resize,
+            terminal_close,
             local_list,
             local_read,
             sealed_open,
@@ -1621,6 +1694,7 @@ pub fn run() {
                 signing_in: Mutex::new(None),
                 streams: Mutex::new(HashMap::new()),
                 next_stream: AtomicU64::new(0),
+                terminals: terminal::Sessions::default(),
                 sealed: sealed::Pages::default(),
                 watch: watch::Watch::default(),
                 dropped: Mutex::new(Vec::new()),
