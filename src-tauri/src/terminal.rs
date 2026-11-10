@@ -167,14 +167,21 @@ pub struct Sessions {
 
 impl Sessions {
     /// Open a terminal's socket on its own thread. `emit` gets every frame, the `end` last;
-    /// the id is the page's handle on it.
-    pub fn open(&self, url: String, token: String, emit: impl Fn(Down) + Send + 'static) -> u64 {
+    /// `ended` is told how it ended just before. The id is the page's handle on it.
+    pub fn open(
+        &self,
+        url: String,
+        token: String,
+        emit: impl Fn(Down) + Send + 'static,
+        ended: impl FnOnce(u64, &End) + Send + 'static,
+    ) -> u64 {
         let id = self.next.fetch_add(1, Ordering::SeqCst) + 1;
         let (tx, rx) = mpsc::channel();
         self.open.lock().unwrap().insert(id, tx);
         std::thread::spawn(move || {
             let send = |kind: &'static str, data: Value| emit(Down { id, kind, data });
             let end = run(&url, &token, &rx, &send);
+            ended(id, &end);
             send("end", serde_json::to_value(&end).unwrap_or(Value::Null));
         });
         id

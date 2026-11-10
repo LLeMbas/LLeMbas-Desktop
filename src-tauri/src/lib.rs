@@ -546,18 +546,20 @@ fn terminal_open(
     };
     let url = terminal::url(&app_url, &target, cols, rows)?;
     let h = handle.clone();
-    Ok(app.terminals.open(url, token, move |down| {
-        if down.kind == "end" {
-            h.state::<App>().terminals.forget(down.id);
-            let refused = down.data.get("code").and_then(Value::as_u64)
-                == Some(u64::from(terminal::CLOSE_UNAUTHORIZED))
-                || down.data.get("status").and_then(Value::as_u64) == Some(401);
-            if refused {
-                token_refused(&h);
+    let on_end = handle.clone();
+    Ok(app.terminals.open(
+        url,
+        token,
+        move |down| {
+            let _ = h.emit("terminal", down);
+        },
+        move |id, end| {
+            on_end.state::<App>().terminals.forget(id);
+            if end.unauthorized() {
+                token_refused(&on_end);
             }
-        }
-        let _ = h.emit("terminal", down);
-    }))
+        },
+    ))
 }
 
 /// Keys typed (or pasted) into a terminal, as text: sent to the shell as its bytes.
