@@ -19,10 +19,18 @@ export const SERVER_FILES = {
 /** A directory in either tree: the server's mounts open like its folders. */
 const isDir = (e) => e.kind === "dir" || e.kind === "mount"
 
+/** How long a directory may take before the pane says it is still waiting, and offers to ask again. */
+export const SLOW_MS = 8000
+
 /**
  * A lazily opened tree in `box`. `list(path)` -> entries; `open(entry)` for a file; `actions(entry)`
  * (optional) -> menu items for an entry's more button. Returns `reload(path)`, which reads a
  * directory that is open again (the root by `rootPath`), the folders open inside it kept open.
+ *
+ * A directory is never an empty box: while it is read it says "Loading…" (and, past SLOW_MS, that
+ * the answer has not come, with Try again); a refusal, or anything that breaks drawing it, is said
+ * in its place with Try again. Only the latest reading of a directory is drawn: an answer that
+ * comes after the directory was read again, closed or redrawn is dropped, not appended.
  */
 function tree(box, { list, open, rootPath, actions }) {
   clear(box)
@@ -30,56 +38,90 @@ function tree(box, { list, open, rootPath, actions }) {
   box.append(ul)
   const levels = new Map() // path -> { ul, depth }, each directory drawn now
   const opened = new Set() // the directories open now
+  const asked = new WeakMap() // ul -> the reading it shows now (a number)
   const level = async (parent, path, depth) => {
     levels.set(path, { ul: parent, depth })
+    const mine = (asked.get(parent) || 0) + 1
+    asked.set(parent, mine)
+    const stale = () => asked.get(parent) !== mine || !parent.isConnected
+    const again = () => {
+      clear(parent)
+      return level(parent, path, depth)
+    }
+    const retry = () => h("button", { type: "button", class: "btn btn--sm tree__retry", text: t("Try again"), onclick: again })
+    const loading = h("li", { class: "tree__note is-loading", role: "status", "aria-live": "polite" }, h("span", { text: t("Loading…") }))
+    loading.style.setProperty("--depth", String(depth))
+    parent.append(loading)
+    const slow = setTimeout(() => {
+      if (stale()) return
+      loading.append(h("span", { text: ` ${t("The server has not answered in %(n)s seconds.", { n: Math.round(SLOW_MS / 1000) })}` }), retry())
+    }, SLOW_MS)
+    const said = (text) => {
+      const note = h("li", { class: "tree__note is-error", role: "alert" }, h("span", { text }), retry())
+      note.style.setProperty("--depth", String(depth))
+      return note
+    }
     let entries
     try {
       entries = await list(path)
     } catch (err) {
-      parent.append(h("li", { class: "tree__note is-error", text: why(err) }))
+      clearTimeout(slow)
+      if (!stale()) loading.replaceWith(said(why(err)))
       return
+    } finally {
+      clearTimeout(slow)
     }
-    if (!entries.length) parent.append(h("li", { class: "tree__note", text: t("Empty folder") }))
-    for (const e of entries) {
-      const row = h(
-        "button",
-        { type: "button", class: "tree__row", title: e.path, "aria-expanded": isDir(e) ? "false" : null },
-        h("span", { class: "tree__chevron" }, isDir(e) ? icon(ICONS.chevron) : null),
-        icon(isDir(e) ? ICONS.folder : ICONS.file),
-        h("span", { class: "tree__name", text: e.name }),
-        h("span", { class: "tree__size", text: isDir(e) ? "" : bytes(e.size) }),
-      )
-      row.style.setProperty("--depth", String(depth))
-      const items = actions?.(e) || []
-      const li = h(
-        "li",
-        { role: "treeitem", class: items.length ? "tree__item" : null, dataset: { path: e.path } },
-        row,
-        items.length
-          ? h("button", { type: "button", class: "tool tree__more", "aria-label": t("More"), title: t("More"), onclick: (ev) => menu(ev.currentTarget, items) }, icon(ICONS.more))
-          : null,
-      )
-      if (isDir(e)) {
-        let kids = null
-        const expand = async (opening) => {
-          row.setAttribute("aria-expanded", String(opening))
-          if (!opening) {
-            opened.delete(e.path)
-            levels.delete(e.path)
-            kids?.remove()
-            kids = null
-            return
-          }
-          opened.add(e.path)
-          kids = h("ul", { role: "group" })
-          li.append(kids)
-          await level(kids, e.path, depth + 1)
+    if (stale()) return
+    try {
+      if (!Array.isArray(entries)) throw { detail: t("The server's answer could not be read.") }
+      const items = []
+      if (!entries.length) items.push(h("li", { class: "tree__note", text: t("Empty folder") }))
+      for (const e of entries) items.push(item(e, depth))
+      loading.replaceWith(...items)
+    } catch (err) {
+      loading.replaceWith(said(err instanceof Error ? err.message : why(err)))
+    }
+  }
+  const item = (e, depth) => {
+    const row = h(
+      "button",
+      { type: "button", class: "tree__row", title: e.path, "aria-expanded": isDir(e) ? "false" : null },
+      h("span", { class: "tree__chevron" }, isDir(e) ? icon(ICONS.chevron) : null),
+      icon(isDir(e) ? ICONS.folder : ICONS.file),
+      h("span", { class: "tree__name", text: e.name }),
+      h("span", { class: "tree__size", text: isDir(e) ? "" : bytes(e.size) }),
+    )
+    row.style.setProperty("--depth", String(depth))
+    const items = actions?.(e) || []
+    const li = h(
+      "li",
+      { role: "treeitem", class: items.length ? "tree__item" : null, dataset: { path: e.path } },
+      row,
+      items.length
+        ? h("button", { type: "button", class: "tool tree__more", "aria-label": t("More"), title: t("More"), onclick: (ev) => menu(ev.currentTarget, items) }, icon(ICONS.more))
+        : null,
+    )
+    if (isDir(e)) {
+      let kids = null
+      const expand = async (opening) => {
+        row.setAttribute("aria-expanded", String(opening))
+        if (!opening) {
+          opened.delete(e.path)
+          levels.delete(e.path)
+          kids?.remove()
+          kids = null
+          return
         }
-        row.addEventListener("click", () => expand(row.getAttribute("aria-expanded") !== "true"))
-        if (opened.has(e.path)) expand(true)
-      } else row.addEventListener("click", () => open(e))
-      parent.append(li)
-    }
+        opened.add(e.path)
+        kids?.remove()
+        kids = h("ul", { role: "group" })
+        li.append(kids)
+        await level(kids, e.path, depth + 1)
+      }
+      row.addEventListener("click", () => expand(row.getAttribute("aria-expanded") !== "true"))
+      if (opened.has(e.path)) expand(true)
+    } else row.addEventListener("click", () => open(e))
+    return li
   }
   const done = level(ul, rootPath, 0)
   const reload = (path) => {
@@ -237,8 +279,9 @@ export function renderServer() {
     rootPath: "/",
     list: async (path) => {
       const r = await get(SERVER_FILES.list(path))
+      if (!r || !Array.isArray(r.entries)) throw { detail: t("The server's answer could not be read.") }
       if (path === "/" && r.path) serverRoot = r.path
-      return r.entries || []
+      return r.entries
     },
     open: (e) => openServerFile(e.path, e.name),
     actions: serverActions,

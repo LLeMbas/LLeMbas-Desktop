@@ -4,6 +4,19 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Files › Server showed an empty pane while it waited.** Nothing was drawn until the server's
+  listing came back -- no word that it was being read -- and a refusal or a broken answer was said
+  only once Rust's read timeout (60 s) had passed; to the person it looked as if there were no
+  files at all. Every folder in both trees now says Loading… while it is read; after 8 s it says
+  the server has not answered yet and offers Try again (the late answer is still drawn); a
+  refusal, an answer that is not a listing, or anything that breaks drawing it is said in its
+  place with Try again. Read again while an answer was on its way no longer draws the listing
+  twice.
+
 ## [1.0.0-beta.7] — 2026-11-10
 
 LLeMbas CLI 2.0.0-beta.7 inside, the look and words of LLeMbas 2.0.0-beta.9.

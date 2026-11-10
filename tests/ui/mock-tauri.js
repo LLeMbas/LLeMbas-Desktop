@@ -8,6 +8,8 @@
 //            /api/v2 as the page reaches it through `api`. A path is looked up with its query,
 //            then without it. A value `{ __error: { status, detail } }` is a refusal. Anything
 //            not in the table is a 404, as an older server would answer.
+//   hold     ["GET /files?path=%2F", ...] -- answers that wait (a slow server) until the test
+//            lets them go with `__mock.release(key)`; the table is read when they are let go.
 //   streams  { "/chats/c1/messages/m1/stream": [[event, data], ...] } -- the frames a followed
 //            reply sends as soon as it is opened. More can be sent later with `__mock.frame()`.
 //   terminal [[kind, data], ...] -- what every terminal's socket sends as soon as it is opened
@@ -29,7 +31,16 @@
     for (const cb of listeners.get(name) || []) cb({ event: name, payload })
   }
 
+  const held = [] // [{ key, go }] answers waiting for `release`
+
   function route(method, path) {
+    if ((config.hold || []).includes(`${method} ${path}`)) {
+      return new Promise((resolve) => held.push({ key: `${method} ${path}`, go: resolve })).then(() => answer(method, path))
+    }
+    return answer(method, path)
+  }
+
+  function answer(method, path) {
     const routes = config.routes || {}
     const bare = path.split("?")[0]
     for (const key of [`${method} ${path}`, `${method} ${bare}`]) {
@@ -130,6 +141,17 @@
 
   window.__mock = {
     calls,
+    /** Let the held answers for `key` go, in the order they were asked; stop holding new ones. */
+    release(key) {
+      config.hold = (config.hold || []).filter((k) => k !== key)
+      const going = held.filter((x) => x.key === key)
+      for (const x of going) held.splice(held.indexOf(x), 1)
+      for (const x of going) x.go()
+    },
+    /** Change the server's answer for a route from now on. */
+    answer(key, value) {
+      config.routes[key] = value
+    },
     frame,
     emit: dispatch,
     /** The calls of one command, or of `api` with one method and path prefix. */

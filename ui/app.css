@@ -1460,7 +1460,11 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .tree__more { opacity: 0; }
 .tree__item:hover > .tree__more, .tree__more:focus-visible, .tree__more[aria-expanded="true"] { opacity: 1; }
 @media (hover: none) { .tree__more { opacity: 1; } }
-.tree__note { padding: var(--sp-1) var(--sp-3); font-size: var(--text-xs); color: var(--ink-muted); }
+.tree__note { padding: var(--sp-1) var(--sp-3); padding-inline-start: calc(var(--sp-3) + var(--depth, 0) * var(--sp-4)); font-size: var(--text-xs); color: var(--ink-muted); }
+/* Loading, still waiting, refused: the words, then Try again on the same line when it fits. */
+.tree__note.is-loading, .tree__note.is-error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.tree__note > span { min-width: 0; overflow-wrap: anywhere; }
+.tree__retry { flex: none; }
 
 /* An empty page: an icon, a heading, a sentence, centred. */
 .empty { display: grid; justify-items: center; gap: var(--sp-3); padding: var(--sp-12) var(--sp-4) var(--sp-4); text-align: center; }

@@ -189,9 +189,11 @@ function baseRoutes(over = {}) {
 
 let browser
 
-async function page(config, { width = 1280, height = 860 } = {}) {
+async function page(config, { width = 1280, height = 860, clock = false } = {}) {
   const context = await browser.newContext({ viewport: { width, height } })
   const p = await context.newPage()
+  // The page's own timers, moved on by the test (`p.clock.fastForward`) rather than waited for.
+  if (clock) await p.clock.install()
   const errors = []
   p.on("pageerror", (e) => errors.push(String(e)))
   await context.route(`${ORIGIN}/**`, (route) => {
@@ -1395,6 +1397,127 @@ test("H8: at 390 px the server's pane and the switches stay inside the window", 
   await p.waitForSelector('#server-tree li[data-path="/home/frodo/lembas.md"]')
   assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
   await shot(p, "h8-files-390")
+  assert.deepEqual(p.errors, [])
+})
+
+// N8: Files › Server for an administrator (owner, on 1.0.0-beta.7: "shows nothing", then it loaded
+// late). The pane drew nothing at all while the listing was on its way -- no word that it was being
+// read, and a refusal or a broken answer only as late as Rust's 60 s read timeout. An answer that
+// came after Read again was appended beside the new one. The answer below is what the server's own
+// test client gives an administrator for `GET /api/v2/files?path=/` (2.0.0-beta.9: `fs.start` is `/`
+// for an organisation's owner), with a mount and files at the root as on a lived-in instance.
+
+const ADMIN_ROOT = {
+  path: "/",
+  parent: null,
+  entries: [
+    { name: "home", path: "/home", kind: "dir", size: 0, mime: "", updated_at: STAMP },
+    { name: "shared", path: "/shared", kind: "mount", size: 0, mime: "", updated_at: STAMP },
+    { name: "skills", path: "/skills", kind: "dir", size: 0, mime: "", updated_at: STAMP },
+    { name: "retry_util.py", path: "/retry_util.py", kind: "file", size: 1917, mime: "text/x-python", updated_at: STAMP },
+    { name: "test.py", path: "/test.py", kind: "file", size: 210, mime: "text/x-python", updated_at: STAMP },
+  ],
+}
+const ROOT_KEY = "GET /files?path=%2F"
+
+function n8(over = {}, hold = []) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      [ROOT_KEY]: ADMIN_ROOT,
+      "GET /files?path=%2Fhome": { path: "/home", parent: "/", entries: [{ name: "ada", path: "/home/ada", kind: "dir", size: 0, mime: "", updated_at: STAMP }] },
+      ...over,
+    }),
+    hold,
+    streams: {},
+  }
+}
+
+async function openServerTab(p) {
+  await p.evaluate(() => document.getElementById("nav-files").click())
+  await p.click('#files-tabs [data-tab="server"]')
+}
+
+const serverRows = (p) => p.$$eval("#server-tree li[data-path]", (l) => l.map((x) => x.dataset.path))
+
+test("N8: the administrator's / is drawn: folders, the mount and the files at the root; Loading… while it is read", async () => {
+  const p = await page(n8({}, [ROOT_KEY]))
+  await openServerTab(p)
+  await p.waitForSelector("#server-tree .tree__note.is-loading")
+  assert.equal((await p.textContent("#server-tree .tree__note.is-loading")).trim(), "Loading…")
+  assert.ok(await p.isVisible("#server-tree .tree__note.is-loading"), "the pane is not empty while it waits")
+  await p.evaluate((k) => window.__mock.release(k), ROOT_KEY)
+  await p.waitForSelector('#server-tree li[data-path="/test.py"]')
+  assert.deepEqual(await serverRows(p), ["/home", "/shared", "/skills", "/retry_util.py", "/test.py"])
+  assert.equal(await p.locator("#server-tree .is-loading").count(), 0)
+  // The mount opens like a folder; a folder's children come under it.
+  await p.click('#server-tree li[data-path="/home"] > .tree__row')
+  await p.waitForSelector('#server-tree li[data-path="/home/ada"]')
+  assert.ok(await p.isVisible('#server-tree li[data-path="/home/ada"]'))
+  await shot(p, "n8-admin-root-1280")
+  assert.deepEqual(p.errors, [])
+})
+
+test("N8: an answer that has not come in 8 s says so and offers Try again; the late answer is still drawn", async () => {
+  const p = await page(n8({}, [ROOT_KEY]), { clock: true })
+  await openServerTab(p)
+  await p.waitForSelector("#server-tree .tree__note.is-loading")
+  assert.equal(await p.locator("#server-tree .tree__retry").count(), 0)
+  await p.clock.fastForward(9000)
+  await p.waitForSelector("#server-tree .tree__note.is-loading .tree__retry")
+  assert.match(await p.textContent("#server-tree .tree__note.is-loading"), /The server has not answered in 8 seconds\./)
+  await p.evaluate((k) => window.__mock.release(k), ROOT_KEY)
+  await p.waitForSelector('#server-tree li[data-path="/test.py"]')
+  assert.equal(await p.locator("#server-tree .tree__note").count(), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("N8: a refusal is said in the pane with Try again, which reads the folder afresh", async () => {
+  const p = await page(n8({ [ROOT_KEY]: { __error: { status: 403, detail: "This token was not given the app scope." } } }))
+  await openServerTab(p)
+  await p.waitForSelector("#server-tree .tree__note.is-error")
+  assert.match(await p.textContent("#server-tree .tree__note.is-error"), /This token was not given the app scope\./)
+  assert.equal(await p.getAttribute("#server-tree .tree__note.is-error", "role"), "alert")
+  await p.evaluate(([k, v]) => window.__mock.answer(k, v), [ROOT_KEY, ADMIN_ROOT])
+  await p.click("#server-tree .tree__retry")
+  await p.waitForSelector('#server-tree li[data-path="/home"]')
+  assert.equal(await p.locator("#server-tree .is-error").count(), 0)
+  assert.equal((await p.evaluate((k) => window.__mock.api("GET", "/files?path=%2F").length)), 2)
+  assert.deepEqual(p.errors, [])
+})
+
+test("N8: an answer that is not a listing is said, never an empty pane", async () => {
+  for (const broken of [null, { path: "/" }, { detail: "Not Found" }]) {
+    const p = await page(n8({ [ROOT_KEY]: broken }))
+    await openServerTab(p)
+    await p.waitForSelector("#server-tree .tree__note.is-error")
+    assert.match(await p.textContent("#server-tree .tree__note.is-error"), /The server's answer could not be read\./)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+test("N8: Read again while the first answer is on its way draws the listing once", async () => {
+  const p = await page(n8({}, [ROOT_KEY]))
+  await openServerTab(p)
+  await p.waitForSelector("#server-tree .tree__note.is-loading")
+  await p.click("#server-refresh")
+  await p.waitForFunction((k) => window.__mock.api("GET", "/files?path=%2F").length === 2)
+  await p.evaluate((k) => window.__mock.release(k), ROOT_KEY)
+  await p.waitForSelector('#server-tree li[data-path="/test.py"]')
+  await p.waitForTimeout(50)
+  assert.deepEqual(await serverRows(p), ["/home", "/shared", "/skills", "/retry_util.py", "/test.py"])
+  assert.deepEqual(p.errors, [])
+})
+
+test("N8: at 390 px the waiting and the refusal stay inside the window, Try again reachable", async () => {
+  const p = await page(n8({ [ROOT_KEY]: { __error: { status: 0, detail: "Could not reach the server: connection timed out after a long wait at the very far end of the network" } } }), { width: 390, height: 844 })
+  await openServerTab(p)
+  await p.waitForSelector("#server-tree .tree__retry")
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  const box = await p.locator("#server-tree .tree__retry").boundingBox()
+  assert.ok(box && box.x >= 0 && box.x + box.width <= 390 && box.height >= 28, `Try again is on the screen: ${JSON.stringify(box)}`)
+  await shot(p, "n8-refused-390")
   assert.deepEqual(p.errors, [])
 })
 
