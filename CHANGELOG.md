@@ -6,6 +6,17 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Files, in the web explorer's shape, using the window's width.** Both tabs (This computer and
+  Server) are now where you are (crumbs, each part a way back), the folder tree, the list in
+  columns -- name with an icon by kind, type, size, changed -- and, on a wide window, the chosen
+  file's details with the start of it and Open in the viewer (a double click opens it too). With
+  less room the details give way first (a file then opens in the viewer), then the tree, then the
+  type and date columns, by the room the page has rather than the window's width; nothing is cut
+  off or scrolls the page sideways (checked at 1920, 1280, 1024, 800 and 390 px with a long name).
+  The tree and the list share one request per folder.
+
 ### Fixed
 
 - **Files › Server showed an empty pane while it waited.** Nothing was drawn until the server's

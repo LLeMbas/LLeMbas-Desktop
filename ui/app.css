@@ -1414,57 +1414,206 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .tabs__tab[aria-selected="true"] { color: var(--ink); background: var(--surface-active); }
 
-.files { display: grid; align-content: start; }
-.files__pane { display: grid; gap: var(--sp-2); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); padding: var(--sp-3); min-width: 0; }
-.files__head { display: grid; grid-template-columns: minmax(0, 1fr) var(--control-h-sm); gap: var(--sp-2); align-items: center; }
-.files__where { min-width: 0; }
-/* The server's pane: Upload and New folder before Read again. */
-#pane-server .files__head { grid-template-columns: minmax(0, 1fr) repeat(3, var(--control-h-sm)); }
-#server-status { white-space: pre-line; }
-.files__where select { width: 100%; height: var(--control-h-sm); }
-.files__tree { min-height: 0; }
-.pane__path { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left; font: var(--text-xs) var(--font-ui); color: var(--ink-muted); }
-.pane__pick { width: 100%; }
-.pane__note { padding: var(--sp-2) 0; font-size: var(--text-sm); color: var(--ink-muted); }
-.files__tree > .btn { justify-self: start; }
-
-.tree, .tree ul { list-style: none; margin: 0; padding: 0; }
-.tree__row {
-  width: 100%;
-  height: var(--control-h-sm);
+/* --- Files: two explorers in the web's shape ------------------------------------------------
+   The page's whole width under its head, like a file manager: where you are and what can be done
+   there, then the folder tree, the list and the chosen file's details side by side, each its own
+   scroller. The list is one grid with a track per column and every row a subgrid of it, so a long
+   name never pushes the type, size or date out of line: the name's track is the one that gives.
+   Narrower, the details go first (a file then opens in the viewer), then the tree (the crumbs
+   are the way up), then the type and date columns. */
+.page__body.files { display: grid; grid-template-rows: minmax(0, 1fr); padding: 0; overflow: hidden; }
+.page__body.files > * { max-width: none; margin: 0; }
+.fx { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; container: fx / inline-size; }
+.fx > .fx__bar { grid-row: 1; }
+.fx > .fx__status { grid-row: 2; }
+.fx > .fx__panes { grid-row: 3; }
+.fx[hidden] { display: none; }
+.fx__bar {
   display: grid;
-  grid-template-columns: calc(var(--depth, 0) * var(--sp-4)) 1rem 1rem minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "where crumbs tools";
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--header-height);
+  padding: var(--sp-1) var(--sp-4);
+  border-bottom: var(--border-w) solid var(--border);
+  background: var(--surface);
+}
+.fx__where { grid-area: where; min-width: 0; max-width: 18rem; }
+.fx__bar > .crumbs { grid-area: crumbs; }
+.fx__where:empty { display: none; }
+.fx__tools { grid-area: tools; display: flex; align-items: center; gap: var(--sp-1); }
+.fx__status { margin: 0; padding: var(--sp-2) var(--sp-4); border-bottom: var(--border-w) solid var(--border); white-space: pre-line; }
+.fx__status[hidden] { display: none; }
+.pane__pick { width: 100%; height: var(--control-h-sm); }
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+  font: var(--text-sm) var(--font-mono);
+}
+.crumbs__sep { color: var(--ink-faint); }
+.crumbs__link {
+  min-height: var(--control-h-sm);
+  padding: 0 var(--sp-1);
+  font: inherit;
+  color: var(--ink-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.crumbs__link:hover { color: var(--ink); background: var(--surface-hover); }
+.crumbs__here { padding: 0 var(--sp-1); color: var(--ink); font-weight: 600; }
+
+.fx__panes { display: grid; grid-template-columns: minmax(11rem, 14rem) minmax(0, 1fr) minmax(14rem, 18rem); min-width: 0; min-height: 0; }
+.fx__tree, .fx__list, .fx__details { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.fx__tree { padding: var(--sp-2); border-right: var(--border-w) solid var(--border); background: var(--surface); }
+.fx__list { padding: 0 var(--sp-4) var(--sp-8); container: fxlist / inline-size; }
+.fx__details { display: grid; align-content: start; gap: var(--sp-3); padding: var(--sp-4); border-left: var(--border-w) solid var(--border); background: var(--surface); }
+.fx[data-empty="true"] .fx__tree, .fx[data-empty="true"] .fx__details { display: none; }
+.fx[data-empty="true"] .fx__panes { grid-template-columns: minmax(0, 1fr); }
+
+/* The folder tree: a chevron opens a folder, its name lists it. */
+.ftree, .ftree ul { list-style: none; margin: 0; padding: 0; }
+.ftree__line { display: grid; grid-template-columns: calc(var(--depth, 0) * var(--sp-3)) 1.25rem minmax(0, 1fr); align-items: center; }
+.ftree__line::before { content: ""; }
+.ftree__chevron { display: grid; place-items: center; width: 1.25rem; height: var(--control-h-sm); padding: 0; color: var(--ink-faint); background: transparent; border: 0; cursor: pointer; }
+.ftree__chevron .icon { width: 12px; height: 12px; transition: transform var(--dur-1) var(--ease-out); }
+.ftree__chevron[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.ftree__row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
   gap: var(--sp-2);
   align-items: center;
+  width: 100%;
+  min-height: var(--control-h-sm);
   padding: 0 var(--sp-2);
-  text-align: left;
   font: var(--text-sm) var(--font-body);
+  text-align: left;
+  color: var(--ink-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ftree__row:hover { color: var(--ink); background: var(--surface-hover); }
+.ftree__row.is-current { color: var(--ink); background: var(--surface-active); font-weight: 600; }
+.ftree__root { margin-bottom: var(--sp-1); }
+.ftree__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* The list. */
+.frows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(3.5rem, auto) minmax(4.5rem, auto) minmax(6.5rem, auto) var(--control-h-sm);
+  column-gap: var(--sp-4);
+}
+.frow {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: var(--row-h);
+  margin: 0 calc(-1 * var(--sp-2));
+  padding: 0 var(--sp-2);
+  border-bottom: var(--border-w) solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.frow:not(.frow--head):hover { background: var(--surface-hover); }
+.frow.is-chosen { background: var(--surface-active); }
+.frow--head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  color: var(--ink-faint);
+  font: var(--text-xs) var(--font-ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 0;
+}
+.frow__name { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.frow__open {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  min-height: var(--row-h);
+  padding: 0;
+  font: var(--text-sm) var(--font-body);
+  text-align: left;
   color: var(--ink);
   background: transparent;
   border: 0;
-  border-radius: var(--radius-lg);
   cursor: pointer;
 }
-/* The indent's track needs an item of its own, or the chevron would sit in it. */
-.tree__row::before { content: ""; }
-.tree__row:hover { background: var(--surface-hover); }
-.tree__row .icon { color: var(--ink-muted); }
-.tree__chevron { display: grid; place-items: center; width: 1rem; }
-.tree__chevron .icon { width: 12px; height: 12px; transition: transform var(--dur-1) var(--ease-out); }
-.tree__row[aria-expanded="true"] .tree__chevron .icon { transform: rotate(90deg); }
-.tree__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.tree__size { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
-/* A row with a more button beside it: the button on the row's own line, its folder below both. */
-.tree__item { display: grid; grid-template-columns: minmax(0, 1fr) var(--control-h-sm); align-items: center; }
-.tree__item > ul { grid-column: 1 / -1; }
-.tree__more { opacity: 0; }
-.tree__item:hover > .tree__more, .tree__more:focus-visible, .tree__more[aria-expanded="true"] { opacity: 1; }
-@media (hover: none) { .tree__more { opacity: 1; } }
-.tree__note { padding: var(--sp-1) var(--sp-3); padding-inline-start: calc(var(--sp-3) + var(--depth, 0) * var(--sp-4)); font-size: var(--text-xs); color: var(--ink-muted); }
+/* The whole row opens what it names; the buttons at its end stay on top. */
+.frow__open::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.frow__open:focus-visible { outline: none; }
+.frow__open:focus-visible::after { outline: var(--outline-w) solid var(--accent); outline-offset: calc(-1 * var(--outline-w)); }
+.frow__name .badge, .frow__actions { position: relative; z-index: 1; }
+.frow__icon { display: inline-flex; color: var(--ink-muted); }
+.frow__icon--dir, .frow__icon--mount { color: var(--accent); }
+.frow__icon--code, .frow__icon--html { color: var(--leaf); }
+.frow__label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.frow__type { font: var(--text-xs) var(--font-mono); color: var(--ink-faint); white-space: nowrap; }
+.frow__size, .frow__when { font-size: var(--text-sm); color: var(--ink-muted); white-space: nowrap; text-align: right; }
+.frow--head .frow__size, .frow--head .frow__when { font-size: var(--text-xs); }
+.frow__actions { display: flex; justify-content: flex-end; }
+.frow__more { opacity: 0; }
+.frow:hover .frow__more, .frow__more:focus-visible, .frow__more[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .frow__more { opacity: 1; } }
+.badge { padding: 0 var(--sp-1); font: var(--text-xs) var(--font-ui); color: var(--ink-muted); border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); white-space: nowrap; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.fx__empty { display: grid; justify-items: center; gap: var(--sp-3); padding: var(--sp-12) var(--sp-4); text-align: center; color: var(--ink-muted); }
+.fx__empty .icon { width: 24px; height: 24px; color: var(--leaf); }
+
+/* The chosen file. */
+.fdetails__none { display: grid; justify-items: center; gap: var(--sp-2); padding: var(--sp-8) 0; text-align: center; color: var(--ink-muted); font-size: var(--text-sm); }
+.fdetails__none .icon { width: 24px; height: 24px; color: var(--ink-faint); }
+.fdetails__id { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; }
+.fdetails__name { font: 600 var(--text-base) / var(--leading-tight) var(--font-body); overflow-wrap: anywhere; }
+.fdetails__facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-1) var(--sp-3); margin: 0; font-size: var(--text-sm); }
+.fdetails__facts dt { color: var(--ink-faint); }
+.fdetails__facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.fdetails__do { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.fdetails__preview { min-width: 0; }
+.fdetails__text { margin: 0; max-height: 24rem; overflow: auto; padding: var(--sp-3); font: var(--text-xs) / var(--leading-normal) var(--font-mono); white-space: pre; color: var(--ink); background: var(--bg); border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); }
+.fdetails__note { font-size: var(--text-sm); color: var(--ink-muted); }
+
 /* Loading, still waiting, refused: the words, then Try again on the same line when it fits. */
-.tree__note.is-loading, .tree__note.is-error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
-.tree__note > span { min-width: 0; overflow-wrap: anywhere; }
-.tree__retry { flex: none; }
+.fnote { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-1); padding-inline-start: calc(var(--sp-1) + var(--depth, 0) * var(--sp-3)); font-size: var(--text-sm); color: var(--ink-muted); }
+.ftree .fnote { font-size: var(--text-xs); }
+.fnote.is-error { color: var(--warning); }
+.fnote > span { min-width: 0; overflow-wrap: anywhere; }
+.fnote__retry { flex: none; }
+
+/* By the room the page has, not the window's: the sidebar takes its share first. */
+@container fx (max-width: 60rem) {
+  .fx__panes { grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr); }
+  .fx__details { display: none; }
+}
+@container fx (max-width: 40rem) {
+  .fx__panes { grid-template-columns: minmax(0, 1fr); }
+  .fx__tree { display: none; }
+  .fx__bar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "where where" "crumbs tools"; padding: var(--sp-1) var(--sp-3); }
+  .fx__where { max-width: none; }
+  .fx__list { padding: 0 var(--sp-3) var(--sp-8); }
+}
+/* A list narrower than its columns keeps the name and the size; the type and date go. */
+@container fxlist (max-width: 28rem) {
+  .frows { grid-template-columns: minmax(0, 1fr) auto var(--control-h-sm); column-gap: var(--sp-2); }
+  .frows .frow__type, .frows .frow__when { display: none; }
+}
+@media (max-width: 48rem) {
+  .frow, .frow__open { min-height: var(--tap-min); }
+}
 
 /* An empty page: an icon, a heading, a sentence, centred. */
 .empty { display: grid; justify-items: center; gap: var(--sp-3); padding: var(--sp-12) var(--sp-4) var(--sp-4); text-align: center; }

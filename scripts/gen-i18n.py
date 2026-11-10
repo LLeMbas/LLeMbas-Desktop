@@ -546,6 +546,24 @@ KEYS = (
     # explorer.js: a directory still being read, or an answer that is not a listing
     "The server has not answered in %(n)s seconds.",
     "The server's answer could not be read.",
+    # explorer.js: the Files page as the web's explorer (the server's words, but the last)
+    "Name",
+    "Type",
+    "Size",
+    "Changed",
+    "folder",
+    "mount",
+    "All files",
+    "Home",
+    "Folders",
+    "Where you are",
+    "Nothing here yet. Not even a hobbit hole.",
+    "Contents",
+    "Actions",
+    "More for %(name)s",
+    "Path",
+    "Choose a file to see it here.",
+    "Details",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -828,6 +846,8 @@ OWN: dict[str, dict[str, str]] = {
         "The reply to the next message is a picture drawn from it.": "Odpovědí na další zprávu bude obrázek nakreslený podle ní.",
         "The server has not answered in %(n)s seconds.": "Server neodpověděl do %(n)s sekund.",
         "The server's answer could not be read.": "Odpověď serveru nešlo přečíst.",
+        "Choose a file to see it here.": "Vyberte soubor a uvidíte ho tady.",
+        "Details": "Podrobnosti",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -1105,6 +1125,8 @@ OWN: dict[str, dict[str, str]] = {
         "The reply to the next message is a picture drawn from it.": "Die Antwort auf die nächste Nachricht ist ein danach gezeichnetes Bild.",
         "The server has not answered in %(n)s seconds.": "Der Server hat seit %(n)s Sekunden nicht geantwortet.",
         "The server's answer could not be read.": "Die Antwort des Servers konnte nicht gelesen werden.",
+        "Choose a file to see it here.": "Wählen Sie eine Datei, um sie hier zu sehen.",
+        "Details": "Details",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1382,6 +1404,8 @@ OWN: dict[str, dict[str, str]] = {
         "The reply to the next message is a picture drawn from it.": "La respuesta al siguiente mensaje es una imagen dibujada a partir de él.",
         "The server has not answered in %(n)s seconds.": "El servidor no ha respondido en %(n)s segundos.",
         "The server's answer could not be read.": "No se pudo leer la respuesta del servidor.",
+        "Choose a file to see it here.": "Elige un archivo para verlo aquí.",
+        "Details": "Detalles",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1659,6 +1683,8 @@ OWN: dict[str, dict[str, str]] = {
         "The reply to the next message is a picture drawn from it.": "La réponse au prochain message est une image dessinée d’après lui.",
         "The server has not answered in %(n)s seconds.": "Le serveur n’a pas répondu depuis %(n)s secondes.",
         "The server's answer could not be read.": "La réponse du serveur n’a pas pu être lue.",
+        "Choose a file to see it here.": "Choisissez un fichier pour le voir ici.",
+        "Details": "Détails",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1936,6 +1962,8 @@ OWN: dict[str, dict[str, str]] = {
         "The reply to the next message is a picture drawn from it.": "A következő üzenetre adott válasz egy abból rajzolt kép lesz.",
         "The server has not answered in %(n)s seconds.": "A szerver %(n)s másodperce nem válaszolt.",
         "The server's answer could not be read.": "A szerver válasza nem olvasható.",
+        "Choose a file to see it here.": "Válasszon egy fájlt, hogy itt lássa.",
+        "Details": "Részletek",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -2213,6 +2241,8 @@ OWN: dict[str, dict[str, str]] = {
         "The reply to the next message is a picture drawn from it.": "La risposta al prossimo messaggio è un’immagine disegnata a partire da esso.",
         "The server has not answered in %(n)s seconds.": "Il server non ha risposto in %(n)s secondi.",
         "The server's answer could not be read.": "Non è stato possibile leggere la risposta del server.",
+        "Choose a file to see it here.": "Scegli un file per vederlo qui.",
+        "Details": "Dettagli",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2490,6 +2520,8 @@ OWN: dict[str, dict[str, str]] = {
         "The reply to the next message is a picture drawn from it.": "Odpowiedzią na następną wiadomość będzie obraz narysowany na jej podstawie.",
         "The server has not answered in %(n)s seconds.": "Serwer nie odpowiedział od %(n)s sekund.",
         "The server's answer could not be read.": "Nie udało się odczytać odpowiedzi serwera.",
+        "Choose a file to see it here.": "Wybierz plik, aby zobaczyć go tutaj.",
+        "Details": "Szczegóły",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2767,6 +2799,8 @@ OWN: dict[str, dict[str, str]] = {
         "The reply to the next message is a picture drawn from it.": "Odpoveďou na ďalšiu správu bude obrázok nakreslený podľa nej.",
         "The server has not answered in %(n)s seconds.": "Server neodpovedal do %(n)s sekúnd.",
         "The server's answer could not be read.": "Odpoveď servera sa nedala prečítať.",
+        "Choose a file to see it here.": "Vyberte súbor a uvidíte ho tu.",
+        "Details": "Podrobnosti",
     },
 }
 

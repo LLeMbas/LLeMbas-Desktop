@@ -1320,7 +1320,7 @@ function h8(over = {}, commands = {}) {
 async function serverPane(p) {
   await p.click("#nav-files")
   await p.click('#files-tabs [data-tab="server"]')
-  await p.waitForSelector('#server-tree li[data-path="/home/frodo/lembas.md"]')
+  await p.waitForSelector('#server-list .frow[data-path="/home/frodo/lembas.md"]')
 }
 
 test("H8: the server's files: upload, a new folder, rename and delete, each read again from the server", async () => {
@@ -1332,21 +1332,21 @@ test("H8: the server's files: upload, a new folder, rename and delete, each read
   assert.equal((await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "library_upload").args.dir)), "/home/frodo")
   await p.waitForFunction(() => window.__mock.api("GET", "/files?path=%2F").length === 2)
   // A new folder inside a folder, from its row's menu.
-  await p.click('#server-tree li[data-path="/home/frodo/recipes"] > .tree__more')
+  await p.click('#server-list .frow[data-path="/home/frodo/recipes"] .frow__more')
   await p.click(".menu .menu__item >> text=New folder")
   await p.fill("dialog[open] .dialog__input", "Breads")
   await p.click("dialog[open] .btn--primary")
   await p.waitForFunction(() => window.__mock.api("POST", "/files/mkdir").length === 1)
   assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/files/mkdir")))[0].args.body, { path: "/home/frodo/recipes", name: "Breads" })
   // Rename a file.
-  await p.click('#server-tree li[data-path="/home/frodo/lembas.md"] > .tree__more')
+  await p.click('#server-list .frow[data-path="/home/frodo/lembas.md"] .frow__more')
   await p.click(".menu .menu__item >> text=Rename")
   await p.fill("dialog[open] .dialog__input", "waybread.md")
   await p.click("dialog[open] .btn--primary")
   await p.waitForFunction(() => window.__mock.api("POST", "/files/rename").length === 1)
   assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/files/rename")))[0].args.body, { path: "/home/frodo/lembas.md", name: "waybread.md" })
   // Delete: to the trash, after asking.
-  await p.click('#server-tree li[data-path="/home/frodo/lembas.md"] > .tree__more')
+  await p.click('#server-list .frow[data-path="/home/frodo/lembas.md"] .frow__more')
   await p.click(".menu .menu__item >> text=Delete")
   await p.click("dialog[open] .btn--danger")
   await p.waitForFunction(() => window.__mock.api("DELETE", "/files?path=%2Fhome%2Ffrodo%2Flembas.md").length === 1)
@@ -1362,7 +1362,7 @@ test("H8: a refusal or a file the server did not take is said in the pane", asyn
   await p.click("#server-upload")
   await p.waitForSelector("#server-status.is-error")
   assert.equal(await p.textContent("#server-status"), "big.iso: This file is too large to send.")
-  await p.click('#server-tree li[data-path="/home/frodo/lembas.md"] > .tree__more')
+  await p.click('#server-list .frow[data-path="/home/frodo/lembas.md"] .frow__more')
   await p.click(".menu .menu__item >> text=Rename")
   await p.fill("dialog[open] .dialog__input", "x.md")
   await p.click("dialog[open] .btn--primary")
@@ -1394,7 +1394,7 @@ test("H8: at 390 px the server's pane and the switches stay inside the window", 
   const p = await page(h8(), { width: 390, height: 844 })
   await p.evaluate(() => document.getElementById("nav-files").click())
   await p.click('#files-tabs [data-tab="server"]')
-  await p.waitForSelector('#server-tree li[data-path="/home/frodo/lembas.md"]')
+  await p.waitForSelector('#server-list .frow[data-path="/home/frodo/lembas.md"]')
   assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
   await shot(p, "h8-files-390")
   assert.deepEqual(p.errors, [])
@@ -1438,22 +1438,22 @@ async function openServerTab(p) {
   await p.click('#files-tabs [data-tab="server"]')
 }
 
-const serverRows = (p) => p.$$eval("#server-tree li[data-path]", (l) => l.map((x) => x.dataset.path))
+const serverRows = (p) => p.$$eval("#server-list .frow[data-path]", (l) => l.map((x) => x.dataset.path))
 
 test("N8: the administrator's / is drawn: folders, the mount and the files at the root; Loading… while it is read", async () => {
   const p = await page(n8({}, [ROOT_KEY]))
   await openServerTab(p)
-  await p.waitForSelector("#server-tree .tree__note.is-loading")
-  assert.equal((await p.textContent("#server-tree .tree__note.is-loading")).trim(), "Loading…")
-  assert.ok(await p.isVisible("#server-tree .tree__note.is-loading"), "the pane is not empty while it waits")
+  await p.waitForSelector("#server-list .fnote.is-loading")
+  assert.equal((await p.textContent("#server-list .fnote.is-loading")).trim(), "Loading…")
+  assert.ok(await p.isVisible("#server-list .fnote.is-loading"), "the pane is not empty while it waits")
   await p.evaluate((k) => window.__mock.release(k), ROOT_KEY)
-  await p.waitForSelector('#server-tree li[data-path="/test.py"]')
+  await p.waitForSelector('#server-list .frow[data-path="/test.py"]')
   assert.deepEqual(await serverRows(p), ["/home", "/shared", "/skills", "/retry_util.py", "/test.py"])
-  assert.equal(await p.locator("#server-tree .is-loading").count(), 0)
+  assert.equal(await p.locator("#server-list .is-loading").count(), 0)
   // The mount opens like a folder; a folder's children come under it.
-  await p.click('#server-tree li[data-path="/home"] > .tree__row')
-  await p.waitForSelector('#server-tree li[data-path="/home/ada"]')
-  assert.ok(await p.isVisible('#server-tree li[data-path="/home/ada"]'))
+  await p.click('#server-list .frow[data-path="/home"] .frow__open')
+  await p.waitForSelector('#server-list .frow[data-path="/home/ada"]')
+  assert.ok(await p.isVisible('#server-list .frow[data-path="/home/ada"]'))
   await shot(p, "n8-admin-root-1280")
   assert.deepEqual(p.errors, [])
 })
@@ -1461,27 +1461,27 @@ test("N8: the administrator's / is drawn: folders, the mount and the files at th
 test("N8: an answer that has not come in 8 s says so and offers Try again; the late answer is still drawn", async () => {
   const p = await page(n8({}, [ROOT_KEY]), { clock: true })
   await openServerTab(p)
-  await p.waitForSelector("#server-tree .tree__note.is-loading")
-  assert.equal(await p.locator("#server-tree .tree__retry").count(), 0)
+  await p.waitForSelector("#server-list .fnote.is-loading")
+  assert.equal(await p.locator("#server-list .fnote__retry").count(), 0)
   await p.clock.fastForward(9000)
-  await p.waitForSelector("#server-tree .tree__note.is-loading .tree__retry")
-  assert.match(await p.textContent("#server-tree .tree__note.is-loading"), /The server has not answered in 8 seconds\./)
+  await p.waitForSelector("#server-list .fnote.is-loading .fnote__retry")
+  assert.match(await p.textContent("#server-list .fnote.is-loading"), /The server has not answered in 8 seconds\./)
   await p.evaluate((k) => window.__mock.release(k), ROOT_KEY)
-  await p.waitForSelector('#server-tree li[data-path="/test.py"]')
-  assert.equal(await p.locator("#server-tree .tree__note").count(), 0)
+  await p.waitForSelector('#server-list .frow[data-path="/test.py"]')
+  assert.equal(await p.locator("#server-list .fnote").count(), 0)
   assert.deepEqual(p.errors, [])
 })
 
 test("N8: a refusal is said in the pane with Try again, which reads the folder afresh", async () => {
   const p = await page(n8({ [ROOT_KEY]: { __error: { status: 403, detail: "This token was not given the app scope." } } }))
   await openServerTab(p)
-  await p.waitForSelector("#server-tree .tree__note.is-error")
-  assert.match(await p.textContent("#server-tree .tree__note.is-error"), /This token was not given the app scope\./)
-  assert.equal(await p.getAttribute("#server-tree .tree__note.is-error", "role"), "alert")
+  await p.waitForSelector("#server-list .fnote.is-error")
+  assert.match(await p.textContent("#server-list .fnote.is-error"), /This token was not given the app scope\./)
+  assert.equal(await p.getAttribute("#server-list .fnote.is-error", "role"), "alert")
   await p.evaluate(([k, v]) => window.__mock.answer(k, v), [ROOT_KEY, ADMIN_ROOT])
-  await p.click("#server-tree .tree__retry")
-  await p.waitForSelector('#server-tree li[data-path="/home"]')
-  assert.equal(await p.locator("#server-tree .is-error").count(), 0)
+  await p.click("#server-list .fnote__retry")
+  await p.waitForSelector('#server-list .frow[data-path="/home"]')
+  assert.equal(await p.locator("#server-list .is-error").count(), 0)
   assert.equal((await p.evaluate((k) => window.__mock.api("GET", "/files?path=%2F").length)), 2)
   assert.deepEqual(p.errors, [])
 })
@@ -1490,8 +1490,8 @@ test("N8: an answer that is not a listing is said, never an empty pane", async (
   for (const broken of [null, { path: "/" }, { detail: "Not Found" }]) {
     const p = await page(n8({ [ROOT_KEY]: broken }))
     await openServerTab(p)
-    await p.waitForSelector("#server-tree .tree__note.is-error")
-    assert.match(await p.textContent("#server-tree .tree__note.is-error"), /The server's answer could not be read\./)
+    await p.waitForSelector("#server-list .fnote.is-error")
+    assert.match(await p.textContent("#server-list .fnote.is-error"), /The server's answer could not be read\./)
     assert.deepEqual(p.errors, [])
     await p.context().close()
   }
@@ -1500,11 +1500,11 @@ test("N8: an answer that is not a listing is said, never an empty pane", async (
 test("N8: Read again while the first answer is on its way draws the listing once", async () => {
   const p = await page(n8({}, [ROOT_KEY]))
   await openServerTab(p)
-  await p.waitForSelector("#server-tree .tree__note.is-loading")
+  await p.waitForSelector("#server-list .fnote.is-loading")
   await p.click("#server-refresh")
   await p.waitForFunction((k) => window.__mock.api("GET", "/files?path=%2F").length === 2)
   await p.evaluate((k) => window.__mock.release(k), ROOT_KEY)
-  await p.waitForSelector('#server-tree li[data-path="/test.py"]')
+  await p.waitForSelector('#server-list .frow[data-path="/test.py"]')
   await p.waitForTimeout(50)
   assert.deepEqual(await serverRows(p), ["/home", "/shared", "/skills", "/retry_util.py", "/test.py"])
   assert.deepEqual(p.errors, [])
@@ -1513,9 +1513,9 @@ test("N8: Read again while the first answer is on its way draws the listing once
 test("N8: at 390 px the waiting and the refusal stay inside the window, Try again reachable", async () => {
   const p = await page(n8({ [ROOT_KEY]: { __error: { status: 0, detail: "Could not reach the server: connection timed out after a long wait at the very far end of the network" } } }), { width: 390, height: 844 })
   await openServerTab(p)
-  await p.waitForSelector("#server-tree .tree__retry")
+  await p.waitForSelector("#server-list .fnote__retry")
   assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
-  const box = await p.locator("#server-tree .tree__retry").boundingBox()
+  const box = await p.locator("#server-list .fnote__retry").boundingBox()
   assert.ok(box && box.x >= 0 && box.x + box.width <= 390 && box.height >= 28, `Try again is on the screen: ${JSON.stringify(box)}`)
   await shot(p, "n8-refused-390")
   assert.deepEqual(p.errors, [])
@@ -1842,6 +1842,125 @@ test("M8: no picture switch where the server cannot draw, or in an agent chat", 
   await q.click(".kind__tab >> text=Agent")
   assert.equal(await q.locator(".cchip--picture").count(), 0)
   assert.deepEqual(q.errors, [])
+})
+
+// FX: the Files page as the web's explorer -- crumbs, the folder tree, the list in columns, the
+// chosen file's details and preview, using the window's width; narrower, the details and then the
+// tree give way, and nothing is ever cut off or scrolls the page sideways.
+
+const LONG = "a-very-long-file-name-that-somebody-chose-for-the-lembas-recipe-and-its-variants.md"
+function fx() {
+  const cfg = n8({
+    "GET /files?path=%2Fhome": { path: "/home", parent: "/", entries: [{ name: "ada", path: "/home/ada", kind: "dir", size: 0, mime: "", updated_at: STAMP }, { name: LONG, path: `/home/${LONG}`, kind: "file", size: 123456, mime: "text/markdown", updated_at: STAMP }] },
+    "GET /files/content": { path: "/test.py", name: "test.py", size: 210, mime: "text/x-python", kind: "code", language: "python", sha: "x", text: "print('lembas')\n" },
+  })
+  cfg.commands = {
+    local_list: { root: "/home/dev/project", path: "", more: false, entries: [{ name: "src", path: "src", kind: "dir", size: 0, modified: 1767323045 }, { name: "README.md", path: "README.md", kind: "file", size: 2048, modified: 1767323045 }] },
+    local_read: { root: "/home/dev/project", path: "README.md", name: "README.md", size: 2048, text: "# Project\n", withheld: null },
+  }
+  return cfg
+}
+
+test("FX: wide, the server's files are a tree, a list in columns and the chosen file's details with a preview", async () => {
+  const p = await page(fx(), { width: 1600, height: 900 })
+  await openServerTab(p)
+  await p.waitForSelector('#server-list .frow[data-path="/test.py"]')
+  // The tree: the top, then its folders; the top is where we are.
+  await p.waitForSelector('#server-tree li[data-path="/home"]')
+  assert.equal(await p.textContent("#server-tree .ftree__root"), "All files")
+  assert.equal(await p.getAttribute("#server-tree .ftree__root", "aria-current"), "true")
+  assert.deepEqual(await p.$$eval("#server-tree li[data-path]", (l) => l.map((x) => x.dataset.path)), ["/home", "/shared", "/skills"])
+  // The columns, and the kinds' words.
+  assert.deepEqual(await p.$$eval("#server-list .frow--head [role=columnheader]", (l) => l.map((x) => x.textContent)), ["Name", "Type", "Size", "Changed", "Actions"])
+  assert.equal(await p.textContent('#server-list .frow[data-path="/shared"] .frow__type'), "mount")
+  assert.equal(await p.textContent('#server-list .frow[data-path="/home"] .frow__type'), "folder")
+  assert.equal(await p.textContent('#server-list .frow[data-path="/test.py"] .frow__type'), "py")
+  assert.equal(await p.textContent('#server-list .frow[data-path="/test.py"] .frow__size'), "210 B")
+  // Every row's cells on the same tracks: the size column's left edge is one x for every row.
+  const xs = await p.$$eval("#server-list .frow .frow__size", (l) => [...new Set(l.map((x) => Math.round(x.getBoundingClientRect().right)))])
+  assert.equal(xs.length, 1, `sizes end on one line: ${xs}`)
+  // A file chosen: its details and the start of it.
+  assert.match(await p.textContent("#server-details"), /Choose a file to see it here\./)
+  await p.click('#server-list .frow[data-path="/test.py"] .frow__open')
+  await p.waitForSelector("#server-details .fdetails__text")
+  assert.equal(await p.textContent("#server-details .fdetails__name"), "test.py")
+  assert.equal(await p.textContent("#server-details .fdetails__text"), "print('lembas')\n")
+  assert.ok(await p.$eval('#server-list .frow[data-path="/test.py"]', (x) => x.classList.contains("is-chosen")))
+  assert.ok(await p.isHidden("#viewer"), "choosing is not opening")
+  await shot(p, "fx-server-1600")
+  // Open in the viewer from the details, and with a double click.
+  await p.click("#server-details .btn--primary")
+  await p.waitForSelector("#viewer:not([hidden])")
+  assert.equal(await p.textContent("#viewer-name"), "test.py")
+  assert.deepEqual(p.errors, [])
+})
+
+test("FX: a folder is listed from the list, the tree or the crumbs; the crumbs say where", async () => {
+  const p = await page(fx(), { width: 1280, height: 860 })
+  await openServerTab(p)
+  await p.waitForSelector('#server-list .frow[data-path="/home"]')
+  await p.click('#server-list .frow[data-path="/home"] .frow__open')
+  await p.waitForSelector(`#server-list .frow[data-path="/home/${LONG}"]`)
+  assert.deepEqual(await p.$$eval("#server-crumbs > *:not(.crumbs__sep)", (l) => l.map((x) => x.textContent)), ["All files", "home"])
+  assert.equal(await p.getAttribute('#server-tree .ftree__row[data-path="/home"]', "aria-current"), "true")
+  // A long name gives, the rest of its row stays on its tracks and inside the list.
+  const row = await p.$eval(`#server-list .frow[data-path="/home/${LONG}"]`, (r) => {
+    const list = document.getElementById("server-list").getBoundingClientRect()
+    const more = r.querySelector(".frow__when").getBoundingClientRect()
+    return { right: more.right, list: list.right, label: r.querySelector(".frow__label").scrollWidth > r.querySelector(".frow__label").clientWidth }
+  })
+  assert.ok(row.right <= row.list && row.label, `the long name is cut with an ellipsis, the date inside: ${JSON.stringify(row)}`)
+  await p.click("#server-crumbs .crumbs__link")
+  await p.waitForSelector('#server-list .frow[data-path="/test.py"]')
+  await p.click('#server-tree .ftree__row[data-path="/home"]')
+  await p.waitForSelector(`#server-list .frow[data-path="/home/${LONG}"]`)
+  await p.waitForSelector('#server-tree li[data-path="/home/ada"]')
+  await shot(p, "fx-server-1280")
+  assert.deepEqual(p.errors, [])
+})
+
+test("FX: this computer's folder in the same shape, its dates from the system's", async () => {
+  const p = await page(fx(), { width: 1600, height: 900 })
+  await p.evaluate(() => document.getElementById("nav-files").click())
+  await p.waitForSelector('#local-list .frow[data-path="README.md"]')
+  assert.equal(await p.textContent("#local-tree .ftree__root"), "project")
+  assert.equal(await p.textContent("#local-crumbs .crumbs__here"), "project")
+  assert.notEqual((await p.textContent('#local-list .frow[data-path="README.md"] .frow__when')).trim(), "")
+  await p.click('#local-list .frow[data-path="README.md"] .frow__open')
+  await p.waitForSelector("#local-details .fdetails__text")
+  assert.equal(await p.textContent("#local-details .fdetails__text"), "# Project\n")
+  await shot(p, "fx-local-1600")
+  assert.deepEqual(p.errors, [])
+})
+
+test("FX: at every width nothing scrolls sideways and nothing is cut off; narrower, a file opens in the viewer", async () => {
+  for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844]]) {
+    const p = await page(fx(), { width, height })
+    await openServerTab(p)
+    await p.waitForSelector('#server-list .frow[data-path="/home"]')
+    await p.click('#server-list .frow[data-path="/home"] .frow__open')
+    await p.waitForSelector(`#server-list .frow[data-path="/home/${LONG}"]`)
+    assert.ok(await noSideways(p, width), `${width}: nothing scrolls sideways`)
+    // Every visible control of the bar and the rows is inside the window.
+    const out = await p.$$eval("#pane-server button, #pane-server .frow__size", (l, w) => l.filter((b) => { const r = b.getBoundingClientRect(); return r.width > 0 && (r.left < -1 || r.right > w + 1) }).map((b) => b.className || b.id), width)
+    assert.deepEqual(out, [], `${width}: controls inside the window`)
+    // The panes give way by the room the page has (60rem, 40rem of it), not the window's width.
+    const room = await p.$eval("#pane-server", (x) => x.getBoundingClientRect().width)
+    const details = await p.isVisible("#server-details")
+    assert.equal(details, room > 960, `${width}: the details pane at ${room} px`)
+    assert.equal(await p.isVisible("#server-tree"), room > 640, `${width}: the tree at ${room} px`)
+    // The name's track never closes: every name shows at least a few letters.
+    const names = await p.$$eval("#server-list .frow__label", (l) => Math.min(...l.map((x) => x.getBoundingClientRect().width)))
+    assert.ok(names >= 24, `${width}: names keep room (${names} px)`)
+    await shot(p, `fx-server-${width}`)
+    await p.click("#server-crumbs .crumbs__link")
+    await p.waitForSelector('#server-list .frow[data-path="/test.py"]')
+    await p.click('#server-list .frow[data-path="/test.py"] .frow__open')
+    if (details) await p.waitForSelector("#server-details .fdetails__text")
+    else await p.waitForSelector("#viewer:not([hidden])")
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
 })
 
 // --- Run ----------------------------------------------------------------------------------------

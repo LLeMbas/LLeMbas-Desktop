@@ -52,7 +52,7 @@ export function closeViewer() {
  * server's is { reason: "not_text" | "too_large", message } with the message in the person's
  * language already.
  */
-function withheldWords(withheld, size) {
+export function withheldWords(withheld, size) {
   if (typeof withheld === "object" && withheld.message) return String(withheld.message)
   const reason = typeof withheld === "object" ? withheld.reason : withheld
   return reason === "too_big" || reason === "too_large"
