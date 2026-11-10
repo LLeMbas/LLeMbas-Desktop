@@ -650,12 +650,12 @@ fn header_name(name: &str) -> String {
     }
 }
 
-/// The body of a `multipart/form-data` request with one file in the field `file`.
-fn multipart(boundary: &str, name: &str, bytes: &[u8]) -> Vec<u8> {
+/// The body of a `multipart/form-data` request with one file in the field `field`.
+fn multipart(boundary: &str, field: &str, name: &str, bytes: &[u8]) -> Vec<u8> {
     let mut body = Vec::with_capacity(bytes.len() + 256);
     body.extend_from_slice(
         format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"\r\nContent-Type: application/octet-stream\r\n\r\n",
             header_name(name)
         )
         .as_bytes(),
@@ -685,6 +685,38 @@ pub fn upload(
     } else {
         format!("/attachments?chat={chat}")
     };
+    let v = send_file(app, token, &path, "file", name, bytes)?;
+    v.get("attachment")
+        .cloned()
+        .ok_or_else(|| ApiError::new(0, "The server's answer was not understood.".to_string()))
+}
+
+/// Send one file into the person's library, into the directory `dir` (`/files/upload`, the
+/// explorer's upload): the server's listing of that directory afterwards, as JSON.
+pub fn upload_to_library(
+    app: &str,
+    token: &str,
+    dir: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<Value, ApiError> {
+    if !dir.starts_with('/') || dir.chars().any(|c| c.is_control()) {
+        return Err(ApiError::new(400, format!("Not a folder: {dir}")));
+    }
+    let path = format!("/files/upload?path={}", crate::terminal::encode(dir));
+    send_file(app, token, &path, "files", name, bytes)
+}
+
+/// One `multipart/form-data` POST of one file to `path` on the app's door; the JSON answer.
+fn send_file(
+    app: &str,
+    token: &str,
+    path: &str,
+    field: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<Value, ApiError> {
+    let path = checked_path(path)?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -698,13 +730,9 @@ pub fn upload(
             "content-type",
             &format!("multipart/form-data; boundary={boundary}"),
         )
-        .send_bytes(&multipart(&boundary, name, bytes))?;
-    let v: Value = res
-        .into_json()
-        .map_err(|_| ApiError::new(0, "The server's answer was not JSON.".to_string()))?;
-    v.get("attachment")
-        .cloned()
-        .ok_or_else(|| ApiError::new(0, "The server's answer was not understood.".to_string()))
+        .send_bytes(&multipart(&boundary, field, name, bytes))?;
+    res.into_json()
+        .map_err(|_| ApiError::new(0, "The server's answer was not JSON.".to_string()))
 }
 
 /// Server-sent events, a line at a time: what `stream` hands on, one `(event, data)` per frame.
@@ -959,7 +987,7 @@ mod tests {
 
     #[test]
     fn a_file_goes_as_one_multipart_field() {
-        let body = multipart("XYZ", "a\"b\r\n.txt", b"hello");
+        let body = multipart("XYZ", "file", "a\"b\r\n.txt", b"hello");
         let text = String::from_utf8(body).unwrap();
         assert!(text.starts_with(
             "--XYZ\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a_b__.txt\"\r\n"
@@ -967,6 +995,8 @@ mod tests {
         assert!(text.contains("\r\n\r\nhello\r\n--XYZ--\r\n"));
         assert_eq!(header_name("  "), "file");
         assert_eq!(header_name("Schöne Grüße.pdf"), "Schöne Grüße.pdf");
+        let library = String::from_utf8(multipart("XYZ", "files", "b.md", b"x")).unwrap();
+        assert!(library.contains("name=\"files\"; filename=\"b.md\""));
     }
 
     #[test]

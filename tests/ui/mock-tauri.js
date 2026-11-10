@@ -100,8 +100,12 @@
         return ""
       case "terminal_word":
         return "lembas"
-      default:
-        return null
+      default: {
+        // A command the test answers itself: `commands: { name: value }` (an `__error` rejects).
+        const own = (config.commands || {})[cmd]
+        if (own && own.__error) return Promise.reject(own.__error)
+        return own === undefined ? null : JSON.parse(JSON.stringify(own))
+      }
     }
   }
 

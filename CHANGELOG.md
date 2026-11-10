@@ -31,6 +31,13 @@ All notable changes to LLeMbas Desktop. The format follows
   server's search, and lists below the titles what it found inside chats, in the file library and
   in memory, each with the words around the match, the match marked. A chat opens, a file opens
   in the viewer, a memory opens the Memory page at it. A server without search finds titles only.
+- **The server's files can be changed.** On Files → Server, Upload (files chosen in the system's
+  dialog) and New folder work in the home folder, and each folder's menu does the same inside it;
+  a file's or folder's menu renames it or moves it to the trash. What the server refuses is said
+  in the pane, in its words.
+- **A chat's tools and skills.** Tools and skills… in a chat's menu switches the tool families
+  (web search among them) and the skills on or off for that chat only, as the web's chat settings
+  do, and lists the commands it was told to always allow, with Ask me about these again.
 
 ### Fixed
 

@@ -3,7 +3,8 @@
 // server's tree, for the chats, read through /api/v2. A file opens in the viewer either way.
 
 import { $, h, clear, icon, ICONS, bytes } from "./dom.js"
-import { invoke, get, why } from "./bridge.js"
+import { invoke, get, post, del, why } from "./bridge.js"
+import { menu, ask } from "./popup.js"
 import { openViewer } from "./viewer.js"
 
 // The server's tree as the app's door gives it, read as the person (their own access, no chat):
@@ -18,12 +19,19 @@ export const SERVER_FILES = {
 /** A directory in either tree: the server's mounts open like its folders. */
 const isDir = (e) => e.kind === "dir" || e.kind === "mount"
 
-/** A lazily opened tree in `box`. `list(path)` -> entries; `open(entry)` for a file. */
-function tree(box, { list, open, rootPath }) {
+/**
+ * A lazily opened tree in `box`. `list(path)` -> entries; `open(entry)` for a file; `actions(entry)`
+ * (optional) -> menu items for an entry's more button. Returns `reload(path)`, which reads a
+ * directory that is open again (the root by `rootPath`), the folders open inside it kept open.
+ */
+function tree(box, { list, open, rootPath, actions }) {
   clear(box)
   const ul = h("ul", { class: "tree", role: "tree" })
   box.append(ul)
+  const levels = new Map() // path -> { ul, depth }, each directory drawn now
+  const opened = new Set() // the directories open now
   const level = async (parent, path, depth) => {
+    levels.set(path, { ul: parent, depth })
     let entries
     try {
       entries = await list(path)
@@ -42,26 +50,45 @@ function tree(box, { list, open, rootPath }) {
         h("span", { class: "tree__size", text: isDir(e) ? "" : bytes(e.size) }),
       )
       row.style.setProperty("--depth", String(depth))
-      const li = h("li", { role: "treeitem" }, row)
+      const items = actions?.(e) || []
+      const li = h(
+        "li",
+        { role: "treeitem", class: items.length ? "tree__item" : null, dataset: { path: e.path } },
+        row,
+        items.length
+          ? h("button", { type: "button", class: "tool tree__more", "aria-label": t("More"), title: t("More"), onclick: (ev) => menu(ev.currentTarget, items) }, icon(ICONS.more))
+          : null,
+      )
       if (isDir(e)) {
         let kids = null
-        row.addEventListener("click", async () => {
-          const opening = row.getAttribute("aria-expanded") !== "true"
+        const expand = async (opening) => {
           row.setAttribute("aria-expanded", String(opening))
           if (!opening) {
+            opened.delete(e.path)
+            levels.delete(e.path)
             kids?.remove()
             kids = null
             return
           }
+          opened.add(e.path)
           kids = h("ul", { role: "group" })
           li.append(kids)
           await level(kids, e.path, depth + 1)
-        })
+        }
+        row.addEventListener("click", () => expand(row.getAttribute("aria-expanded") !== "true"))
+        if (opened.has(e.path)) expand(true)
       } else row.addEventListener("click", () => open(e))
       parent.append(li)
     }
   }
-  return level(ul, rootPath, 0)
+  const done = level(ul, rootPath, 0)
+  const reload = (path) => {
+    const at = levels.get(path) || levels.get(rootPath)
+    if (!at) return Promise.resolve()
+    clear(at.ul)
+    return level(at.ul, levels.has(path) ? path : rootPath, at.depth)
+  }
+  return { done, reload }
 }
 
 // --- This computer ------------------------------------------------------------------------------
@@ -99,7 +126,7 @@ function renderLocal() {
     head.append(pick)
   }
   const root = local.root
-  tree(box, {
+  return tree(box, {
     rootPath: "",
     list: async (path) => (await invoke("local_list", { root, path })).entries,
     open: async (e) => {
@@ -125,12 +152,96 @@ export async function readServer(path) {
   return get(SERVER_FILES.read(path))
 }
 
+// The library's writes, as the person (each answers with the directory's listing, or a refusal
+// in the server's words):
+//   POST /files/upload?path=   multipart `files` (sent by Rust: `library_upload`, from the dialog)
+//   POST /files/mkdir          { path, name }
+//   POST /files/rename         { path, name }
+//   DELETE /files?path=        to the trash, as on the web
+
+let server = null // the tree drawn now: { reload(path) }
+let serverRoot = "/" // the directory the server answered `/` with: the person's home
+
+const parentOf = (path) => path.replace(/\/[^/]*$/, "") || "/"
+const reloadServer = (dir) => server?.reload(dir === serverRoot ? "/" : dir)
+
+function serverSaid(text, error = false) {
+  const line = $("server-status")
+  line.hidden = !text
+  line.textContent = text || ""
+  line.className = `status${error ? " is-error" : ""}`
+  line.setAttribute("role", error ? "alert" : "status")
+}
+
+/** Into `dir`: files chosen in the system's dialog. */
+export async function uploadInto(dir) {
+  serverSaid("")
+  try {
+    const r = await invoke("library_upload", { dir, title: t("Upload") })
+    if (r.failed?.length) serverSaid(r.failed.map((f) => `${f.name}: ${f.error}`).join("\n"), true)
+    if (r.sent) await reloadServer(dir)
+  } catch (err) {
+    serverSaid(why(err), true)
+  }
+}
+
+async function makeFolder(dir) {
+  const name = await ask({ title: t("New folder"), value: "", ok: t("Create"), cancel: t("Cancel") })
+  if (!name) return
+  try {
+    await post("/files/mkdir", { path: dir, name })
+    serverSaid("")
+    await reloadServer(dir)
+  } catch (err) {
+    serverSaid(why(err), true)
+  }
+}
+
+async function renameEntry(e) {
+  const name = await ask({ title: t("Rename"), value: e.name, ok: t("Rename"), cancel: t("Cancel") })
+  if (!name || name === e.name) return
+  try {
+    await post("/files/rename", { path: e.path, name })
+    serverSaid("")
+    await reloadServer(parentOf(e.path))
+  } catch (err) {
+    serverSaid(why(err), true)
+  }
+}
+
+async function deleteEntry(e) {
+  const yes = await ask({ title: t("Move to the trash"), text: t("Move “%(name)s” to the trash? It can be restored from there.", { name: e.name }), ok: t("Move to the trash"), cancel: t("Cancel"), danger: true })
+  if (!yes) return
+  try {
+    await del(`/files?path=${encodeURIComponent(e.path)}`)
+    serverSaid(t("Moved to the trash."))
+    await reloadServer(parentOf(e.path))
+  } catch (err) {
+    serverSaid(why(err), true)
+  }
+}
+
+/** What can be done to an entry of the server's tree: a mount (another store) is filled, never
+ * renamed or deleted from here. A read-only place is refused by the server, in its words. */
+function serverActions(e) {
+  const items = []
+  if (isDir(e)) items.push({ label: t("Upload"), run: () => uploadInto(e.path) }, { label: t("New folder"), run: () => makeFolder(e.path) })
+  if (e.kind !== "mount") items.push(...(items.length ? [null] : []), { label: t("Rename"), run: () => renameEntry(e) }, { label: t("Delete"), danger: true, run: () => deleteEntry(e) })
+  return items
+}
+
 export function renderServer() {
   const box = $("server-tree")
-  tree(box, {
+  serverSaid("")
+  server = tree(box, {
     rootPath: "/",
-    list: async (path) => (await get(SERVER_FILES.list(path))).entries || [],
+    list: async (path) => {
+      const r = await get(SERVER_FILES.list(path))
+      if (path === "/" && r.path) serverRoot = r.path
+      return r.entries || []
+    },
     open: (e) => openServerFile(e.path, e.name),
+    actions: serverActions,
   })
 }
 
@@ -177,6 +288,10 @@ export function initExplorer() {
   $("server-where").textContent = t("Your files on the server, as the chats see them.")
   $("server-refresh").replaceChildren(icon(ICONS.refresh))
   $("server-refresh").addEventListener("click", renderServer)
+  $("server-upload").replaceChildren(icon(ICONS.send))
+  $("server-upload").addEventListener("click", () => uploadInto(serverRoot))
+  $("server-mkdir").replaceChildren(icon(ICONS.folder))
+  $("server-mkdir").addEventListener("click", () => makeFolder(serverRoot))
   $("local-refresh").replaceChildren(icon(ICONS.refresh))
   $("local-refresh").addEventListener("click", renderLocal)
 }

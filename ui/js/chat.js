@@ -21,6 +21,7 @@ import { folderName, listed, folderTree, newFolder } from "./list.js"
 import { unarchive } from "./archived.js"
 import { isProgress, progressLine, progressTicks } from "./progress.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
+import { scopePopover } from "./scope.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
@@ -1037,6 +1038,7 @@ export function chatMenu(anchor, chat) {
     items.push({ label: chat.pinned ? t("Unpin chat") : t("Pin chat"), run: () => setChat(chat, { pinned: !chat.pinned }) })
     items.push({ label: t("Move to folder…"), run: () => moveMenu(anchor, chat) })
   }
+  if (!chat.archived) items.push({ label: t("Tools and skills…"), run: () => scopePopover(anchor, chat) })
   if (chat.kind === "agent" && chat.device_session_id) items.push({ label: t("Continue in a terminal…"), run: () => continueInTerminal(chat) })
   if (base) items.push({ label: t("Open in the web interface"), run: () => openLink(`${base}/chat/${encodeURIComponent(chat.id)}`) })
   items.push(null, chat.archived ? { label: t("Restore chat"), run: () => unarchiveChat(chat) } : { label: t("Archive chat"), run: () => archiveChat(chat) })

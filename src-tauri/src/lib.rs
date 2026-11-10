@@ -690,6 +690,75 @@ async fn attach_dropped(
     .map_err(|e| ApiError::new(0, e.to_string()))?
 }
 
+/// What an upload into the library came to: the directory's listing after the last file the
+/// server took, and the files it did not take, each with the reason.
+#[derive(Clone, Serialize)]
+struct LibraryUpload {
+    listing: Option<Value>,
+    sent: usize,
+    failed: Vec<Uploaded>,
+}
+
+/// Choose files with the system's dialog and send them into the person's library, into the
+/// directory `dir`. Nothing is sent when the dialog is cancelled.
+#[tauri::command]
+async fn library_upload(
+    handle: AppHandle,
+    dir: String,
+    title: String,
+) -> Result<LibraryUpload, ApiError> {
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let picked = h.dialog().file().set_title(title).blocking_pick_files();
+        let paths: Vec<PathBuf> = picked
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| p.into_path().ok())
+            .collect();
+        let Some((app_url, token)) = h.state::<App>().door() else {
+            return Err(ApiError::new(401, "Not signed in."));
+        };
+        let mut out = LibraryUpload {
+            listing: None,
+            sent: 0,
+            failed: Vec::new(),
+        };
+        for path in paths {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".into());
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let sent = match read_for_upload(&path) {
+                Ok(bytes) => server::upload_to_library(&app_url, &token, &dir, &name, &bytes)
+                    .map_err(|e| {
+                        if e.status == 401 {
+                            token_refused(&h);
+                        }
+                        (None, e.detail)
+                    }),
+                Err((reason, message)) => Err((Some(reason), message)),
+            };
+            match sent {
+                Ok(listing) => {
+                    out.listing = Some(listing);
+                    out.sent += 1;
+                }
+                Err((reason, message)) => out.failed.push(Uploaded {
+                    name,
+                    size,
+                    attachment: None,
+                    error: Some(message),
+                    reason,
+                }),
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
 /// `%XX` escapes undone (the page sends a file's name as `encodeURIComponent` gives it).
 fn percent_decode(text: &str) -> String {
     let b = text.as_bytes();
@@ -1640,6 +1709,7 @@ pub fn run() {
             sealed_open,
             sealed_close,
             attach_pick,
+            library_upload,
             attach_dropped,
             attach_bytes,
             set_theme,

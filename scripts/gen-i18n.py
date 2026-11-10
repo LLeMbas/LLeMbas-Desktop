@@ -493,6 +493,17 @@ KEYS = (
     "What your models remember about you, across chats. Change or remove anything here.",
     "Something to remember…",
     "Nothing remembered yet.",
+    # explorer.js, scope.js: the library's writes, and a chat's tools and skills
+    "Upload",
+    "Moved to the trash.",
+    "Move to the trash",
+    "Move “%(name)s” to the trash? It can be restored from there.",
+    "Tools and skills…",
+    "Skills",
+    "Switched off here only. What is on to begin with is your default for this model, in Settings → Models.",
+    "Always allowed here",
+    "Ask me about these again",
+    "Nothing to switch in this chat.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -748,6 +759,8 @@ OWN: dict[str, dict[str, str]] = {
         "What your models remember about you, across chats. Change or remove anything here.": "Co si o vás vaše modely pamatují napříč konverzacemi. Cokoli tu můžete změnit nebo odstranit.",
         "Something to remember…": "Něco k zapamatování…",
         "Nothing remembered yet.": "Zatím si nic nepamatuje.",
+        "Tools and skills…": "Nástroje a dovednosti…",
+        "Nothing to switch in this chat.": "V této konverzaci není co přepnout.",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -998,6 +1011,8 @@ OWN: dict[str, dict[str, str]] = {
         "What your models remember about you, across chats. Change or remove anything here.": "Was Ihre Modelle über Sie behalten, über alle Chats hinweg. Hier können Sie alles ändern oder entfernen.",
         "Something to remember…": "Etwas, das behalten werden soll…",
         "Nothing remembered yet.": "Noch nichts behalten.",
+        "Tools and skills…": "Werkzeuge und Fähigkeiten…",
+        "Nothing to switch in this chat.": "In diesem Chat gibt es nichts umzuschalten.",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1248,6 +1263,8 @@ OWN: dict[str, dict[str, str]] = {
         "What your models remember about you, across chats. Change or remove anything here.": "Lo que sus modelos recuerdan de usted entre chats. Aquí puede cambiar o quitar cualquier cosa.",
         "Something to remember…": "Algo que recordar…",
         "Nothing remembered yet.": "Todavía no se recuerda nada.",
+        "Tools and skills…": "Herramientas y habilidades…",
+        "Nothing to switch in this chat.": "No hay nada que activar o desactivar en este chat.",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1498,6 +1515,8 @@ OWN: dict[str, dict[str, str]] = {
         "What your models remember about you, across chats. Change or remove anything here.": "Ce que vos modèles retiennent de vous, d’une conversation à l’autre. Modifiez ou supprimez ce que vous voulez ici.",
         "Something to remember…": "Quelque chose à retenir…",
         "Nothing remembered yet.": "Rien n’est encore retenu.",
+        "Tools and skills…": "Outils et compétences…",
+        "Nothing to switch in this chat.": "Rien à activer ou désactiver dans cette conversation.",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1748,6 +1767,8 @@ OWN: dict[str, dict[str, str]] = {
         "What your models remember about you, across chats. Change or remove anything here.": "Amit a modelljei megjegyeznek Önről a beszélgetéseken át. Itt bármit módosíthat vagy eltávolíthat.",
         "Something to remember…": "Valami, amit meg kell jegyezni…",
         "Nothing remembered yet.": "Még nincs megjegyezve semmi.",
+        "Tools and skills…": "Eszközök és készségek…",
+        "Nothing to switch in this chat.": "Ebben a beszélgetésben nincs mit átkapcsolni.",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -1998,6 +2019,8 @@ OWN: dict[str, dict[str, str]] = {
         "What your models remember about you, across chats. Change or remove anything here.": "Ciò che i tuoi modelli ricordano di te tra una chat e l’altra. Qui puoi cambiare o rimuovere qualsiasi cosa.",
         "Something to remember…": "Qualcosa da ricordare…",
         "Nothing remembered yet.": "Ancora niente da ricordare.",
+        "Tools and skills…": "Strumenti e abilità…",
+        "Nothing to switch in this chat.": "Non c’è niente da attivare o disattivare in questa chat.",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2248,6 +2271,8 @@ OWN: dict[str, dict[str, str]] = {
         "What your models remember about you, across chats. Change or remove anything here.": "Co Twoje modele pamiętają o Tobie we wszystkich czatach. Tutaj możesz wszystko zmienić lub usunąć.",
         "Something to remember…": "Coś do zapamiętania…",
         "Nothing remembered yet.": "Na razie nic nie zapamiętano.",
+        "Tools and skills…": "Narzędzia i umiejętności…",
+        "Nothing to switch in this chat.": "W tym czacie nie ma czego przełączać.",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2498,6 +2523,8 @@ OWN: dict[str, dict[str, str]] = {
         "What your models remember about you, across chats. Change or remove anything here.": "Čo si o vás vaše modely pamätajú naprieč konverzáciami. Čokoľvek tu môžete zmeniť alebo odstrániť.",
         "Something to remember…": "Niečo na zapamätanie…",
         "Nothing remembered yet.": "Zatiaľ si nič nepamätá.",
+        "Tools and skills…": "Nástroje a schopnosti…",
+        "Nothing to switch in this chat.": "V tejto konverzácii nie je čo prepnúť.",
     },
 }
 

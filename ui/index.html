@@ -109,8 +109,11 @@
         <section class="files__pane" id="pane-server" hidden aria-label="Server" data-i18n-aria-label>
           <div class="files__head">
             <div class="files__where muted" id="server-where"></div>
+            <button type="button" class="tool" id="server-upload" aria-label="Upload" title="Upload" data-i18n-aria-label data-i18n-title></button>
+            <button type="button" class="tool" id="server-mkdir" aria-label="New folder" title="New folder" data-i18n-aria-label data-i18n-title></button>
             <button type="button" class="tool" id="server-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button>
           </div>
+          <p class="status" id="server-status" hidden></p>
           <div class="files__tree" id="server-tree"></div>
         </section>
       </div>

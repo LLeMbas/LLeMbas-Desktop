@@ -1293,6 +1293,111 @@ test("G8: at 390 px the memory page and the palette's hits stay inside the windo
   assert.deepEqual(p.errors, [])
 })
 
+// H8: the library's writes (files_listing.json) and a chat's tools and skills (scope.json).
+
+function h8(over = {}, commands = {}) {
+  const listing = fixture("files_listing")
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /files": listing,
+      "GET /files?path=%2Fhome%2Ffrodo%2Frecipes": { path: "/home/frodo/recipes", parent: "/home/frodo", entries: [] },
+      "POST /files/mkdir": listing,
+      "POST /files/rename": listing,
+      "DELETE /files": null,
+      "GET /chats/chat1/scope": fixture("scope"),
+      "POST /chats/chat1/scope": { scope: { ...fixture("scope").scope, families: [{ gate: "notes", label: "Notes", on: false }, { gate: "web", label: "Web search", on: false }] } },
+      "POST /chats/chat1/allow/clear": { scope: { ...fixture("scope").scope, allow: [] } },
+      ...over,
+    }),
+    commands: { library_upload: { listing, sent: 1, failed: [] }, ...commands },
+    streams: {},
+  }
+}
+
+async function serverPane(p) {
+  await p.click("#nav-files")
+  await p.click('#files-tabs [data-tab="server"]')
+  await p.waitForSelector('#server-tree li[data-path="/home/frodo/lembas.md"]')
+}
+
+test("H8: the server's files: upload, a new folder, rename and delete, each read again from the server", async () => {
+  const p = await page(h8())
+  await serverPane(p)
+  // Upload into the home the server answered with, through Rust's dialog.
+  await p.click("#server-upload")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "library_upload"))
+  assert.equal((await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "library_upload").args.dir)), "/home/frodo")
+  await p.waitForFunction(() => window.__mock.api("GET", "/files?path=%2F").length === 2)
+  // A new folder inside a folder, from its row's menu.
+  await p.click('#server-tree li[data-path="/home/frodo/recipes"] > .tree__more')
+  await p.click(".menu .menu__item >> text=New folder")
+  await p.fill("dialog[open] .dialog__input", "Breads")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/mkdir").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/files/mkdir")))[0].args.body, { path: "/home/frodo/recipes", name: "Breads" })
+  // Rename a file.
+  await p.click('#server-tree li[data-path="/home/frodo/lembas.md"] > .tree__more')
+  await p.click(".menu .menu__item >> text=Rename")
+  await p.fill("dialog[open] .dialog__input", "waybread.md")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/rename").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/files/rename")))[0].args.body, { path: "/home/frodo/lembas.md", name: "waybread.md" })
+  // Delete: to the trash, after asking.
+  await p.click('#server-tree li[data-path="/home/frodo/lembas.md"] > .tree__more')
+  await p.click(".menu .menu__item >> text=Delete")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("DELETE", "/files?path=%2Fhome%2Ffrodo%2Flembas.md").length === 1)
+  await p.waitForSelector("#server-status:not([hidden])")
+  assert.equal(await p.textContent("#server-status"), "Moved to the trash.")
+  await shot(p, "h8-files-1280")
+  assert.deepEqual(p.errors, [])
+})
+
+test("H8: a refusal or a file the server did not take is said in the pane", async () => {
+  const p = await page(h8({ "POST /files/rename": { __error: { status: 400, detail: "That did not work: read-only" } } }, { library_upload: { listing: null, sent: 0, failed: [{ name: "big.iso", error: "This file is too large to send." }] } }))
+  await serverPane(p)
+  await p.click("#server-upload")
+  await p.waitForSelector("#server-status.is-error")
+  assert.equal(await p.textContent("#server-status"), "big.iso: This file is too large to send.")
+  await p.click('#server-tree li[data-path="/home/frodo/lembas.md"] > .tree__more')
+  await p.click(".menu .menu__item >> text=Rename")
+  await p.fill("dialog[open] .dialog__input", "x.md")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => document.getElementById("server-status").textContent.includes("read-only"))
+  assert.deepEqual(p.errors, [])
+})
+
+test("H8: a chat's tools and skills switch here only; the allowed commands can be forgotten", async () => {
+  const p = await page(h8())
+  await p.waitForSelector('.chatrow[data-id="chat1"]')
+  await p.click('.chatrow[data-id="chat1"]', { button: "right" })
+  await p.click(".menu .menu__item >> text=Tools and skills…")
+  await p.waitForSelector('.scope [data-key="family:notes"]')
+  const rows = await p.$$eval(".scope .scope__row", (l) => l.map((x) => [x.textContent, x.querySelector("input").checked]))
+  assert.deepEqual(rows, [["Notes", true], ["Web search", false], ["baking", true]])
+  assert.equal(await p.getAttribute('.scope .scope__row:has([data-key="skill:baking"])', "title"), "Bake waybread.")
+  await p.click('.scope [data-key="family:notes"]')
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/scope").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/chats/chat1/scope")))[0].args.body, { kind: "family", name: "notes", on: false })
+  await p.waitForFunction(() => document.querySelector('.scope [data-key="family:notes"]') && !document.querySelector('.scope [data-key="family:notes"]').checked && !document.querySelector('.scope [data-key="family:notes"]').disabled)
+  assert.match(await p.textContent(".scope__allow"), /bash:ls \*/)
+  await shot(p, "h8-scope-1280")
+  await p.click(".scope .btn >> text=Ask me about these again")
+  await p.waitForFunction(() => !document.querySelector(".scope__allow"))
+  assert.deepEqual(p.errors, [])
+})
+
+test("H8: at 390 px the server's pane and the switches stay inside the window", async () => {
+  const p = await page(h8(), { width: 390, height: 844 })
+  await p.evaluate(() => document.getElementById("nav-files").click())
+  await p.click('#files-tabs [data-tab="server"]')
+  await p.waitForSelector('#server-tree li[data-path="/home/frodo/lembas.md"]')
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  await shot(p, "h8-files-390")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

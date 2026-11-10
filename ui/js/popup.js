@@ -199,7 +199,8 @@ function escPop(e) {
 }
 
 /**
- * A small panel under `anchor` (or above it, `up`), holding `content` (an element, or a function
+ * A small panel under `anchor` (an element, or `{ x, y }` in page pixels as a context menu's
+ * point; or above it, `up`), holding `content` (an element, or a function
  * that draws it and is called again by `redraw`). Escape and a click outside close it. Returns
  * { redraw, close }. `align`: "start" (the anchor's left edge) or "end" (its right edge).
  */
@@ -211,7 +212,7 @@ export function popover(anchor, content, { up = false, align = "start", label = 
   draw()
   document.body.append(el)
   const place = () => {
-    const at = anchor.getBoundingClientRect()
+    const at = anchor instanceof Element ? anchor.getBoundingClientRect() : { left: anchor.x, right: anchor.x, top: anchor.y, bottom: anchor.y }
     const r = el.getBoundingClientRect()
     const left = align === "end" ? at.right - r.width : at.left
     el.style.left = `${Math.max(8, Math.min(left, window.innerWidth - r.width - 8))}px`
@@ -219,7 +220,7 @@ export function popover(anchor, content, { up = false, align = "start", label = 
     el.style.top = `${Math.max(8, Math.min(top, window.innerHeight - r.height - 8))}px`
   }
   place()
-  openPop = { el, back: anchor, onClose }
+  openPop = { el, back: anchor instanceof Element ? anchor : document.activeElement, onClose }
   document.addEventListener("pointerdown", outsidePop, true)
   document.addEventListener("keydown", escPop, true)
   el.querySelector("button, input, select")?.focus()
