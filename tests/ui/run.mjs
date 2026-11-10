@@ -1682,6 +1682,45 @@ test("L8: at 390 px the form with a computer chosen stays inside the window", as
   assert.deepEqual(p.errors, [])
 })
 
+// M8: a picture as the reply (force_tool "image_generate" on POST /chats and /messages).
+
+test("M8: Draw a picture asks for a picture with the next message only, in a new chat and an open one", async () => {
+  const cfg = i8()
+  Object.assign(cfg.routes, {
+    "POST /chats": { chat: chatRow({ id: "chat7" }), message: userMessage("m1", "a lembas loaf"), reply: null },
+    "POST /chats/chat7/messages": { message: userMessage("m2", "and another"), reply: null },
+  })
+  const p = await page(cfg)
+  await p.waitForFunction(() => window.__mock.api("GET", "/me").length === 1)
+  await p.click(".kind__tab >> text=Chat")
+  await p.click(".cchip--picture")
+  assert.equal(await p.getAttribute(".cchip--picture", "aria-pressed"), "true")
+  await shot(p, "m8-picture-1280")
+  await p.fill("#composer-text", "a lembas loaf")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  assert.equal((await p.evaluate(() => window.__mock.api("POST", "/chats")))[0].args.body.force_tool, "image_generate")
+  await p.waitForSelector('.cchip--picture[aria-pressed="false"]')
+  await p.fill("#composer-text", "and another")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat7/messages").length === 1)
+  assert.equal((await p.evaluate(() => window.__mock.api("POST", "/chats/chat7/messages")))[0].args.body.force_tool, undefined)
+  assert.deepEqual(p.errors, [])
+})
+
+test("M8: no picture switch where the server cannot draw, or in an agent chat", async () => {
+  const p = await page(i8({ images: false }))
+  await p.waitForFunction(() => window.__mock.api("GET", "/me").length === 1)
+  await p.click(".kind__tab >> text=Chat")
+  assert.equal(await p.locator(".cchip--picture").count(), 0)
+  await p.context().close()
+  const q = await page(i8())
+  await q.waitForFunction(() => window.__mock.api("GET", "/me").length === 1)
+  await q.click(".kind__tab >> text=Agent")
+  assert.equal(await q.locator(".cchip--picture").count(), 0)
+  assert.deepEqual(q.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

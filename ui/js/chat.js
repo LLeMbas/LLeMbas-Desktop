@@ -789,6 +789,47 @@ const MODE_WORDS = {
   plan: () => t("Plan — changes nothing"),
 }
 
+// --- Draw a picture: the next message's reply is a picture (`force_tool: "image_generate"`) -------
+
+let wantPicture = false // the next message, in a chat (not an agent chat), asks for a picture
+
+/** Whether a chat here may be asked for a picture: the server draws for this account. */
+function picturesOffered() {
+  const me = ctx.me()
+  return !!me?.services?.images && me?.permissions?.["tools.image"] !== false
+}
+
+function pictureChip() {
+  const b = chip({
+    ico: ICONS.picture,
+    label: t("Draw a picture"),
+    title: t("The reply to the next message is a picture drawn from it."),
+    menuish: false,
+    cls: "cchip--picture",
+    onclick: () => {
+      wantPicture = !wantPicture
+      b.setAttribute("aria-pressed", String(wantPicture))
+      $("composer-text").placeholder = wantPicture ? t("What to draw…") : t("Message")
+      $("composer-text").focus()
+    },
+  })
+  b.setAttribute("aria-pressed", String(wantPicture))
+  return b
+}
+
+/** The message's body, asking for a picture while the switch is on. */
+function takePicture(body) {
+  return wantPicture ? { ...body, force_tool: "image_generate" } : body
+}
+
+/** The message went: the switch goes off with it. */
+function pictureSent() {
+  if (!wantPicture) return
+  wantPicture = false
+  $("composer-text").placeholder = t("Message")
+  document.querySelector(".cchip--picture")?.setAttribute("aria-pressed", "false")
+}
+
 function modeChip(value, onChange, disabled) {
   return chip({
     ico: ICONS.shield,
@@ -953,6 +994,8 @@ async function renderChips() {
       renderChips()
     }, mayPick))
     if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), renderChips())))
+    if (draft.kind === "chat" && picturesOffered()) parts.push(pictureChip())
+    else wantPicture = false
     if (draft.kind === "chat" && teamPossible(model)) parts.push(agentsChip(draft.agents, (a) => ((draft.agents = a), renderChips()), { cap: subagentsCap(), own: namedOnly(model?.subagents) }))
     // An agent chat's subagents run on its device: offered as the server says for that device.
     const device = draft.kind === "agent" ? draftDevice() : ""
@@ -998,6 +1041,8 @@ async function renderChips() {
   if (chat.kind === "agent") parts.push(modeChip(chat.mode || "edit", (m) => save({ mode: m })))
   if (chat.model) parts.push(modelChip(models, chat.model, (id) => save({ model: id }), mayPick))
   parts.push(effortChip(current, chat.effort || levelsOf(current).start, (l) => save({ effort: l })))
+  if (chat.kind === "chat" && picturesOffered()) parts.push(pictureChip())
+  else wantPicture = false
   box.replaceChildren(...parts.filter(Boolean))
   const offer = await teamOffered(chat)
   if (!offer || drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
@@ -1368,7 +1413,8 @@ async function createChat(text, attachments) {
     }
     Object.assign(body, { kind: "agent", device, directory: draft.dir, mode: draft.mode || "edit" })
   }
-  const r = await post("/chats", body)
+  const r = await post("/chats", draft.kind === "chat" ? takePicture(body) : body)
+  pictureSent()
   draft = null
   $("new-chat").hidden = true
   $("main").dataset.new = "false"
@@ -1405,9 +1451,11 @@ async function submit() {
   try {
     if (draft) await createChat(text, files)
     else if (open?.chat?.id) {
-      const body = { text }
+      let body = { text }
       if (files.length) body.attachments = files
+      if (open.chat.kind === "chat") body = takePicture(body)
       const r = await post(`/chats/${encodeURIComponent(open.chat.id)}/messages`, body)
+      pictureSent()
       if (r.message) $("messages").append(userMessage(r.message))
       if (r.reply) follower(open.chat, r.reply.id)
     } else return

@@ -57,6 +57,9 @@ All notable changes to LLeMbas Desktop. The format follows
   is away or does not accept scheduled work. A run waiting for its computer says so. The form
   offers "Where it runs" where the server can: this computer or another linked one that accepts
   scheduled work, its folder (this computer's agent folder to begin with), mode and wait.
+- **A picture as the reply, in a chat.** Where the server draws for the account, a Draw a picture
+  switch beside the model asks for the next message's reply to be a picture drawn from it — in a
+  new chat (its first message) as in an open one. It goes off once the message is sent.
 
 ### Fixed
 

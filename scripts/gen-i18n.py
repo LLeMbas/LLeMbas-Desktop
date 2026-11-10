@@ -541,6 +541,8 @@ KEYS = (
     "This computer (%(name)s)",
     "Waiting for the computer",
     "approvals wait %(n)s min",
+    # chat.js: a picture as the next reply
+    "The reply to the next message is a picture drawn from it.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -820,6 +822,7 @@ OWN: dict[str, dict[str, str]] = {
         "This computer (%(name)s)": "Tento počítač (%(name)s)",
         "Waiting for the computer": "Čeká na počítač",
         "approvals wait %(n)s min": "schválení čeká %(n)s min",
+        "The reply to the next message is a picture drawn from it.": "Odpovědí na další zprávu bude obrázek nakreslený podle ní.",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -1094,6 +1097,7 @@ OWN: dict[str, dict[str, str]] = {
         "This computer (%(name)s)": "Dieser Computer (%(name)s)",
         "Waiting for the computer": "Wartet auf den Computer",
         "approvals wait %(n)s min": "Freigaben warten %(n)s Min.",
+        "The reply to the next message is a picture drawn from it.": "Die Antwort auf die nächste Nachricht ist ein danach gezeichnetes Bild.",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1368,6 +1372,7 @@ OWN: dict[str, dict[str, str]] = {
         "This computer (%(name)s)": "Este ordenador (%(name)s)",
         "Waiting for the computer": "Esperando al ordenador",
         "approvals wait %(n)s min": "las aprobaciones esperan %(n)s min",
+        "The reply to the next message is a picture drawn from it.": "La respuesta al siguiente mensaje es una imagen dibujada a partir de él.",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1642,6 +1647,7 @@ OWN: dict[str, dict[str, str]] = {
         "This computer (%(name)s)": "Cet ordinateur (%(name)s)",
         "Waiting for the computer": "En attente de l’ordinateur",
         "approvals wait %(n)s min": "les approbations attendent %(n)s min",
+        "The reply to the next message is a picture drawn from it.": "La réponse au prochain message est une image dessinée d’après lui.",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1916,6 +1922,7 @@ OWN: dict[str, dict[str, str]] = {
         "This computer (%(name)s)": "Ez a számítógép (%(name)s)",
         "Waiting for the computer": "A számítógépre vár",
         "approvals wait %(n)s min": "a jóváhagyások %(n)s percig várnak",
+        "The reply to the next message is a picture drawn from it.": "A következő üzenetre adott válasz egy abból rajzolt kép lesz.",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -2190,6 +2197,7 @@ OWN: dict[str, dict[str, str]] = {
         "This computer (%(name)s)": "Questo computer (%(name)s)",
         "Waiting for the computer": "In attesa del computer",
         "approvals wait %(n)s min": "le approvazioni attendono %(n)s min",
+        "The reply to the next message is a picture drawn from it.": "La risposta al prossimo messaggio è un’immagine disegnata a partire da esso.",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2464,6 +2472,7 @@ OWN: dict[str, dict[str, str]] = {
         "This computer (%(name)s)": "Ten komputer (%(name)s)",
         "Waiting for the computer": "Czeka na komputer",
         "approvals wait %(n)s min": "zatwierdzenia czekają %(n)s min",
+        "The reply to the next message is a picture drawn from it.": "Odpowiedzią na następną wiadomość będzie obraz narysowany na jej podstawie.",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2738,6 +2747,7 @@ OWN: dict[str, dict[str, str]] = {
         "This computer (%(name)s)": "Tento počítač (%(name)s)",
         "Waiting for the computer": "Čaká na počítač",
         "approvals wait %(n)s min": "schválenia čakajú %(n)s min",
+        "The reply to the next message is a picture drawn from it.": "Odpoveďou na ďalšiu správu bude obrázok nakreslený podľa nej.",
     },
 }
 
