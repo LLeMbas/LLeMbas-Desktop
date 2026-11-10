@@ -16,6 +16,14 @@ All notable changes to LLeMbas Desktop. The format follows
   the account has another computer linked, a chip before the folder chooses it (this computer is
   the default). Its folder is one its agent chats have worked in, or a path typed in; the Terminal
   before the first message opens there too.
+- **Language and theme in Settings.** Under Appearance: the language (this computer's, or any of
+  the app's nine; the window opens again in it) and the theme (the account's, or Moria or Shire).
+  Both are kept in the app on this computer; the account's own stay as they are.
+
+### Fixed
+
+- **A terminal that ended could come back by itself.** Shown again and ended by the server within
+  one frame, the panel opened a new shell in its place; an ended shell is now only said.
 
 ## [1.0.0-beta.6] — 2026-11-10
 

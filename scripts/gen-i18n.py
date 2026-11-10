@@ -458,6 +458,17 @@ KEYS = (
     "Type a folder…",
     "Choose a folder first.",
     "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.",
+    # settings.js: language and theme
+    "Appearance",
+    "Language",
+    "Theme",
+    "dark",
+    "light",
+    "The interface only. Models answer in the language you write to them in, whatever this says.",
+    "This computer's (%(language)s)",
+    "The account's (%(theme)s)",
+    "Kept in this app on this computer. The window opens again in the language chosen.",
+    "Kept in this app on this computer; the account's theme stays as it is.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -695,6 +706,10 @@ OWN: dict[str, dict[str, str]] = {
         "Type a folder…": "Zadat složku…",
         "Choose a folder first.": "Nejprve vyberte složku.",
         "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.": "Agentní konverzace pracuje ve složce na zařízení %(device)s přes tamního agenta LLeMbas.",
+        "This computer's (%(language)s)": "Podle tohoto počítače (%(language)s)",
+        "The account's (%(theme)s)": "Podle účtu (%(theme)s)",
+        "Kept in this app on this computer. The window opens again in the language chosen.": "Uloženo v této aplikaci na tomto počítači. Okno se znovu otevře ve zvoleném jazyce.",
+        "Kept in this app on this computer; the account's theme stays as it is.": "Uloženo v této aplikaci na tomto počítači; vzhled účtu zůstává, jak je.",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -927,6 +942,10 @@ OWN: dict[str, dict[str, str]] = {
         "Type a folder…": "Ordner eingeben…",
         "Choose a folder first.": "Wählen Sie zuerst einen Ordner.",
         "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.": "Ein Agenten-Chat arbeitet in einem Ordner auf %(device)s, über den LLeMbas-Agenten dort.",
+        "This computer's (%(language)s)": "Wie dieser Computer (%(language)s)",
+        "The account's (%(theme)s)": "Wie das Konto (%(theme)s)",
+        "Kept in this app on this computer. The window opens again in the language chosen.": "In dieser App auf diesem Computer gespeichert. Das Fenster öffnet sich in der gewählten Sprache neu.",
+        "Kept in this app on this computer; the account's theme stays as it is.": "In dieser App auf diesem Computer gespeichert; das Design des Kontos bleibt, wie es ist.",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1159,6 +1178,10 @@ OWN: dict[str, dict[str, str]] = {
         "Type a folder…": "Escribir una carpeta…",
         "Choose a folder first.": "Elija primero una carpeta.",
         "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.": "Un chat de agente trabaja en una carpeta de %(device)s, a través del agente LLeMbas de allí.",
+        "This computer's (%(language)s)": "La de este equipo (%(language)s)",
+        "The account's (%(theme)s)": "El de la cuenta (%(theme)s)",
+        "Kept in this app on this computer. The window opens again in the language chosen.": "Se guarda en esta aplicación en este equipo. La ventana se vuelve a abrir en el idioma elegido.",
+        "Kept in this app on this computer; the account's theme stays as it is.": "Se guarda en esta aplicación en este equipo; el tema de la cuenta no cambia.",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1391,6 +1414,10 @@ OWN: dict[str, dict[str, str]] = {
         "Type a folder…": "Saisir un dossier…",
         "Choose a folder first.": "Choisissez d’abord un dossier.",
         "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.": "Une discussion d'agent travaille dans un dossier de %(device)s, via l'agent LLeMbas qui s'y trouve.",
+        "This computer's (%(language)s)": "Celle de cet ordinateur (%(language)s)",
+        "The account's (%(theme)s)": "Celui du compte (%(theme)s)",
+        "Kept in this app on this computer. The window opens again in the language chosen.": "Enregistré dans cette application sur cet ordinateur. La fenêtre se rouvre dans la langue choisie.",
+        "Kept in this app on this computer; the account's theme stays as it is.": "Enregistré dans cette application sur cet ordinateur ; le thème du compte reste tel quel.",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1623,6 +1650,10 @@ OWN: dict[str, dict[str, str]] = {
         "Type a folder…": "Mappa megadása…",
         "Choose a folder first.": "Először válasszon mappát.",
         "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.": "Az ügynökcsevegés egy mappában dolgozik ezen: %(device)s, az ottani LLeMbas-ügynökön keresztül.",
+        "This computer's (%(language)s)": "A számítógépé (%(language)s)",
+        "The account's (%(theme)s)": "A fióké (%(theme)s)",
+        "Kept in this app on this computer. The window opens again in the language chosen.": "Ebben az alkalmazásban, ezen a számítógépen tárolva. Az ablak a választott nyelven nyílik meg újra.",
+        "Kept in this app on this computer; the account's theme stays as it is.": "Ebben az alkalmazásban, ezen a számítógépen tárolva; a fiók témája változatlan marad.",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -1855,6 +1886,10 @@ OWN: dict[str, dict[str, str]] = {
         "Type a folder…": "Digita una cartella…",
         "Choose a folder first.": "Scegli prima una cartella.",
         "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.": "Una chat con agente lavora in una cartella su %(device)s, tramite l’agente LLeMbas che vi si trova.",
+        "This computer's (%(language)s)": "Quella di questo computer (%(language)s)",
+        "The account's (%(theme)s)": "Quello dell’account (%(theme)s)",
+        "Kept in this app on this computer. The window opens again in the language chosen.": "Salvato in questa app su questo computer. La finestra si riapre nella lingua scelta.",
+        "Kept in this app on this computer; the account's theme stays as it is.": "Salvato in questa app su questo computer; il tema dell’account resta com’è.",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2087,6 +2122,10 @@ OWN: dict[str, dict[str, str]] = {
         "Type a folder…": "Wpisz folder…",
         "Choose a folder first.": "Najpierw wybierz folder.",
         "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.": "Czat z agentem pracuje w folderze na %(device)s, przez działającego tam agenta LLeMbas.",
+        "This computer's (%(language)s)": "Jak na tym komputerze (%(language)s)",
+        "The account's (%(theme)s)": "Jak na koncie (%(theme)s)",
+        "Kept in this app on this computer. The window opens again in the language chosen.": "Zapisane w tej aplikacji na tym komputerze. Okno otworzy się ponownie w wybranym języku.",
+        "Kept in this app on this computer; the account's theme stays as it is.": "Zapisane w tej aplikacji na tym komputerze; motyw konta pozostaje bez zmian.",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2319,6 +2358,10 @@ OWN: dict[str, dict[str, str]] = {
         "Type a folder…": "Zadať priečinok…",
         "Choose a folder first.": "Najprv vyberte priečinok.",
         "An agent chat works in a folder on %(device)s, through the LLeMbas agent there.": "Agentská konverzácia pracuje v priečinku na zariadení %(device)s cez tamojšieho agenta LLeMbas.",
+        "This computer's (%(language)s)": "Podľa tohto počítača (%(language)s)",
+        "The account's (%(theme)s)": "Podľa účtu (%(theme)s)",
+        "Kept in this app on this computer. The window opens again in the language chosen.": "Uložené v tejto aplikácii na tomto počítači. Okno sa znova otvorí vo zvolenom jazyku.",
+        "Kept in this app on this computer; the account's theme stays as it is.": "Uložené v tejto aplikácii na tomto počítači; vzhľad účtu zostáva, ako je.",
     },
 }
 
@@ -2337,7 +2380,11 @@ def server_catalogue(server: Path, lang: str) -> dict[str, str]:
     messages = getattr(module, "MESSAGES", None)
     if not isinstance(messages, dict):
         sys.exit(f"gen-i18n: {path} has no MESSAGES")
+    NAMES[lang] = str(getattr(module, "NAME", "") or lang)
     return messages
+
+
+NAMES: dict[str, str] = {}  # each language's own name for itself, as the server's catalogue says
 
 
 def main() -> None:
@@ -2372,24 +2419,38 @@ def main() -> None:
         print(f"gen-i18n: {lang}: {len(table)} sentences, {from_server} of the page's {len(KEYS)} from the server")
 
     body = json.dumps(catalogue, ensure_ascii=False, indent=2, sort_keys=True)
+    names = json.dumps({"en": "English", **NAMES}, ensure_ascii=False, sort_keys=True)
     out = (
         "// The app's own pages' words in the server's languages. GENERATED by scripts/gen-i18n.py:\n"
         "// the sentences the server also has come from its web/i18n catalogues, the rest from the\n"
         "// script's own table. Do not edit; run the script.\n"
         "//\n"
         "// `t(text, fields)` is the page's English with `%(name)s` fields, as on the server; a\n"
-        "// missing entry is the English. The language is the system's (navigator.language),\n"
-        "// English unless it is one of these. Elements marked `data-i18n` (their text) and\n"
+        "// missing entry is the English. The language is the one chosen in Settings (kept in\n"
+        "// localStorage as `lembas.language`), else the system's (navigator.language), English\n"
+        "// unless it is one of these. Elements marked `data-i18n` (their text) and\n"
         "// `data-i18n-title`, `data-i18n-aria-label`, `data-i18n-placeholder` (that attribute)\n"
         "// are translated once the page is parsed; this script is deferred, before the page's.\n"
         '"use strict"\n'
         "\n"
         f"const LEMBAS_I18N = {body}\n"
         "\n"
-        "const LEMBAS_LANG = (() => {\n"
+        "// Each language's name for itself, for the choice in Settings.\n"
+        f"const LEMBAS_LANGS = {names}\n"
+        "\n"
+        "// What the system's language gives, and what was chosen here instead (\"\" for the system's).\n"
+        "const LEMBAS_SYSTEM_LANG = (() => {\n"
         '  const code = String(navigator.language || "").slice(0, 2).toLowerCase()\n'
         '  return Object.prototype.hasOwnProperty.call(LEMBAS_I18N, code) ? code : "en"\n'
         "})()\n"
+        "const LEMBAS_CHOSEN_LANG = (() => {\n"
+        '  let code = ""\n'
+        "  try {\n"
+        '    code = localStorage.getItem("lembas.language") || ""\n'
+        "  } catch {}\n"
+        '  return Object.prototype.hasOwnProperty.call(LEMBAS_LANGS, code) ? code : ""\n'
+        "})()\n"
+        "const LEMBAS_LANG = LEMBAS_CHOSEN_LANG || LEMBAS_SYSTEM_LANG\n"
         "document.documentElement.lang = LEMBAS_LANG\n"
         "\n"
         "function t(text, fields) {\n"

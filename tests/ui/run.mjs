@@ -994,6 +994,74 @@ test("D4: with no other computer linked there is no choice to make; at 390 px th
   assert.deepEqual(p.errors, [])
 })
 
+// E5: the language and the theme, chosen in Settings and kept in this app.
+
+async function openSettings(p) {
+  await p.click("#settings-btn")
+  await p.waitForSelector("#set-look")
+}
+
+test("E5: the theme is the account's until one is chosen here; chosen, it is drawn at once and kept", async () => {
+  const p = await page({ status: status(), routes: baseRoutes({ "GET /me": { id: "u1", name: "Ada Example", email: "ada@example.org", theme: "shire", language: "en", permissions: {} } }), streams: {} })
+  await p.waitForFunction(() => document.documentElement.dataset.theme === "shire")
+  await openSettings(p)
+  assert.equal(await p.inputValue("#set-theme"), "")
+  assert.match(await p.textContent("#set-theme option[value='']"), /account.*Shire/)
+  await p.selectOption("#set-theme", "moria")
+  assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), "moria")
+  const painted = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "set_theme").map((c) => c.args.name))
+  assert.equal(painted.at(-1), "moria", "the window is painted in it too")
+  // Opened again: still Moria, over the account's Shire.
+  await p.reload()
+  await p.waitForSelector("#shell:not([hidden])")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "set_theme"))
+  assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), "moria")
+  await openSettings(p)
+  assert.equal(await p.inputValue("#set-theme"), "moria")
+  await p.selectOption("#set-theme", "")
+  assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), "shire", "back to the account's")
+  assert.deepEqual(p.errors, [])
+})
+
+test("E5: a language chosen here opens the window again in it, the shells let go first; the system's again undoes it", async () => {
+  const p = await page(b3())
+  assert.equal(await p.evaluate(() => document.documentElement.lang), "en")
+  await openChatRow(p, "chat2")
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForFunction(() => window.__mock.terminals().length === 1)
+  // What the page let go of before it loaded again, kept across the load.
+  await p.evaluate(() => addEventListener("beforeunload", () => localStorage.setItem("test.calls", JSON.stringify(window.__mock.calls.map((c) => c.cmd)))))
+  await openSettings(p)
+  assert.match(await p.textContent("#set-language option[value='']"), /English/)
+  await Promise.all([p.waitForEvent("load"), p.selectOption("#set-language", "de")])
+  await p.waitForSelector("#shell:not([hidden])")
+  assert.equal(await p.evaluate(() => document.documentElement.lang), "de")
+  assert.equal((await p.textContent("#settings-btn .navrow__label")).trim(), "Einstellungen")
+  const before = await p.evaluate(() => JSON.parse(localStorage.getItem("test.calls") || "[]"))
+  assert.ok(before.includes("terminal_close"), "the shell was let go")
+  await openSettings(p)
+  assert.equal(await p.inputValue("#set-language"), "de")
+  assert.match(await p.textContent("#set-look"), /Sprache/)
+  await Promise.all([p.waitForEvent("load"), p.selectOption("#set-language", "")])
+  await p.waitForSelector("#shell:not([hidden])")
+  assert.equal(await p.evaluate(() => document.documentElement.lang), "en")
+  assert.deepEqual(p.errors, [])
+})
+
+test("E5: at 390 px the Appearance group stays inside the window", async () => {
+  const p = await page({ status: status(), routes: baseRoutes(), streams: {} }, { width: 390, height: 844 })
+  await p.evaluate(() => document.getElementById("settings-btn").click())
+  await p.waitForSelector("#set-look")
+  await p.evaluate(() => document.getElementById("set-look").scrollIntoView())
+  assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
+  const box = await p.locator("#set-theme").boundingBox()
+  assert.ok(box.x >= 0 && box.x + box.width <= 390, "the theme's choice is inside")
+  await shot(p, "e5-look-390")
+  await p.setViewportSize({ width: 1280, height: 860 })
+  await shot(p, "e5-look-1280")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

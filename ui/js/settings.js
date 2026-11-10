@@ -1,10 +1,12 @@
 // Settings: the app's, not the server's (no admin page here, ever -- an admin sees what everyone
 // sees). Grouped, with the groups listed beside them: the account (the server and the app's
-// sign-in), the agent and the folders it may work in, notifications, and this release.
+// sign-in), the agent and the folders it may work in, the language and theme, notifications, and
+// this release.
 
 import { $, h, clear, icon, ICONS } from "./dom.js"
 import { invoke, listen } from "./bridge.js"
 import { agentBlock, onAgentChange, link } from "./agent.js"
+import { chosenTheme, chooseTheme, accountTheme, chosenLanguage, chooseLanguage } from "./look.js"
 
 let folderError = ""
 let current = () => null
@@ -13,6 +15,7 @@ const SECTIONS = [
   ["account", ICONS.user, () => t("Account")],
   ["agent", ICONS.terminal, () => t("Agent")],
   ["folders", ICONS.folder, () => t("Project folders")],
+  ["look", ICONS.contrast, () => t("Appearance")],
   ["notify", ICONS.bell, () => t("Notifications")],
   ["about", ICONS.info, () => t("About")],
 ]
@@ -118,6 +121,8 @@ export function renderSettings(s) {
     )
   }
 
+  box.append(lookSection())
+
   box.append(
     section(
       "notify",
@@ -140,6 +145,30 @@ export function renderSettings(s) {
         h("button", { type: "button", class: "btn btn--sm", text: s.update ? t("Install LLeMbas %(version)s…", { version: s.update }) : t("Check for updates…"), onclick: () => invoke("update_app") }),
       ),
     ),
+  )
+}
+
+/** The language and the theme: this app's choice over the system's language and the account's theme. */
+function lookSection() {
+  const named = (code) => LEMBAS_LANGS[code] || code
+  const language = h(
+    "select",
+    { id: "set-language", "aria-label": t("Language"), onchange: (e) => chooseLanguage(e.target.value) },
+    [["", t("This computer's (%(language)s)", { language: named(LEMBAS_SYSTEM_LANG) })], ...Object.keys(LEMBAS_LANGS).map((code) => [code, named(code)])].map(([v, label]) =>
+      h("option", { value: v, text: label, selected: chosenLanguage() === v, lang: v || undefined }),
+    ),
+  )
+  const label = (name) => `${name === "shire" ? "Shire" : "Moria"} — ${name === "shire" ? t("light") : t("dark")}`
+  const theme = h(
+    "select",
+    { id: "set-theme", "aria-label": t("Theme"), onchange: (e) => chooseTheme(e.target.value) },
+    [["", t("The account's (%(theme)s)", { theme: label(accountTheme()) })], ["moria", label("moria")], ["shire", label("shire")]].map(([v, text]) => h("option", { value: v, text, selected: chosenTheme() === v })),
+  )
+  return section(
+    "look",
+    t("Appearance"),
+    line(t("Language"), `${t("The interface only. Models answer in the language you write to them in, whatever this says.")} ${t("Kept in this app on this computer. The window opens again in the language chosen.")}`, language),
+    line(t("Theme"), t("Kept in this app on this computer; the account's theme stays as it is."), theme),
   )
 }
 

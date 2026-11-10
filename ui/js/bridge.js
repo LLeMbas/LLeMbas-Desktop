@@ -125,3 +125,10 @@ export async function openTerminal(target, cols, rows, { onOutput, onControl, on
 export function openLink(url) {
   return invoke("open_external", { url }).catch(() => {})
 }
+
+/** Let go of every reply followed and every shell open (the page is about to load again). */
+export function letGoAll() {
+  const ids = [...followers.keys()].map((id) => invoke("stream_close", { id }))
+  const shells = [...terminals.keys()].map((id) => invoke("terminal_close", { id }))
+  return Promise.allSettled([...ids, ...shells])
+}

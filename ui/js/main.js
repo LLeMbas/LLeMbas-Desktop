@@ -13,7 +13,8 @@ import { initViewer, onViewer, closeViewer } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
 import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer } from "./chat.js"
-import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal, terminalThemeChanged } from "./terminal.js"
+import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
+import { applyTheme, noteAccountTheme } from "./look.js"
 import { initAttach, allowAttach } from "./attach.js"
 import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
@@ -64,14 +65,6 @@ function thisDevices() {
   return remembered.slice()
 }
 
-function applyTheme(name) {
-  if (name !== "moria" && name !== "shire") name = "moria"
-  const root = document.documentElement
-  root.dataset.theme = name
-  root.dataset.base = name
-  terminalThemeChanged()
-}
-
 // --- Views ------------------------------------------------------------------------------------
 
 function route() {
@@ -99,8 +92,7 @@ async function startApp() {
   started = true
   try {
     me = await get("/me")
-    applyTheme(me.theme)
-    invoke("set_theme", { name: me.theme === "shire" ? "shire" : "moria" })
+    noteAccountTheme(me.theme)
   } catch (err) {
     $("thread-note").textContent = why(err)
     $("thread-note").hidden = false
