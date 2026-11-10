@@ -40,7 +40,19 @@ All notable changes to LLeMbas Desktop. The format follows
   speed), running a tool and what it runs, waiting for you, waiting for subagents, compacting,
   retrying (counting down), stopped or failed -- each with how long it has lasted, kept moving
   every second. From a server that sends no such line (before 2.0.0-beta.8), the app shows the
-  server's own words as before. Translations come with the server's.
+  server's own words as before. In every language the server has.
+- **Subagents, the whole tree** (harness spec 3.4.0, needs the server's 2.0.0-beta.8). The
+  activity panel shows the main agent and every subagent under the one it reports to: its name and
+  id, its position, what it is doing right now, how full its context is, its state, model and
+  mode (with what it may ask for), its messages in the room and the last one, how many slots are
+  still open, and the ones that ended -- dimmed, with how they ended. Any subagent's conversation
+  opens read-only, live while it works and after it ended, and so do its findings; a working one
+  can be stopped (it and those under it). An agent chat's tree comes from its computer; while that
+  computer is away the panel shows the tree as it last was and says the rest is kept there.
+- **Subagents for agent chats.** A new agent chat offers the Subagents setting where the server
+  says this computer can run them, and an open agent chat where the server offers it for that
+  chat.
+- **A subagent's approval names it**: "Subagent parser (s1), reviews the parser, asks:".
 - `tests/ui/`: the page under a headless browser against a stand-in for the app's bridge, with
   the server's answers as a table (`node tests/ui/run.mjs`, needs Playwright and a Chromium). CI
   runs it on every push (the `ui` job), with Playwright and its Chromium installed for the run.

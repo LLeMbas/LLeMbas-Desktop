@@ -13,6 +13,14 @@
 //   GET  /chats/{chat}/agents/{kind}/{id}         one task and its conversation
 //   POST /chats/{chat}/agents/{kind}/{id}/stop
 //   POST /chats/{chat}/compact                    summarise the earlier turns now
+//   GET  /chats/{chat}/tree?since=                the subagent tree (spec 3.4.0) and the room
+//   GET  /chats/{chat}/subagents/{id}/transcript  a subagent's conversation, read-only
+//   GET  /chats/{chat}/subagents/{id}/findings    what it kept
+//   POST /chats/{chat}/subagents/{id}/stop        it and those under it
+//
+// The tree comes too as the reply stream's `tree` frame (chat.js hands it on). An agent chat's
+// subagents run on its device: while the device is away the server sends the tree it kept
+// (`live` false) and answers 409 for a conversation or findings, in its own words.
 //
 // The events stream is followed for as long as a chat is open: it keeps the strip current, and
 // while the panel is open a new `version` reads the panel again. The context is the costly part
@@ -27,6 +35,7 @@ import { get, post, follow, why } from "./bridge.js"
 import { markdown } from "./markdown.js"
 import { ask } from "./popup.js"
 import { openServerFile } from "./explorer.js"
+import { treePart, tickTree, treeState, TREE_LIVE } from "./tree.js"
 
 const ACTIVE = ["queued", "working", "waiting"]
 // How many live agents show before "Show N more", as on the server's panel.
@@ -50,7 +59,12 @@ let readAt = 0 // when `data` was read: the elapsed times count on from there
 let contextAt = 0
 let reading = null // the read in flight
 let readAgain = "" // "", "plain" or "context": what to read again once the read in flight is done
-let view = null // null: the panel; { kind, id, name }: one agent's conversation
+let view = null // null: the panel; { kind, id, name }: one agent's conversation ({ kind: "sub", what } a subagent's)
+let tree = null // the subagent tree (spec 3.4.0), null for none or an older server
+let treeRoom = [] // the room as the tree's answer gives it (an agent chat's comes only there)
+let treeLive = true // false: an agent chat's device is away, and this is the tree the server kept
+let treeNote = "" // why the last stop did not go through
+let subTimer = 0 // a live subagent's conversation, read again while it works
 const openRows = new Set() // agents unfolded, by kind:id; sections folded, by name
 let ticker = 0
 
@@ -147,6 +161,10 @@ export function watchActivity(next) {
   data = null
   room = []
   cursor = 0
+  tree = null
+  treeRoom = []
+  treeLive = true
+  treeNote = ""
   readAt = contextAt = 0
   view = null
   compactError = ""
@@ -162,6 +180,15 @@ export function watchActivity(next) {
     render()
     read(true)
   }
+}
+
+/** The reply stream's `tree` frame: the tree as it is now. */
+export function treeChanged(chatId, next) {
+  if (!chat || chat.id !== chatId) return
+  tree = next || null
+  if (!panelOpen()) return
+  if (!view) render()
+  else if (view.kind === "sub" && view.what === "transcript") readAgent()
 }
 
 /** A reply has ended, or the chat's settings changed: the context and the outputs move with it. */
@@ -241,8 +268,16 @@ async function read(withContext) {
   const id = chat.id
   reading = (async () => {
     try {
-      const a = (await get(`/chats/${enc(id)}/activity?since=${cursor}&context=${withContext ? "true" : "false"}`)).activity
+      const [r, tr] = await Promise.all([
+        get(`/chats/${enc(id)}/activity?since=${cursor}&context=${withContext ? "true" : "false"}`),
+        // A server before 3.4.0 has no tree: 404, and the panel is as it was.
+        get(`/chats/${enc(id)}/tree`).catch(() => null),
+      ])
+      const a = r.activity
       if (chat?.id !== id || !a) return
+      tree = tr?.tree || null
+      treeRoom = tr?.room || []
+      treeLive = tr ? tr.live !== false : true
       if (!withContext) a.context = data?.context ?? null
       else contextAt = Date.now()
       if (a.team) {
@@ -363,6 +398,7 @@ function tick() {
   for (const el of document.querySelectorAll("#activity .agent__time[data-active]")) {
     el.textContent = duration(Number(el.dataset.seconds) + extra)
   }
+  tickTree($("activity-body"))
 }
 
 function renderError(text) {
@@ -392,13 +428,15 @@ function render() {
   }
   // Kept where the reader was: the panel is drawn again on every change.
   const scroll = body.scrollTop
-  const entries = data.agents || []
+  // The tree draws the subagents; a team's members are not drawn again among the tasks.
+  const entries = (data.agents || []).filter((e) => !(tree && e.kind === "member"))
   const parts = [
     chat?.kind === "agent" && chat.device ? section("environment", t("Environment"), 0, environmentPart(chat)) : null,
     section("context", t("Context"), 0, contextPart(data.context)),
     section("outputs", t("Outputs"), (data.outputs || []).length, outputsPart(data.outputs || [])),
+    tree ? section("subagents", t("Subagents"), 0, subagentsPart()) : null,
     section("tasks", t("Background tasks"), 0, tasksPart(entries)),
-    data.team ? section("room", t("Room"), room.length, roomPart()) : null,
+    data.team || treeRoom.length ? section("room", t("Room"), roomList().length, roomPart()) : null,
     data.plan ? section("plan", t("Plan"), 0, h("div", { class: "activity__plan" }, planList(data.plan))) : null,
   ]
   body.replaceChildren(...parts.filter(Boolean))
@@ -561,7 +599,7 @@ function outputsPart(outputs) {
 }
 
 function tasksPart(entries) {
-  const team = data.team
+  const team = tree ? null : data.team
   const box = h("div", { class: "tasks", "aria-live": "polite" })
   if (!entries.length && !team) {
     box.append(h("p", { class: "activity__empty", text: t("Nothing runs in the background. Subagents, a team's members and background commands show here while they work.") }))
@@ -584,7 +622,84 @@ function tasksPart(entries) {
   return box
 }
 
+/** The room: as the activity read it (a chat's team), else as the tree's answer gave it. */
+function roomList() {
+  return room.length ? room : treeRoom
+}
+
+function subagentsPart() {
+  const box = treePart(tree, {
+    room: roomList(),
+    device: chat?.kind === "agent",
+    act: {
+      open: (a) => openSub(a, "transcript"),
+      findings: (a) => openSub(a, "findings"),
+      stop: stopSub,
+      isOpen: (key) => openRows.has(key),
+      toggled: (key, on) => (on ? openRows.add(key) : openRows.delete(key)),
+    },
+  })
+  if (!treeLive) box.prepend(h("p", { class: "activity__empty", text: t("This device is not linked right now.") }))
+  if (treeNote) box.prepend(h("p", { class: "activity__empty is-error", text: treeNote }))
+  return box
+}
+
+async function stopSub(a) {
+  if (!chat) return
+  const yes = await ask({ title: t("Stop %(name)s", { name: a.name }), text: t("Stop %(name)s and the subagents under it?", { name: a.name }), ok: t("Stop"), cancel: t("Cancel"), danger: true })
+  if (!yes) return
+  treeNote = ""
+  try {
+    await post(`/chats/${enc(chat.id)}/subagents/${enc(a.id)}/stop`)
+  } catch (err) {
+    treeNote = why(err)
+  }
+  read(false)
+}
+
+function openSub(a, what) {
+  view = { kind: "sub", id: a.id, name: a.name || a.id, what }
+  $("activity").dataset.view = "agent"
+  $("activity-title").textContent = what === "findings" ? `${view.name} · ${t("Findings")}` : view.name
+  $("activity-back").hidden = false
+  clear($("activity-body")).append(h("p", { class: "activity__empty", text: t("Loading…") }))
+  readAgent()
+}
+
+/** A subagent's conversation or findings, read-only; a live one's conversation is read again while it works. */
+async function readSub() {
+  clearTimeout(subTimer)
+  const { id, what } = view
+  let r
+  try {
+    r = await get(`/chats/${enc(chat.id)}/subagents/${enc(id)}/${what}`)
+  } catch (err) {
+    // 409: an agent chat's device is away -- the server says it is on the device.
+    if (view?.id === id && view.what === what) clear($("activity-body")).append(h("p", { class: "activity__empty is-error", text: why(err) }))
+    return
+  }
+  if (view?.kind !== "sub" || view.id !== id || view.what !== what) return
+  const body = $("activity-body")
+  if (what === "findings") {
+    const list = r.findings || []
+    body.replaceChildren(
+      list.length
+        ? h("ol", { class: "findings" }, list.map((f) => h("li", { class: "findings__item", value: String(f.n) }, h("div", { class: "md" }, markdown(String(f.text || ""))))))
+        : h("p", { class: "activity__empty", text: t("Nothing yet.") }),
+    )
+    return
+  }
+  const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40
+  const live = TREE_LIVE.includes(r.state)
+  const head = h("div", { class: "convo__head" }, h("p", { class: "agent__facts" }, h("span", { class: "agent__state", text: treeState(r.state) })))
+  const turns = turnsOf(r.turns || [])
+  body.replaceChildren(head, h("div", { class: "convo" }, turns.length ? turns : h("p", { class: "activity__empty", text: t("Nothing yet.") })))
+  if (atEnd) body.scrollTop = body.scrollHeight
+  if (live) subTimer = setTimeout(() => view?.kind === "sub" && view.id === id && panelOpen() && readAgent(), 3000)
+}
+
 function roomPart() {
+  const room = roomList()
   if (!room.length) return h("p", { class: "activity__empty", text: t("Nothing has been said in the room yet.") })
   return h(
     "ol",
@@ -747,6 +862,7 @@ function openAgent(a) {
 }
 
 function closeAgent() {
+  clearTimeout(subTimer)
   view = null
   render()
   $("activity-close").focus()
@@ -754,6 +870,7 @@ function closeAgent() {
 
 async function readAgent() {
   if (!chat || !view) return
+  if (view.kind === "sub") return readSub()
   const { kind, id } = view
   let r
   try {
@@ -779,7 +896,14 @@ async function readAgent() {
     a.role ? h("p", { class: "agent__role", text: a.role }) : null,
     a.stoppable ? h("button", { type: "button", class: "btn btn--sm", text: t("Stop %(name)s", { name: a.name || id }), onclick: () => stopAgent(a) }) : null,
   )
-  const turns = (r.transcript || []).map((turn) => {
+  const turns = turnsOf(r.transcript || [])
+  body.replaceChildren(head, h("div", { class: "convo" }, turns.length ? turns : h("p", { class: "activity__empty", text: t("Nothing yet.") })))
+  if (atEnd) body.scrollTop = body.scrollHeight
+}
+
+/** A conversation's turns, read-only: the person's (or the harness's) messages and the replies. */
+function turnsOf(list) {
+  return list.map((turn) => {
     if (turn.role === "user") {
       return h("article", { class: `msg msg--user convo__turn${turn.machine ? " is-machine" : ""}` }, h("div", { class: "msg__text", text: String(turn.text || "") }))
     }
@@ -806,8 +930,6 @@ async function readAgent() {
       turn.running ? h("p", { class: "msg__status muted", text: t("Writing…") }) : null,
     )
   })
-  body.replaceChildren(head, h("div", { class: "convo" }, turns.length ? turns : h("p", { class: "activity__empty", text: t("Nothing yet.") })))
-  if (atEnd) body.scrollTop = body.scrollHeight
 }
 
 // --- Start ------------------------------------------------------------------------------------------

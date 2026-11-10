@@ -13,9 +13,9 @@ import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
 import { menu, ask, showLine, popover, closePopover } from "./popup.js"
-import { avatar, agentsControl, teamPossible, namedOnly, subagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
+import { avatar, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
-import { watchActivity, activityChanged, planList, activityButton } from "./activity.js"
+import { watchActivity, activityChanged, planList, activityButton, treeChanged } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
 import { folderName } from "./list.js"
 import { isProgress, progressLine, progressTicks } from "./progress.js"
@@ -64,6 +64,38 @@ function terminalTarget() {
   const device = deviceOf(chat.device.token_id)
   if (!device?.terminal) return null
   return { chat: chat.id, device: device.id, directory: chat.device.directory, name: device.name || t("Terminal") }
+}
+
+// A new agent chat's subagent facts (spec 3.4.0 §14): `/models?kind=agent&device=` -- each model's
+// `subagents` for an agent chat, and `agent_subagents { offered, device_runs }` once. Read per
+// device, again when a new chat starts; a server before 3.4.0 says nothing (no setting, as before).
+const agentFacts = new Map() // device -> { at, models: Map(id -> subagents), offered, runs } | null
+
+async function readAgentFacts(device) {
+  if (!device) return null
+  const known = agentFacts.get(device)
+  if (known && Date.now() - known.at < 5000) return known
+  try {
+    const r = await get(`/models?kind=agent&device=${encodeURIComponent(device)}`)
+    if (!r.agent_subagents) {
+      agentFacts.set(device, { at: Date.now(), none: true })
+      return agentFacts.get(device)
+    }
+    noteSubagentsCap(r.subagents_cap)
+    const facts = { at: Date.now(), models: new Map((r.models || []).map((m) => [m.id, m.subagents])), offered: !!r.agent_subagents.offered, runs: r.agent_subagents.device_runs }
+    agentFacts.set(device, facts)
+    return facts
+  } catch {
+    return null
+  }
+}
+
+/** Whether a new agent chat on `model` is offered subagents: `{ cap, own }`, or null. */
+function agentOffer(facts, model) {
+  if (!facts || facts.none || !facts.offered || facts.runs === false) return null
+  const said = facts.models.get(model?.id)
+  if (said !== undefined && said !== null && !(typeof said === "object" ? said.offered : said)) return null
+  return { cap: subagentsCap(), own: namedOnly(said) }
 }
 
 /** Text into the message box, after what is there, for the person to read before sending. */
@@ -412,6 +444,10 @@ class Live {
       case "ask":
         renderCards(this.chat, data.cards || [])
         break
+      case "tree":
+        // The subagent tree as it changed (spec 3.4.0): the activity panel draws it.
+        treeChanged(this.chat.id, data.tree)
+        break
       case "jobs":
         this.jobs.hidden = !(data.jobs || []).length
         append(
@@ -522,6 +558,11 @@ function cardOf(chat, card) {
     const part = h("div", { class: "ask__item" })
     // A background subagent asks, not the conversation's own turn: said first (`job`).
     if (item.job) part.append(h("p", { class: "ask__header", text: t("%(job)s asks:", { job: item.job }) }))
+    // A subagent of the tree asks, for a call nobody in the tree may allow (spec 3.4.0, §7).
+    if (item.subagent) {
+      const sub = item.subagent
+      part.append(h("p", { class: "ask__header ask__subagent", text: t("Subagent %(name)s (%(id)s), %(position)s, asks:", { name: sub.name || sub.id, id: sub.id, position: sub.position || "—" }) }))
+    }
     if (item.header) part.append(h("p", { class: "ask__header", text: item.header }))
     let detailShown = false
     if (item.kind === "approval") {
@@ -822,6 +863,16 @@ async function renderChips() {
     }, mayPick))
     if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), renderChips())))
     if (draft.kind === "chat" && teamPossible(model)) parts.push(agentsChip(draft.agents, (a) => ((draft.agents = a), renderChips()), { cap: subagentsCap(), own: namedOnly(model?.subagents) }))
+    // An agent chat's subagents run on its device: offered as the server says for that device.
+    const device = draft.kind === "agent" ? draftDevice() : ""
+    const known = device ? agentFacts.get(device) : null
+    const offer = device ? agentOffer(known, model) : null
+    if (offer) parts.push(agentsChip(draft.agents, (a) => ((draft.agents = a), renderChips()), offer))
+    if (device && (!known || Date.now() - known.at > 5000)) {
+      readAgentFacts(device).then((f) => {
+        if (f && drawing === chipsDrawn && draft?.kind === "agent") renderChips()
+      })
+    }
     // Last, so the chat's own settings come first where the line scrolls.
     if (shell) {
       const b = chip({ ico: ICONS.terminal, label: t("Terminal"), menuish: false, cls: "cchip--terminal", onclick: toggleTerminal })

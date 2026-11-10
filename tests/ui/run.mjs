@@ -50,6 +50,9 @@ async function launch() {
   throw new Error("tests/ui: no Chromium found (set CHROMIUM)")
 }
 
+/** One of the server's /api/v2 contract fixtures, as copied by scripts/fetch-fixtures.sh. */
+const fixture = (name) => JSON.parse(readFileSync(join(HERE, "fixtures", `${name}.json`), "utf8"))
+
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".mjs": "text/javascript", ".json": "application/json" }
 
 // --- The server, as the tests' table -----------------------------------------------------------
@@ -636,9 +639,14 @@ test("B1: a reply being written draws the stream's progress, its clock moving, a
   const p = await page(agentChatOpen([["status", { text: "Writing…" }]]))
   await openChatRow(p, "chat2")
   await p.waitForSelector(".msg.is-live .msg__status")
-  await p.evaluate((path) => {
-    window.__mock.frame(path, "status", { text: "Running bake --slow", progress: { phase: "running_tool", since: Date.now() - 65000, tool: "bash", what: "bake --slow" } })
-  }, STREAM2)
+  // An older server sends no progress at all: its status text, as before.
+  await p.evaluate((path) => window.__mock.frame(path, "status", { text: "Running bake --slow" }), STREAM2)
+  assert.equal(await p.textContent(".msg.is-live .msg__status"), "Running bake --slow")
+  // The server's status frame (event_status.json), its clock set 65 s back from now.
+  const status = fixture("event_status")
+  await p.evaluate(([path, f]) => {
+    window.__mock.frame(path, "status", { ...f, progress: { ...f.progress, since: Date.now() - 65000 } })
+  }, [STREAM2, status])
   const line = () => p.textContent(".msg.is-live .msg__status")
   assert.equal(await line(), "Running bash: bake --slow · 1m 05s")
   assert.equal(await p.getAttribute(".msg.is-live .msg__status", "data-phase"), "running_tool")
@@ -646,59 +654,171 @@ test("B1: a reply being written draws the stream's progress, its clock moving, a
   // A data-only frame with progress (the ask frame carries it too): the line follows.
   await p.evaluate((path) => window.__mock.frame(path, "ask", { cards: [], progress: { phase: "waiting_for_person", since: Date.now(), what: "approval", tool: "bash" } }), STREAM2)
   assert.equal(await line(), "Waiting for you: allow bash? · 0s")
-  // Nothing running: `progress: null`, and the status text is drawn again.
-  await p.evaluate((path) => window.__mock.frame(path, "status", { text: "Writing…", progress: null }), STREAM2)
+  // Nothing running (event_status_idle.json: no text, `progress: null`): the plain words again.
+  await p.evaluate(([path, f]) => window.__mock.frame(path, "status", f), [STREAM2, fixture("event_status_idle")])
   assert.equal(await line(), "Writing…")
-  // An older server sends no progress at all: its status text, as before.
-  await p.evaluate((path) => window.__mock.frame(path, "status", { text: "Running bake --slow" }), STREAM2)
-  assert.equal(await line(), "Running bake --slow")
+  // Waiting for a person's answer (event_status_person.json): the phase, not the text.
+  await p.evaluate(([path, f]) => window.__mock.frame(path, "status", { ...f, progress: { ...f.progress, since: Date.now() } }), [STREAM2, fixture("event_status_person")])
+  assert.equal(await line(), "Waiting for you: a question · 0s")
   // Stopped and failed have no clock.
-  await p.evaluate((path) => window.__mock.frame(path, "status", { text: "Stopped.", progress: { phase: "stopped", since: Date.now() - 4000, reason: "person" } }), STREAM2)
+  await p.evaluate(([path, f]) => window.__mock.frame(path, "status", f), [STREAM2, fixture("event_status_stopped")])
   assert.equal(await line(), "Stopped: by you")
   assert.deepEqual(p.errors, [])
 })
 
-// --- C4 (ahead of the server): the subagent tree as spec 3.4.0 §12 gives it ---------------------
+// --- C4: subagents (spec 3.4.0) ---------------------------------------------------------------
 //
-// ui/js/tree.js draws subagents.md §12's data; the activity panel takes it up once the server's
-// /api/v2 carries the tree. Until then it is checked here on the spec's own example.
+// The server's /api/v2 (its fixtures, copied into tests/ui/fixtures): GET /chats/{chat}/tree ->
+// {tree, room, live}, the stream's `tree` frame, a subagent's transcript and findings, POST
+// .../stop; an agent chat's device away -> the kept tree (`live` false) and 409 for the rest;
+// /models?kind=agent&device= for a new agent chat's Subagents; `subagent` on an approval item.
 
-const TREE = {
-  min: 2, max: 4, size: 3, open_slots: 1,
-  agents: [
-    { id: "lead", name: "lead", position: "the main agent", parent: null, state: "working", model: "qwen-27b", mode: "edit", request: [], manager: true, context: { used: 41200, window: 131072 }, progress: { phase: "thinking", since: 0 } },
-    { id: "s1", name: "parser", position: "reviews the parser", parent: "lead", state: "working", model: "qwen-27b", mode: "manual", request: ["write"], manager: true, task: "Read src/parse.ts", context: { used: 9100, window: 131072 }, progress: { phase: "running_tool", since: 0, tool: "read", what: "src/parse.ts" }, findings: 2, messages: 3 },
-    { id: "s3", name: "lexer", position: "the lexer's tests", parent: "s1", state: "waiting", model: "qwen-27b", mode: "manual", request: [], manager: false, context: { used: 0, window: 131072 }, progress: null, findings: 0, messages: 0 },
-  ],
-  ended: [{ id: "s0", name: "scout", position: "maps the repository", parent: "lead", state: "out_of_context", ended: 0, findings: 1 }],
+const ACTIVITY = { activity: { version: "v1", summary: { active: 0 }, agents: [], context: null, outputs: [], team: null, plan: null } }
+
+function c4(over = {}) {
+  return b3({
+    "GET /chats/chat2/activity": ACTIVITY,
+    "GET /chats/chat2/tree": fixture("tree"),
+    "GET /chats/chat2/subagents/s2/transcript": fixture("subagent_transcript"),
+    "GET /chats/chat2/subagents/s2/findings": fixture("subagent_findings"),
+    "POST /chats/chat2/subagents/s2/stop": { stopped: ["s2"] },
+    ...over,
+  })
 }
 
-test("C4: the tree in order, each agent's position, state, mode, context and phase; slots; the ended ones apart", async () => {
-  const p = await page(b3())
-  const got = await p.evaluate(async (tree) => {
-    const m = await import("/js/tree.js")
-    const calls = []
-    const box = m.treePart(tree, { room: [{ n: 1, from: "lead", to: ["parser"], text: "Start with the grammar.\nThen the lexer." }], now: 65000, act: { open: (a) => calls.push(["open", a.id]), findings: (a) => calls.push(["findings", a.id]), stop: (a) => calls.push(["stop", a.id]) } })
-    document.body.append(box)
-    const rows = [...box.querySelectorAll(".subagents__list > .subagent:not(.subagent--slot)")].map((r) => ({ id: r.dataset.id, depth: r.style.getPropertyValue("--depth"), text: r.textContent }))
-    box.querySelector('[data-id="s1"] .subagent__actions .btn').click()
-    box.querySelector('[data-id="s0"] .subagent__actions .btn:last-child').click()
-    box.querySelector('[data-id="s1"] .agent__stop').click()
-    return { rows, slots: box.querySelectorAll(".subagent--slot").length, endedStop: box.querySelectorAll('[data-id="s0"] button.agent__stop').length, calls }
-  }, TREE)
-  assert.deepEqual(got.rows.map((r) => [r.id, r.depth]), [["lead", "0"], ["s1", "1"], ["s3", "2"], ["s0", "0"]])
-  const parser = got.rows[1].text
-  assert.match(parser, /parser \(s1\) — reviews the parser/)
-  assert.match(parser, /6%/, "context: floor(9100 × 100 / 131072)")
-  assert.match(parser, /manual \+ write/)
-  assert.match(parser, /Running read: src\/parse\.ts · 1m 05s/)
-  assert.match(parser, /Messages: 3/)
-  assert.match(parser, /lead: Start with the grammar\./)
-  assert.match(got.rows[2].text, /waiting for a slot/)
-  assert.match(got.rows[3].text, /out of context/)
-  assert.equal(got.slots, 1)
-  assert.equal(got.endedStop, 0, "an ended subagent cannot be stopped")
-  assert.deepEqual(got.calls, [["open", "s1"], ["findings", "s0"], ["stop", "s1"]])
+async function openTree(p) {
+  await openChatRow(p, "chat2")
+  await p.click("#activity-open")
+  await p.waitForSelector("#activity .subagents .subagent")
+}
+
+const rows = (p) => p.evaluate(() => [...document.querySelectorAll("#activity .subagents__list > .subagent")].map((r) => [r.dataset.id, r.style.getPropertyValue("--depth")]))
+
+test("C4: the activity panel draws the server's tree: nested by parent, slots, the ended ones apart", async () => {
+  const p = await page(c4())
+  await openTree(p)
+  assert.deepEqual(await rows(p), [["lead", "0"], ["s1", "1"], ["s2", "2"]])
+  const routes = await p.textContent('#activity .subagent[data-id="s2"]')
+  assert.match(routes, /routes/)
+  assert.match(routes, /writes the routes/)
+  assert.match(routes, /Running read: src\/api\.py/)
+  assert.match(routes, /6%/, "context: floor(9100 × 100 / 131072)")
+  assert.match(routes, /edit \+ execute/)
+  assert.match(routes, /messages: 1/)
+  assert.match(routes, /routes → area: Routes are in\./, "the last room message to or from it")
+  assert.match(await p.textContent('#activity .subagent[data-id="lead"]'), /the main agent/)
+  assert.match(await p.textContent("#activity .subagents"), /3 of 4/)
+  assert.match(await p.textContent("#activity .subagents"), /They run on the computer this chat runs on\./)
+  // The ended one, folded apart, with how it ended, and no stop square.
+  await p.click("#activity .subagents__ended > summary")
+  const scout = await p.textContent('#activity .subagents__ended .subagent[data-id="s3"]')
+  assert.match(scout, /done/)
+  assert.equal(await p.locator('#activity .subagent[data-id="s3"] button.agent__stop').count(), 0)
+  assert.equal(await p.locator('#activity .subagent[data-id="lead"] button.agent__stop').count(), 0, "the main agent is not stopped from here")
+  if (process.env.SHOTS) await p.screenshot({ path: join(process.env.SHOTS, "c4-tree-1280.png") })
+  assert.deepEqual(p.errors, [])
+})
+
+test("C4: a subagent's conversation and findings open read-only; Stop asks, then stops it", async () => {
+  const p = await page(c4())
+  await openTree(p)
+  await p.click('#activity .subagent[data-id="s2"] > summary')
+  await p.click('#activity .subagent[data-id="s2"] .subagent__buttons .btn >> text=Open its conversation')
+  await p.waitForSelector("#activity .convo .convo__turn")
+  const convo = await p.textContent("#activity-body")
+  assert.match(convo, /Write the routes\./)
+  assert.match(convo, /Reading the API first\./)
+  assert.match(convo, /src\/api\.py/)
+  assert.equal(await p.locator("#activity-body textarea, #activity-body input").count(), 0, "nothing to type into")
+  await p.click("#activity-back")
+  await p.click('#activity .subagent[data-id="s2"] .subagent__buttons .btn >> text=Findings')
+  await p.waitForSelector("#activity .findings")
+  assert.match(await p.textContent("#activity .findings"), /Login is POST \/session\./)
+  await p.click("#activity-back")
+  await p.click('#activity .subagent[data-id="s2"] button.agent__stop')
+  await p.waitForSelector("dialog[open]")
+  assert.match(await p.textContent("dialog[open]"), /Stop routes and the subagents under it\?/)
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/subagents/s2/stop").length === 1)
+  assert.deepEqual(p.errors, [])
+})
+
+test("C4: the stream's tree frame redraws the panel; with the device away the kept tree shows and the rest says why", async () => {
+  const away = { ...fixture("tree"), live: false }
+  const p = await page(c4({ "GET /chats/chat2/tree": away, "GET /chats/chat2/subagents/s2/transcript": { __error: { status: 409, detail: "That is kept on the computer this chat runs on, which is not linked right now." } } }))
+  await openTree(p)
+  assert.match(await p.textContent("#activity .subagents"), /This device is not linked right now\./)
+  await p.click('#activity .subagent[data-id="s2"] > summary')
+  await p.click('#activity .subagent[data-id="s2"] .subagent__buttons .btn >> text=Open its conversation')
+  await p.waitForSelector("#activity-body .is-error")
+  assert.match(await p.textContent("#activity-body"), /not linked right now/)
+  await p.click("#activity-back")
+  // A reply streams; its `tree` frame (event_tree.json) is the tree now.
+  await p.evaluate(() => window.__mock.frame("/chats/chat2/messages/m2/stream", "tree", null))
+  await p.context().close()
+  const live = await page({ ...c4(), routes: { ...c4().routes, "GET /chats/chat2": { chat: agentChat(), messages: [userMessage("m1", "Go")], more: false, live: "m2" } }, streams: { [STREAM2]: [] } })
+  await openTree(live)
+  await live.evaluate(([path, f]) => window.__mock.frame(path, "tree", f), [STREAM2, fixture("event_tree")])
+  await live.waitForFunction(() => !!document.querySelector('#activity .subagent[data-id="s2"]') && /parser/.test(document.querySelector('#activity .subagent[data-id="s2"]').textContent))
+  assert.match(await live.textContent('#activity .subagent[data-id="s2"]'), /reviews the parser/)
+  assert.match(await live.textContent('#activity .subagent[data-id="s2"]'), /manual \+ write/)
+  assert.deepEqual(live.errors, [])
+})
+
+test("C4: an approval a subagent asks for names it", async () => {
+  const card = fixture("event_ask").cards.find((c) => c.id === "card4")
+  const p = await page(agentChatOpen([["ask", { cards: [card] }]], { "POST /chats/chat2/interactions/card4": { answered: true } }))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#cards .ask__subagent")
+  assert.equal(await p.textContent("#cards .ask__subagent"), "Subagent parser (s1), reviews the parser, asks:")
+  assert.equal(await p.inputValue("#cards .ask__edit"), "git push", "the command, correctable, as for the main agent's")
+  assert.deepEqual(p.errors, [])
+})
+
+test("C4: Subagents for a new agent chat as /models?kind=agent says for this device; for an open one as the chat says", async () => {
+  const facts = fixture("models_agent")
+  const newAgent = async (models) => {
+    const p = await page(c4({ "GET /models?kind=agent&device=token1": models }))
+    await p.click("#new-chat-btn")
+    await p.click(".kind__tab >> text=Agent")
+    await p.waitForSelector("#composer-chips .cchip")
+    await p.waitForTimeout(200)
+    return p
+  }
+  let p = await newAgent(facts)
+  assert.equal(await p.locator("#composer-chips .cchip--subagents").count(), 1, "offered, and the device runs them")
+  await p.click("#composer-chips .cchip--subagents")
+  await p.waitForSelector(".range2")
+  assert.equal(await p.getAttribute(".range2__input--min", "max"), "32", "the server's cap")
+  await p.context().close()
+  p = await newAgent({ ...facts, agent_subagents: { offered: true, device_runs: false } })
+  assert.equal(await p.locator("#composer-chips .cchip--subagents").count(), 0, "this computer's CLI cannot run them")
+  await p.context().close()
+  p = await newAgent({ ...facts, agent_subagents: { offered: false, device_runs: true } })
+  assert.equal(await p.locator("#composer-chips .cchip--subagents").count(), 0, "not offered")
+  await p.context().close()
+  p = await newAgent({ __error: { status: 400, detail: "older server" } })
+  assert.equal(await p.locator("#composer-chips .cchip--subagents").count(), 0, "a server before 3.4.0: none, as before")
+  await p.context().close()
+  // An open agent chat: its own `subagents` (chat_agent.json offers them).
+  const chat = fixture("chat_agent")
+  p = await page(c4({ "GET /chats/chat2": { chat: { ...agentChat({ running: false }), subagents: chat.subagents, agents: chat.agents }, messages: [userMessage("m1", "Go")], more: false, live: null } }))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#composer-chips .cchip--subagents")
+  assert.deepEqual(p.errors, [])
+})
+
+test("C4: the tree at 390 px stays inside the window", async () => {
+  const p = await page(c4(), { width: 390, height: 844 })
+  await p.evaluate(() => document.querySelector('.chatrow[data-id="chat2"]').click())
+  await p.waitForSelector("#activity-open")
+  await p.click("#activity-open")
+  await p.waitForSelector("#activity .subagents .subagent")
+  await p.click('#activity .subagent[data-id="s2"] > summary')
+  assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= 390), "nothing scrolls sideways")
+  const panel = await p.evaluate(() => { const b = document.querySelector("#activity-body"); return b.scrollWidth <= b.clientWidth })
+  assert.ok(panel, "the panel does not scroll sideways")
+  if (process.env.SHOTS) await p.screenshot({ path: join(process.env.SHOTS, "c4-tree-390.png") })
   assert.deepEqual(p.errors, [])
 })
 

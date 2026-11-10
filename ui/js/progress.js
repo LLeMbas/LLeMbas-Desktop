@@ -4,29 +4,29 @@
 // sentences. The server sends the object beside the old `status` text in a chat's stream; where it
 // sends none (an older server), the status text is drawn as before.
 //
-// The texts are the spec's, with its `{{field}}` written as the page's `%(field)s`; the server's
-// catalogues translate them under the same English (scripts/gen-i18n.py).
+// The texts are the spec's, word for word with their `{{field}}`s: the server's catalogues
+// translate them under the same keys (scripts/gen-i18n.py takes them from there).
 
 /** The thirteen phases: a text for each, and a variant where a field may be missing. */
 const TEXTS = {
   queued: "Queued",
-  "queued.ahead": "Queued: %(ahead)s ahead",
-  waiting_for_model: "Waiting for %(model)s: %(reason)s",
-  loading_model: "Loading %(model)s",
-  reading_prompt: "Reading the prompt: %(done)s / %(total)s tokens (%(percent)s%%)",
+  "queued.ahead": "Queued: {{ahead}} ahead",
+  waiting_for_model: "Waiting for {{model}}: {{reason}}",
+  loading_model: "Loading {{model}}",
+  reading_prompt: "Reading the prompt: {{done}} / {{total}} tokens ({{percent}}%)",
   "reading_prompt.bare": "Reading the prompt",
   thinking: "Thinking",
-  writing: "Writing: %(rate)s tok/s",
+  writing: "Writing: {{rate}} tok/s",
   "writing.bare": "Writing",
-  running_tool: "Running %(tool)s: %(what)s",
-  "running_tool.bare": "Running %(tool)s",
-  waiting_for_person: "Waiting for you: %(what)s",
-  waiting_for_subagents: "Waiting for subagents: %(running)s running",
+  running_tool: "Running {{tool}}: {{what}}",
+  "running_tool.bare": "Running {{tool}}",
+  waiting_for_person: "Waiting for you: {{what}}",
+  waiting_for_subagents: "Waiting for subagents: {{running}} running",
   compacting: "Compacting the conversation",
-  retrying: "Retrying in %(in)s s: %(reason)s",
+  retrying: "Retrying in {{in}} s: {{reason}}",
   stopped: "Stopped",
-  "stopped.reason": "Stopped: %(reason)s",
-  failed: "Failed: %(reason)s",
+  "stopped.reason": "Stopped: {{reason}}",
+  failed: "Failed: {{reason}}",
 }
 
 /** The words a field stands for. */
@@ -36,7 +36,7 @@ const REASONS = {
   group: "its server holds another model now",
 }
 const WHAT = {
-  approval: "allow %(tool)s?",
+  approval: "allow {{tool}}?",
   "approval.bare": "an approval",
   question: "a question",
   plan: "the plan",
@@ -44,19 +44,17 @@ const WHAT = {
 const STOPPED = { person: "by you", steps: "step limit", budget: "budget" }
 
 /** Every sentence above, for scripts/gen-i18n.py to find (it reads `t("…")` calls by hand). */
-export const PROGRESS_SENTENCES = [...Object.values(TEXTS), ...Object.values(REASONS), ...Object.values(WHAT), ...Object.values(STOPPED), "%(text)s · %(elapsed)s"]
+export const PROGRESS_SENTENCES = [...Object.values(TEXTS), ...Object.values(REASONS), ...Object.values(WHAT), ...Object.values(STOPPED)]
 
 const NO_ELAPSED = ["stopped", "failed"]
 
 const has = (p, k) => p[k] !== undefined && p[k] !== null && p[k] !== ""
 
-/** A sentence in the page's language, `%%` a percent sign (the server's way), then its
- * `%(field)s` filled -- in that order, so a field's own text is never read as a template. */
+/** A sentence in the page's language (the spec's text is the key, as in the server's
+ * catalogues), its `{{field}}`s filled -- after the lookup, so a field's own text is never read
+ * as a template. */
 function say(text, fields = {}) {
-  return t(text)
-    .replace(/%%/g, "\u0000")
-    .replace(/%\((\w+)\)s/g, (all, name) => (Object.prototype.hasOwnProperty.call(fields, name) ? String(fields[name]) : all))
-    .replace(/\u0000/g, "%")
+  return t(text).replace(/\{\{(\w+)\}\}/g, (all, name) => (Object.prototype.hasOwnProperty.call(fields, name) ? String(fields[name]) : all))
 }
 
 /** An integer as it is; a rate with one decimal, in the page's language (12.5, 12,5). */
@@ -126,7 +124,8 @@ export function progressText(p, now = Date.now()) {
 export function progressLine(p, now = Date.now(), { bare = false } = {}) {
   const text = progressText(p, now)
   if (!text || bare || NO_ELAPSED.includes(p.phase) || !has(p, "since")) return text
-  return say("%(text)s · %(elapsed)s", { text, elapsed: elapsed(now - Number(p.since)) })
+  // progress.line, `{{text}} · {{elapsed}}`: the same in every language.
+  return `${text} · ${elapsed(now - Number(p.since))}`
 }
 
 /** Whether the line changes by itself as time passes (it has a clock, or a countdown). */

@@ -399,42 +399,52 @@ KEYS = (
     "Put the last command and its output into the message box",
     "Sign in again: the server no longer accepts this app's sign-in.",
     "The terminal needs a newer LLeMbas server. Ask its administrator to update it.",
-)
-
-# The progress line's sentences (ui/js/progress.js; harness spec 3.4.0, `loop.json`
-# progress.texts, its `{{field}}` written as `%(field)s`). Shared with every client, so they
-# are the server's to translate and never in OWN: until its catalogues have one, that sentence
-# shows in English and this script says how many are waiting -- not a failure.
-SERVER_PENDING = (
+    # progress.js (harness spec 3.4.0: loop.json progress.texts, keyed as the spec writes them)
     "Queued",
-    "Queued: %(ahead)s ahead",
-    "Waiting for %(model)s: %(reason)s",
-    "Loading %(model)s",
-    "Reading the prompt: %(done)s / %(total)s tokens (%(percent)s%%)",
+    "Queued: {{ahead}} ahead",
+    "Waiting for {{model}}: {{reason}}",
+    "Loading {{model}}",
+    "Reading the prompt: {{done}} / {{total}} tokens ({{percent}}%)",
     "Reading the prompt",
-    "Thinking",
-    "Writing: %(rate)s tok/s",
+    "Writing: {{rate}} tok/s",
     "Writing",
-    "Running %(tool)s: %(what)s",
-    "Running %(tool)s",
-    "Waiting for you: %(what)s",
-    "Waiting for subagents: %(running)s running",
+    "Running {{tool}}: {{what}}",
+    "Running {{tool}}",
+    "Waiting for you: {{what}}",
+    "Waiting for subagents: {{running}} running",
     "Compacting the conversation",
-    "Retrying in %(in)s s: %(reason)s",
+    "Retrying in {{in}} s: {{reason}}",
     "Stopped",
-    "Stopped: %(reason)s",
-    "Failed: %(reason)s",
+    "Stopped: {{reason}}",
+    "Failed: {{reason}}",
     "it serves one request at a time and is answering another",
     "all its slots are in use",
     "its server holds another model now",
-    "allow %(tool)s?",
+    "allow {{tool}}?",
     "an approval",
     "a question",
     "the plan",
     "by you",
     "step limit",
     "budget",
-    "%(text)s · %(elapsed)s",
+    # tree.js, activity.js (the subagent tree), chat.js (a subagent's approval)
+    "waiting for a slot",
+    "finished",
+    "idle",
+    "paused: context full",
+    "out of context",
+    "the main agent",
+    "%(size)s of %(max)s",
+    "Open slots: %(n)s",
+    "They run on the computer this chat runs on.",
+    "Ended",
+    "Context used",
+    "messages: %(n)s",
+    "findings: %(n)s",
+    "Findings",
+    "Stop %(name)s and the subagents under it?",
+    "This device is not linked right now.",
+    "Subagent %(name)s (%(id)s), %(position)s, asks:",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -2254,20 +2264,6 @@ def main() -> None:
         ours = OWN.get(lang, {})
         table: dict[str, str] = {}
         from_server = 0
-        waiting = 0
-        for key in SERVER_PENDING:
-            if key in KEYS:
-                continue
-            text = theirs.get(key)
-            if not text:
-                waiting += 1
-            elif set(FIELD.findall(text)) != set(FIELD.findall(key)):
-                print(f"gen-i18n: {lang}: the fields of {text!r} do not match {key!r}", file=sys.stderr)
-                problems += 1
-            else:
-                table[key] = text
-        if waiting:
-            print(f"gen-i18n: {lang}: {waiting} progress sentences wait for the server's catalogue (English until then)")
         for key in KEYS:
             text = theirs.get(key)
             if text:
