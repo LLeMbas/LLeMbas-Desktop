@@ -12,7 +12,7 @@ import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer } from "./chat.js"
+import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged } from "./chat.js"
 import { initAttach, allowAttach } from "./attach.js"
 import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
@@ -117,13 +117,17 @@ function stopApp() {
   closeViewer()
 }
 
-async function loadModels() {
+let modelsAt = 0 // when /models was last read
+
+/** The account's models, with what a new chat on each is offered. `keep`: a failed read keeps the last list. */
+async function loadModels({ keep = false } = {}) {
   try {
     const r = await get("/models")
     models = r.models || []
     noteSubagentsCap(r.subagents_cap)
+    modelsAt = Date.now()
   } catch {
-    models = []
+    if (!keep) models = []
   }
 }
 
@@ -177,6 +181,10 @@ function startNew(kind) {
   newChat(kind || draftKind())
   markCurrent()
   localPane()
+  // What a new chat is offered (its models, Subagents) is the server's word now, not at sign-in:
+  // an administrator may have switched subagents on or added a model while the app stayed open in
+  // the tray. Drawn at once from the last list, then again from the fresh one.
+  if (started && Date.now() - modelsAt > 5000) loadModels({ keep: true }).then(modelsChanged)
 }
 
 /** Open a chat, from the list or the palette. */

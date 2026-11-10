@@ -996,6 +996,18 @@ export function draftKind() {
   return draft?.kind || lastKind
 }
 
+/** `/models` was read again: a new chat being written is drawn with what it says now. */
+export function modelsChanged() {
+  if (!draft) return
+  const models = ctx.models()
+  if (!models.some((m) => m.id === draft.model)) {
+    const start = models.find((m) => m.default) || models[0]
+    draft.model = start?.id || ""
+    draft.effort = levelsOf(start).start
+  }
+  renderChips()
+}
+
 /** The greeting of a new chat, and the choice of what it is. */
 function renderHello() {
   const box = $("new-chat")

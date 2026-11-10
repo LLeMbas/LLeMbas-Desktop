@@ -329,6 +329,110 @@ test("A1: a card at 390 px wide is on the screen and its buttons can be reached"
   assert.deepEqual(p.errors, [])
 })
 
+// --- A5: the Subagents setting ----------------------------------------------------------------
+//
+// The server decides (`services/team_run.py:offered`, `services/subagents.py:view`): subagents
+// enabled on the instance, the person's permission, a model that calls tools, and some model that
+// could serve one -- the chat's own serving two requests at once, or another off its one-model
+// server (`named_only`: then the setting says a subagent needs a model named in the chat). It says
+// so per model in `/models` (a new chat) and per chat in `/chats/{id}` (`subagents`). The web page
+// reads the same function (`api/pages.py:_team_context`). The app shows what it is told.
+
+async function newChatOn(p, kind, modelName) {
+  await p.click("#new-chat-btn")
+  await p.click(`.kind__tab >> text=${kind}`)
+  if (modelName) {
+    await p.click(".cchip--model")
+    await p.locator(".menu .menu__item", { hasText: modelName }).click()
+  }
+}
+
+async function subagentsChip(p) {
+  // The chip comes after the others (an open chat's waits for the server's word).
+  await p.waitForTimeout(150)
+  return p.locator("#composer-chips .cchip--subagents")
+}
+
+async function openSlider(p) {
+  await p.click("#composer-chips .cchip--subagents")
+  await p.waitForSelector(".range2")
+  return {
+    min: await p.getAttribute(".range2__input--min", "max"),
+    text: await p.textContent(".pop__body"),
+  }
+}
+
+const OWN = "This model serves one request at a time: subagents need another model, on another server, named in the chat."
+
+function a5(routes = {}) {
+  return { status: status(), routes: baseRoutes(routes), streams: {} }
+}
+
+test("A5: a new chat on a model serving two at once offers Subagents, Min and Max to the server's cap", async () => {
+  const p = await page(a5())
+  await newChatOn(p, "Chat")
+  const chip = await subagentsChip(p)
+  assert.equal(await chip.count(), 1, "the chip is there")
+  const s = await openSlider(p)
+  assert.equal(s.min, "8", "up to the server's cap")
+  assert.ok(!s.text.includes(OWN), "no one-request note")
+  assert.deepEqual(p.errors, [])
+})
+
+test("A5: a new chat on a one-request model the server still offers: Subagents with the note", async () => {
+  const p = await page(a5())
+  await newChatOn(p, "Chat", "Solo")
+  const chip = await subagentsChip(p)
+  assert.equal(await chip.count(), 1)
+  const s = await openSlider(p)
+  assert.ok(s.text.includes(OWN), "the one-request note")
+  assert.deepEqual(p.errors, [])
+})
+
+test("A5: subagents off on the instance (offered false for every model): no Subagents", async () => {
+  const off = SUB(false)
+  const p = await page(a5({ "GET /models": models({ qwen: off, solo: off, plain: off }) }))
+  await newChatOn(p, "Chat")
+  assert.equal(await (await subagentsChip(p)).count(), 0)
+  await newChatOn(p, "Chat", "Solo")
+  assert.equal(await (await subagentsChip(p)).count(), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("A5: subagents switched on while the app stays open: the next new chat offers them", async () => {
+  const off = SUB(false)
+  const p = await page(a5({ "GET /models": models({ qwen: off, solo: off, plain: off }) }))
+  await newChatOn(p, "Chat")
+  assert.equal(await (await subagentsChip(p)).count(), 0, "off at sign-in")
+  // The administrator switches subagents on; the app read /models at sign-in.
+  await p.evaluate((m) => (window.__mockConfig.routes["GET /models"] = m), models())
+  await p.waitForTimeout(5200)
+  await p.click("#new-chat-btn")
+  await p.waitForSelector("#composer-chips .cchip--subagents")
+  assert.deepEqual(p.errors, [])
+})
+
+test("A5: an open chat follows its own `subagents`: offered, offered with the note, not offered", async () => {
+  for (const [said, chip, note] of [
+    [{ offered: true, named_only: false, cap: 8 }, 1, false],
+    [{ offered: true, named_only: true, cap: 8 }, 1, true],
+    [{ offered: false, named_only: false, cap: 8 }, 0, false],
+  ]) {
+    const p = await page(
+      a5({
+        "GET /chats/chat1": { chat: chatRow({ subagents: said }), messages: [userMessage("m5", "How is lembas made?")], more: false, live: null },
+        "GET /models?chat=chat1": models(),
+      }),
+    )
+    await openChatRow(p, "chat1")
+    const c = await subagentsChip(p)
+    assert.equal(await c.count(), chip, `chip for ${JSON.stringify(said)}`)
+    if (chip) assert.equal((await openSlider(p)).text.includes(OWN), note)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

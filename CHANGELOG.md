@@ -16,6 +16,11 @@ All notable changes to LLeMbas Desktop. The format follows
   subagent asks when one does. A card already on the screen is kept as it is while the reply goes
   on, so a command being corrected or an option picked is no longer lost when the server sends
   the list again; a card that cannot be drawn says why instead of leaving an empty space.
+- **Subagents after they are switched on.** The app read which models a new chat is offered
+  subagents on only when it signed in, so subagents switched on (or a model added) on the server
+  while the app stayed open in the tray never showed on a new chat until it was restarted. A new
+  chat now asks the server again. (An agent chat has no Subagents setting: its subagents run on
+  the computer, and the server offers none for it.)
 
 ### Added
 
