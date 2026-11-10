@@ -417,10 +417,32 @@ function follower(chat, messageId) {
 
 // --- Cards ----------------------------------------------------------------------------------------
 
+/**
+ * The cards waiting for an answer, as the stream's `ask` frame lists them. A card already on the
+ * screen is kept as it is -- the server sends the frame again whenever anything in it changes, its
+ * countdown included, and drawing it again would take away a command being corrected or an option
+ * already picked. New ones are added in the server's order; the ones no longer listed go.
+ */
 function renderCards(chat, cards) {
-  const box = clear($("cards"))
-  box.hidden = !cards.length
-  for (const card of cards) box.append(cardOf(chat, card))
+  const box = $("cards")
+  const ids = cards.map((c) => String(c.id))
+  for (const el of [...box.children]) if (el.dataset.chat !== chat.id || !ids.includes(el.dataset.card)) el.remove()
+  cards.forEach((card, i) => {
+    let el = [...box.children].find((x) => x.dataset.card === String(card.id))
+    if (!el) {
+      try {
+        el = cardOf(chat, card)
+      } catch (err) {
+        // Never an empty box under a status that says the reply waits: say what went wrong.
+        console.error("card", card, err)
+        el = h("section", { class: "ask" }, h("p", { class: "msg__note is-error", text: String(err) }))
+      }
+      el.dataset.card = String(card.id)
+      el.dataset.chat = chat.id
+    }
+    if (box.children[i] !== el) box.insertBefore(el, box.children[i] || null)
+  })
+  box.hidden = !box.children.length
 }
 
 function cardOf(chat, card) {
@@ -430,24 +452,39 @@ function cardOf(chat, card) {
   if (card.why) el.append(h("p", { class: "muted", text: card.why }))
   for (const item of card.items) {
     const part = h("div", { class: "ask__item" })
+    // A background subagent asks, not the conversation's own turn: said first (`job`).
+    if (item.job) part.append(h("p", { class: "ask__header", text: t("%(job)s asks:", { job: item.job }) }))
     if (item.header) part.append(h("p", { class: "ask__header", text: item.header }))
+    let detailShown = false
     if (item.kind === "approval") {
       part.append(h("p", { class: "ask__title", text: item.tool ? t("The agent asks to run %(tool)s:", { tool: item.tool }) : t("The agent asks:") }))
       if (item.editable) {
-        const edit = h("textarea", { class: "ask__edit", rows: "2", "aria-label": t("Command"), value: item.title })
+        // A command, correctable before it runs. The server says it in `detail` and puts a fixed
+        // "Run a command" in the title (services/device_link.py); a corrected command goes back as
+        // this item's text, and only when it differs -- an untouched one is not an edit.
+        const command = item.detail || item.title
+        detailShown = true
+        const edit = h("textarea", { class: "ask__edit", rows: "2", spellcheck: "false", "aria-label": t("Command"), value: command })
         edit.addEventListener("input", () => {
-          if (edit.value !== item.title) answers.texts[item.key] = edit.value
+          if (edit.value !== command) answers.texts[item.key] = edit.value
           else delete answers.texts[item.key]
         })
         part.append(edit)
-      } else part.append(h("pre", { class: "call__pre", text: item.title }))
+      } else {
+        // What it wants to do (a tool's own title), then its input as the device sent it.
+        part.append(h("p", { class: "ask__what", text: item.title }))
+        if (item.detail) part.append(h("pre", { class: "call__pre", text: item.detail }))
+        detailShown = true
+      }
     } else if (item.kind === "plan" && item.plan) {
       part.append(h("p", { class: "ask__title", text: item.plan.title || item.title }), planList(item.plan))
     } else {
       part.append(h("p", { class: "ask__title", text: item.title }))
     }
-    if (item.detail) part.append(h("p", { class: "muted", text: item.detail }))
-    if (item.purpose) part.append(h("p", { class: "muted", text: item.purpose }))
+    if (item.detail && !detailShown) part.append(h("p", { class: "muted", text: item.detail }))
+    // The model's account of what it is for, attributed to it; then the server's reason for asking.
+    if (item.purpose) part.append(h("p", { class: "muted", text: t("It says: %(purpose)s", { purpose: item.purpose }) }))
+    if (item.reason) part.append(h("p", { class: "muted ask__reason", text: item.reason }))
     if (item.options?.length) {
       const picked = new Set()
       const opts = h("div", { class: "ask__options", role: item.multiple ? "group" : "radiogroup" })
@@ -506,12 +543,11 @@ function cardOf(chat, card) {
   const actions = h("div", { class: "ask__actions" })
   if (decides) {
     const isPlan = card.items.some((i) => i.kind === "plan")
-    append(
-      actions,
+    append(actions, [
       h("button", { type: "button", class: "btn btn--primary", text: isPlan ? t("Carry it out") : t("Allow"), onclick: () => send("allow") }),
       isPlan ? null : h("button", { type: "button", class: "btn", text: t("Always allow"), onclick: () => send("allow_always") }),
       h("button", { type: "button", class: "btn", text: isPlan ? t("Not yet") : t("Deny"), onclick: () => send("deny") }),
-    )
+    ])
   } else {
     actions.append(h("button", { type: "button", class: "btn btn--primary", text: t("Answer"), onclick: () => send("") }))
   }

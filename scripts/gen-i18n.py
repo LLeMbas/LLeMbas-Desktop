@@ -61,6 +61,8 @@ KEYS = (
     "The agent asks to run %(tool)s:",
     "The agent asks:",
     "Command",
+    "%(job)s asks:",
+    "It says: %(purpose)s",
     "Recommended",
     "Or type an answer",
     "Your answer",

@@ -27,7 +27,8 @@ export function h(tag, attrs, ...children) {
   return el
 }
 
-export function append(el, children) {
+/** append(el, child, [more], …): children one by one or in arrays, nested as deep as they come. */
+export function append(el, ...children) {
   for (const c of children.flat(Infinity)) {
     if (c === null || c === undefined || c === false) continue
     el.append(c instanceof Node ? c : document.createTextNode(String(c)))

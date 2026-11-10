@@ -6,6 +6,22 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Approvals show again.** An agent asking to run a command, edit a file or carry out a plan
+  stopped with "Waiting for you to allow bash…" and no card to answer it: drawing the card's
+  buttons failed, and the space for it stayed empty. Stopping and asking again gave the same.
+  Now the card shows, with the command in the box to correct before it runs (it used to show the
+  words "Run a command" there instead), what the model says it is for, why it is asking, and which
+  subagent asks when one does. A card already on the screen is kept as it is while the reply goes
+  on, so a command being corrected or an option picked is no longer lost when the server sends
+  the list again; a card that cannot be drawn says why instead of leaving an empty space.
+
+### Added
+
+- `tests/ui/`: the page under a headless browser against a stand-in for the app's bridge, with
+  the server's answers as a table (`node tests/ui/run.mjs`, needs Playwright and a Chromium).
+
 ## [1.0.0-beta.5] — 2026-11-09
 
 Carries LLeMbas CLI 2.0.0-beta.5 and the look of LLeMbas 2.0.0-beta.7, which the Subagents

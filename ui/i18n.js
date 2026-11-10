@@ -11,6 +11,7 @@
 
 const LEMBAS_I18N = {
   "cs": {
+    "%(job)s asks:": "%(job)s se ptá:",
     "%(model)s was busy, so it ran on this one.": "%(model)s byl zaneprázdněný, proto běžela na tomto.",
     "%(n)s finished": "Dokončeno: %(n)s",
     "%(n)s missed": "zmeškáno: %(n)s",
@@ -120,6 +121,7 @@ const LEMBAS_I18N = {
     "Install LLeMbas %(version)s…": "Nainstalovat LLeMbas %(version)s…",
     "Instruction files": "Soubory s pokyny",
     "It has not run yet.": "Ještě neběžel.",
+    "It says: %(purpose)s": "Model uvádí: %(purpose)s",
     "LLeMbas %(version)s is available (this is %(current)s)": "Je k dispozici LLeMbas %(version)s (tohle je %(current)s)",
     "LLeMbas Desktop needs a LLeMbas 2.0 server or later.": "LLeMbas Desktop potřebuje server LLeMbas 2.0 nebo novější.",
     "Last run": "Poslední běh",
@@ -340,6 +342,7 @@ const LEMBAS_I18N = {
     "“%(title)s” stops, and its history goes. The chats it wrote stay.": "„%(title)s“ se zastaví a její historie zmizí. Konverzace, které napsala, zůstanou."
   },
   "de": {
+    "%(job)s asks:": "%(job)s fragt:",
     "%(model)s was busy, so it ran on this one.": "%(model)s war belegt, daher lief sie auf diesem.",
     "%(n)s finished": "%(n)s beendet",
     "%(n)s missed": "%(n)s verpasst",
@@ -449,6 +452,7 @@ const LEMBAS_I18N = {
     "Install LLeMbas %(version)s…": "LLeMbas %(version)s installieren…",
     "Instruction files": "Anweisungsdateien",
     "It has not run yet.": "Er ist noch nicht gelaufen.",
+    "It says: %(purpose)s": "Es sagt: %(purpose)s",
     "LLeMbas %(version)s is available (this is %(current)s)": "LLeMbas %(version)s ist verfügbar (dies ist %(current)s)",
     "LLeMbas Desktop needs a LLeMbas 2.0 server or later.": "LLeMbas Desktop braucht einen LLeMbas-Server 2.0 oder neuer.",
     "Last run": "Letzter Lauf",
@@ -669,6 +673,7 @@ const LEMBAS_I18N = {
     "“%(title)s” stops, and its history goes. The chats it wrote stay.": "„%(title)s“ hört auf, und ihr Verlauf wird gelöscht. Die Chats, die sie geschrieben hat, bleiben."
   },
   "es": {
+    "%(job)s asks:": "%(job)s pregunta:",
     "%(model)s was busy, so it ran on this one.": "%(model)s estaba ocupado, así que se ejecutó en este.",
     "%(n)s finished": "%(n)s terminados",
     "%(n)s missed": "%(n)s perdidas",
@@ -778,6 +783,7 @@ const LEMBAS_I18N = {
     "Install LLeMbas %(version)s…": "Instalar LLeMbas %(version)s…",
     "Instruction files": "Archivos de instrucciones",
     "It has not run yet.": "Todavía no se ha ejecutado.",
+    "It says: %(purpose)s": "Dice: %(purpose)s",
     "LLeMbas %(version)s is available (this is %(current)s)": "LLeMbas %(version)s está disponible (esta es la %(current)s)",
     "LLeMbas Desktop needs a LLeMbas 2.0 server or later.": "LLeMbas Desktop necesita un servidor LLeMbas 2.0 o posterior.",
     "Last run": "Última ejecución",
@@ -790,13 +796,13 @@ const LEMBAS_I18N = {
     "Looking for a LLeMbas server there…": "Buscando un servidor LLeMbas allí…",
     "MCP tools": "Herramientas MCP",
     "Manual — asks first": "Manual — pregunta primero",
-    "Max": "Máx.",
+    "Max": "Máx",
     "Maximise": "Maximizar",
     "Memory and personal": "Memoria y datos personales",
     "Menu": "Menú",
     "Message": "Mensaje",
     "Messages": "Mensajes",
-    "Min": "Mín.",
+    "Min": "Mín",
     "Minimise": "Minimizar",
     "Missed": "Perdida",
     "Mode": "Modo",
@@ -998,6 +1004,7 @@ const LEMBAS_I18N = {
     "“%(title)s” stops, and its history goes. The chats it wrote stay.": "«%(title)s» se detiene y su historial se borra. Los chats que escribió se conservan."
   },
   "fr": {
+    "%(job)s asks:": "%(job)s demande :",
     "%(model)s was busy, so it ran on this one.": "%(model)s était occupé, elle a donc tourné sur celui-ci.",
     "%(n)s finished": "%(n)s terminés",
     "%(n)s missed": "%(n)s manquées",
@@ -1107,6 +1114,7 @@ const LEMBAS_I18N = {
     "Install LLeMbas %(version)s…": "Installer LLeMbas %(version)s…",
     "Instruction files": "Fichiers d’instructions",
     "It has not run yet.": "Elle ne s'est pas encore exécutée.",
+    "It says: %(purpose)s": "Il dit : %(purpose)s",
     "LLeMbas %(version)s is available (this is %(current)s)": "LLeMbas %(version)s est disponible (ceci est la %(current)s)",
     "LLeMbas Desktop needs a LLeMbas 2.0 server or later.": "LLeMbas Desktop nécessite un serveur LLeMbas 2.0 ou plus récent.",
     "Last run": "Dernière exécution",
@@ -1327,6 +1335,7 @@ const LEMBAS_I18N = {
     "“%(title)s” stops, and its history goes. The chats it wrote stay.": "« %(title)s » s’arrête et son historique disparaît. Les conversations qu’elle a écrites restent."
   },
   "hu": {
+    "%(job)s asks:": "%(job)s kérdezi:",
     "%(model)s was busy, so it ran on this one.": "%(model)s foglalt volt, ezért ezen futott.",
     "%(n)s finished": "%(n)s befejezve",
     "%(n)s missed": "%(n)s kimaradt",
@@ -1436,6 +1445,7 @@ const LEMBAS_I18N = {
     "Install LLeMbas %(version)s…": "LLeMbas %(version)s telepítése…",
     "Instruction files": "Utasításfájlok",
     "It has not run yet.": "Még nem futott.",
+    "It says: %(purpose)s": "Ezt mondja: %(purpose)s",
     "LLeMbas %(version)s is available (this is %(current)s)": "Elérhető a LLeMbas %(version)s (ez a %(current)s)",
     "LLeMbas Desktop needs a LLeMbas 2.0 server or later.": "A LLeMbas Desktophoz LLeMbas 2.0 vagy újabb szerver kell.",
     "Last run": "Utolsó futtatás",
@@ -1448,13 +1458,13 @@ const LEMBAS_I18N = {
     "Looking for a LLeMbas server there…": "LLeMbas-kiszolgáló keresése ott…",
     "MCP tools": "MCP-eszközök",
     "Manual — asks first": "Manual — előbb kérdez",
-    "Max": "Max.",
+    "Max": "Max",
     "Maximise": "Teljes méret",
     "Memory and personal": "Memória és személyes adatok",
     "Menu": "Menü",
     "Message": "Üzenet",
     "Messages": "Üzenetek",
-    "Min": "Min.",
+    "Min": "Min",
     "Minimise": "Kis méret",
     "Missed": "Elmaradt",
     "Mode": "Mód",
@@ -1656,6 +1666,7 @@ const LEMBAS_I18N = {
     "“%(title)s” stops, and its history goes. The chats it wrote stay.": "„%(title)s” leáll, és az előzményei törlődnek. Az általa írt beszélgetések megmaradnak."
   },
   "it": {
+    "%(job)s asks:": "%(job)s chiede:",
     "%(model)s was busy, so it ran on this one.": "%(model)s era occupato, quindi è stata eseguita su questo.",
     "%(n)s finished": "%(n)s terminati",
     "%(n)s missed": "%(n)s perse",
@@ -1765,6 +1776,7 @@ const LEMBAS_I18N = {
     "Install LLeMbas %(version)s…": "Installa LLeMbas %(version)s…",
     "Instruction files": "File di istruzioni",
     "It has not run yet.": "Non è ancora stata eseguita.",
+    "It says: %(purpose)s": "Dice: %(purpose)s",
     "LLeMbas %(version)s is available (this is %(current)s)": "È disponibile LLeMbas %(version)s (questa è la %(current)s)",
     "LLeMbas Desktop needs a LLeMbas 2.0 server or later.": "LLeMbas Desktop richiede un server LLeMbas 2.0 o successivo.",
     "Last run": "Ultima esecuzione",
@@ -1985,6 +1997,7 @@ const LEMBAS_I18N = {
     "“%(title)s” stops, and its history goes. The chats it wrote stay.": "«%(title)s» si ferma e la sua cronologia viene eliminata. Le chat che ha scritto restano."
   },
   "pl": {
+    "%(job)s asks:": "%(job)s pyta:",
     "%(model)s was busy, so it ran on this one.": "%(model)s był zajęty, więc uruchomiono je na tym.",
     "%(n)s finished": "Zakończone: %(n)s",
     "%(n)s missed": "pominięte: %(n)s",
@@ -2094,6 +2107,7 @@ const LEMBAS_I18N = {
     "Install LLeMbas %(version)s…": "Zainstaluj LLeMbas %(version)s…",
     "Instruction files": "Pliki z instrukcjami",
     "It has not run yet.": "Jeszcze się nie uruchomił.",
+    "It says: %(purpose)s": "Mówi: %(purpose)s",
     "LLeMbas %(version)s is available (this is %(current)s)": "Dostępny jest LLeMbas %(version)s (to jest %(current)s)",
     "LLeMbas Desktop needs a LLeMbas 2.0 server or later.": "LLeMbas Desktop wymaga serwera LLeMbas 2.0 lub nowszego.",
     "Last run": "Ostatni przebieg",
@@ -2106,7 +2120,7 @@ const LEMBAS_I18N = {
     "Looking for a LLeMbas server there…": "Szukam tam serwera LLeMbas…",
     "MCP tools": "Narzędzia MCP",
     "Manual — asks first": "Manual — najpierw pyta",
-    "Max": "Maks",
+    "Max": "Max",
     "Maximise": "Maksymalizuj",
     "Memory and personal": "Pamięć i dane osobiste",
     "Menu": "Menu",
@@ -2314,6 +2328,7 @@ const LEMBAS_I18N = {
     "“%(title)s” stops, and its history goes. The chats it wrote stay.": "„%(title)s” zatrzyma się, a jego historia zniknie. Czaty, które napisało, zostaną."
   },
   "sk": {
+    "%(job)s asks:": "%(job)s sa pýta:",
     "%(model)s was busy, so it ran on this one.": "%(model)s bol zaneprázdnený, preto bežala na tomto.",
     "%(n)s finished": "Dokončené: %(n)s",
     "%(n)s missed": "zmeškané: %(n)s",
@@ -2423,6 +2438,7 @@ const LEMBAS_I18N = {
     "Install LLeMbas %(version)s…": "Nainštalovať LLeMbas %(version)s…",
     "Instruction files": "Súbory s pokynmi",
     "It has not run yet.": "Ešte nebežal.",
+    "It says: %(purpose)s": "Model uvádza: %(purpose)s",
     "LLeMbas %(version)s is available (this is %(current)s)": "Je k dispozícii LLeMbas %(version)s (toto je %(current)s)",
     "LLeMbas Desktop needs a LLeMbas 2.0 server or later.": "LLeMbas Desktop potrebuje server LLeMbas 2.0 alebo novší.",
     "Last run": "Posledný beh",
