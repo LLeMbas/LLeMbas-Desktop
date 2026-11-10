@@ -529,6 +529,25 @@ test("B3: an open agent chat opens its own shell from the header; Send to chat f
   assert.deepEqual(p.errors, [])
 })
 
+test("B3: a shell that ends while its panel is being shown again is not replaced by a new one", async () => {
+  const p = await page(b3())
+  await openChatRow(p, "chat2")
+  await p.click('#chat-tools [data-terminal-toggle]')
+  await p.waitForFunction(() => window.__mock.terminals().length === 1)
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+  await p.click("#terminal-close")
+  // Shown again, and the shell ends before the panel has drawn its first frame.
+  await p.evaluate(() => {
+    document.querySelector("#chat-tools [data-terminal-toggle]").click()
+    window.__mock.shell("control", { t: "closed", message: "The shell exited." })
+  })
+  await p.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+  await p.waitForTimeout(200)
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 1, "no new shell in its place")
+  assert.equal(await p.textContent("#terminal-message"), "The shell exited.")
+  assert.deepEqual(p.errors, [])
+})
+
 test("B3: the terminal and the activity panel take turns in the panel column", async () => {
   const p = await page(b3({ "GET /chats/chat2/activity": { activity: {} } }))
   await openChatRow(p, "chat2")

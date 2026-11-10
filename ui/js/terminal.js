@@ -280,6 +280,9 @@ export async function showTerminal(on) {
   ctx.layout(on)
   markOpen()
   if (!on) return
+  // Whether this showing is to open a shell: none was open as it began. One that ends meanwhile
+  // (before the frame below) is said, not quietly replaced.
+  const wanted = !session
   try {
     await load()
   } catch {
@@ -291,7 +294,7 @@ export async function showTerminal(on) {
   // A frame later: the panel has only just been shown and has no width to fit to yet.
   requestAnimationFrame(() => {
     refit()
-    connect()
+    if (wanted && terminalOpen()) connect()
     term.focus()
   })
 }
