@@ -3673,12 +3673,13 @@ test("PY: a chat on the server shown in the window is announced as its page, a c
   assert.deepEqual(await pagePosts(p, "withdraw"), [{ page_id: announced.page_id }])
   await p.waitForTimeout(200)
   assert.equal(await p.evaluate(() => window.__mock.api("POST", "/chats/chat2/page/").length), 0)
-  // Back: a page of its own again, with a new id, and the frame is the one already there.
+  // Back: a page of its own again, with a new id -- and a new frame: the one that ran a call was thrown away on leaving.
   await openChatRow(p, "chat1")
   await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/page/announce").length === 2)
   const again = await pagePosts(p, "announce")
   assert.notEqual(again[1].page_id, again[0].page_id)
-  assert.equal(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length), 1)
+  assert.equal(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length), 2)
+  assert.equal(await p.locator("iframe.pyrunner").count(), 1)
   assert.deepEqual(p.errors, [])
 })
 
