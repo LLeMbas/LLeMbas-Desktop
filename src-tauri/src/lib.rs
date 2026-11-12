@@ -289,6 +289,8 @@ async fn set_server(handle: AppHandle, address: String) -> Result<Status, String
         app.agent.stop();
         app.watch.reset();
         app.terminals.close_all();
+        // Another server: its Pyodide is not the one made ready, and is not served any more.
+        app.python.clear();
     }
     *app.account.lock().unwrap() = server::load_account(&app.config_dir, &d.base);
     *app.server.lock().unwrap() = Some(d);
@@ -399,6 +401,7 @@ fn sign_out(handle: AppHandle) {
     server::forget_account(&app.config_dir);
     app.watch.reset();
     app.terminals.close_all();
+    app.python.clear();
     if let Some(a) = account {
         std::thread::spawn(move || server::sign_out(&a.server, &a.token));
     }
@@ -411,6 +414,7 @@ fn token_refused(handle: &AppHandle) {
     if app.account.lock().unwrap().take().is_some() {
         server::forget_account(&app.config_dir);
         app.terminals.close_all();
+        app.python.clear();
         announce(handle);
     }
 }
@@ -1441,6 +1445,10 @@ fn allowed(url: &Url) -> bool {
                 .host_str()
                 .is_some_and(|h| h == format!("{}.localhost", sealed::SCHEME)));
     // The `python` tool's runner: a frame on its own scheme too, with no bridge (`python.rs`).
+    // This says the address may be gone to; it cannot tell a frame from the window itself, so
+    // that the window never shows the runner as its own page is held where it is served
+    // (`python::respond` refuses a request for a document that is not a frame's) and by the
+    // runner, which does nothing when it is not a frame.
     let runner = url.scheme() == python::SCHEME
         || (url.scheme() == "http"
             && url
@@ -1957,6 +1965,10 @@ pub fn run() {
             python::respond(
                 &ctx.app_handle().state::<App>().python,
                 request.uri().path(),
+                request
+                    .headers()
+                    .get("sec-fetch-dest")
+                    .and_then(|v| v.to_str().ok()),
             )
         })
         .invoke_handler(tauri::generate_handler![

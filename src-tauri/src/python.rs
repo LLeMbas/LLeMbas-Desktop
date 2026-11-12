@@ -12,8 +12,13 @@
 //!   used again. The webview never fetches them from the network.
 //! - **They are served on a scheme of their own** (`llembas-python://`), with the three files of
 //!   the runner itself (`src-tauri/python/`, compiled in). A hidden frame of the app's page loads
-//!   `runner.html` from there. It is not the app's origin: the capability names only the app's
-//!   own page, so nothing in the frame -- and no Python a model wrote -- can call the app.
+//!   `runner.html` from there. Nothing in the frame -- and no Python a model wrote -- can call
+//!   the app, and what holds that is not the capability (Tauri counts any scheme the app
+//!   registers as local): the bridge's scripts and `__TAURI__` are put into a window's main
+//!   frame only, never into a frame inside it, and every call needs the invoke key those scripts
+//!   carry; the frame's policy names no `ipc:` source to send one to; and a model's code runs in
+//!   a Worker, which has no window at all. This rests on how Tauri injects its bridge (2.12
+//!   here): check it again when Tauri is updated.
 //! - **Under a policy of its own** (`POLICY`): scripts, workers and requests from this scheme
 //!   only, WebAssembly allowed to compile (`'wasm-unsafe-eval'`), nothing else from anywhere.
 //!   Code run there has the files the call handed it and no network.
@@ -232,8 +237,23 @@ fn media_type(name: &str) -> &'static str {
 
 /// The response for a request to the scheme: the runner's own three files, or
 /// `/pyodide/<version>/<name>` from the verified release. Anything else is not there.
-pub fn respond(runtime: &Runtime, path: &str) -> tauri::http::Response<Vec<u8>> {
+///
+/// `dest` is the request's `Sec-Fetch-Dest`, where the webview sends one: `document` is the
+/// window itself going to this address -- not a frame of the app's page -- and is refused, so the
+/// runner is never the window's own page (where the bridge's scripts would be).
+pub fn respond(
+    runtime: &Runtime,
+    path: &str,
+    dest: Option<&str>,
+) -> tauri::http::Response<Vec<u8>> {
     let path = path.trim_start_matches('/');
+    if dest.is_some_and(|d| d.eq_ignore_ascii_case("document")) {
+        return tauri::http::Response::builder()
+            .status(403)
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .body(Vec::new())
+            .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()));
+    }
     let found: Option<(&str, Vec<u8>)> = match path {
         "runner.html" => Some((path, RUNNER_HTML.as_bytes().to_vec())),
         "runner.js" => Some((path, RUNNER_JS.as_bytes().to_vec())),
@@ -406,8 +426,15 @@ mod tests {
         };
         let rt = Runtime::default();
         // Before anything is verified only the runner's own files are there.
-        assert_eq!(respond(&rt, "/pyodide/1.0.0/pyodide.mjs").status(), 404);
-        let page = respond(&rt, "/runner.html");
+        assert_eq!(
+            respond(&rt, "/pyodide/1.0.0/pyodide.mjs", None).status(),
+            404
+        );
+        // A frame's document is served; the window's own going there is not.
+        assert_eq!(respond(&rt, "/runner.html", Some("iframe")).status(), 200);
+        assert_eq!(respond(&rt, "/runner.html", Some("document")).status(), 403);
+        assert_eq!(respond(&rt, "/runner.js", Some("script")).status(), 200);
+        let page = respond(&rt, "/runner.html", None);
         assert_eq!(page.status(), 200);
         assert_eq!(page.headers()["Content-Type"], "text/html; charset=utf-8");
         let csp = page.headers()["Content-Security-Policy"].to_str().unwrap();
@@ -417,7 +444,7 @@ mod tests {
         assert!(!csp.contains("http:") || csp.contains("http://llembas-python.localhost"));
         assert!(!csp.contains("https:") && !csp.contains('*'));
         for js in ["/runner.js", "/worker.js"] {
-            let res = respond(&rt, js);
+            let res = respond(&rt, js, None);
             assert_eq!(res.status(), 200, "{js}");
             assert_eq!(
                 res.headers()["Content-Type"],
@@ -432,7 +459,7 @@ mod tests {
             dir.clone(),
             vec!["pyodide.mjs".into(), "a.wasm".into()],
         );
-        let wasm = respond(&rt, "/pyodide/1.0.0/a.wasm");
+        let wasm = respond(&rt, "/pyodide/1.0.0/a.wasm", None);
         assert_eq!(wasm.status(), 200);
         assert_eq!(wasm.headers()["Content-Type"], "application/wasm");
         assert_eq!(wasm.headers()["X-Content-Type-Options"], "nosniff");
@@ -448,10 +475,10 @@ mod tests {
             "/index.html",
             "/",
         ] {
-            assert_eq!(respond(&rt, no).status(), 404, "{no}");
+            assert_eq!(respond(&rt, no, None).status(), 404, "{no}");
         }
         rt.clear();
-        assert_eq!(respond(&rt, "/pyodide/1.0.0/a.wasm").status(), 404);
+        assert_eq!(respond(&rt, "/pyodide/1.0.0/a.wasm", None).status(), 404);
         assert!(url("1.0.0").ends_with("/runner.html?v=1.0.0"));
         let _ = fs::remove_dir_all(&root);
     }

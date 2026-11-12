@@ -20,6 +20,16 @@
 //
 // An agent chat's code runs on its computer, not here; where Python is switched off on the
 // server there is nothing to run. Neither is announced.
+//
+// One chat's Python never meets another's. The worker in the frame keeps its globals and the
+// files a call handed it for as long as it lives, so a frame that has run a call is thrown away
+// -- behind any call still running -- whenever the window becomes another chat's page or leaves
+// a chat, and the next call gets a new one. The same when the account, the server or the
+// server's Pyodide (its version, its files' hashes) is no longer the one the frame was made for.
+//
+// The window says it is a chat's page only once its runner is there: while the files are still
+// being fetched, or could not be, nothing is announced (another page of the chat -- a browser
+// tab -- stays the one the server asks), and making it ready is tried again, more slowly each time.
 
 import { h } from "./dom.js"
 import { invoke, get, post } from "./bridge.js"
@@ -28,7 +38,7 @@ const ANNOUNCE_EVERY = 20000
 const enc = encodeURIComponent
 
 let ctx = { me: () => null }
-let runner = null // { url, version, frame, ready: Promise } once the frame is asked for
+let runner = null // { url, version, frame, ready: Promise, sig, used } once the frame is asked for
 let attached = null // the chat this window is a page of: { chat, page, stopped, timer }
 let nextCall = Promise.resolve() // one call at a time: the frame has one worker
 
@@ -50,8 +60,9 @@ export function pythonOffered() {
  * or did not verify (Rust's words) -- and is then tried afresh the next time it is wanted.
  */
 function frame() {
+  if (runner && runner.sig !== signature()) dropFrame()
   if (runner) return runner.ready
-  const mine = { url: "", version: "", frame: null, ready: null }
+  const mine = { url: "", version: "", frame: null, ready: null, sig: signature(), used: false }
   mine.ready = (async () => {
     const said = await invoke("python_prepare")
     if (!said?.enabled || !said.url) throw { status: 409, detail: "Python is not switched on here." }
@@ -83,10 +94,33 @@ function frame() {
   return mine.ready
 }
 
-/** Throw the frame away (it stopped answering): the next call makes a new one. */
+/** Throw the frame away -- its worker, globals and files with it: the next call makes a new one. */
 function dropFrame() {
   runner?.frame?.remove()
   runner = null
+}
+
+/**
+ * What a frame was made for: the account, and the server's Pyodide as `/me` names it (version,
+ * each file's hash). A frame made for another is not used again.
+ */
+function signature() {
+  const me = ctx.me() || {}
+  const py = me.python || {}
+  const who = me.account && typeof me.account === "object" ? me.account.id || me.account.email || "" : me.account || ""
+  return JSON.stringify([who, py.version || "", (py.files || []).map((f) => [f.name, f.sha256])])
+}
+
+/**
+ * The window is another chat's page now, or no chat's: behind any call still running, a frame
+ * that has run one (or was made for another account or release) is thrown away. `always`: also
+ * one that has run nothing (no chat is shown: nothing is kept waiting).
+ */
+function fresh(always) {
+  nextCall = nextCall.then(() => {
+    if (runner && (always || runner.used || runner.sig !== signature())) dropFrame()
+  })
+  return nextCall
 }
 
 /**
@@ -105,6 +139,33 @@ function originOf(url) {
 
 const failed = (error) => ({ stdout: "", result: null, error, files: [] })
 
+/** The most a call's saved files may weigh together, as base64 (about 48 MB of bytes). */
+const MAX_FILES = 64 * 1024 * 1024
+
+/**
+ * A call's answer, held to its limits whatever the frame said: what it printed, its value and
+ * its error to `output_chars`; only files the call asked to save, each once, text only, and
+ * together no more than `MAX_FILES`.
+ */
+function bounded(x, request) {
+  const cap = Math.max(1, Number(request.limits?.output_chars) || 20000)
+  const cut = (v) => String(v).slice(0, cap)
+  const wanted = new Set((request.save || []).map(String))
+  const files = []
+  let weight = 0
+  let error = cut(x.error || "")
+  for (const f of Array.isArray(x.files) ? x.files : []) {
+    if (!f || typeof f.path !== "string" || typeof f.content_b64 !== "string" || !wanted.delete(f.path)) continue
+    weight += f.content_b64.length
+    if (weight > MAX_FILES) {
+      error = error || "The files to save are too large together: nothing more was saved."
+      break
+    }
+    files.push({ path: f.path, content_b64: f.content_b64 })
+  }
+  return { stdout: cut(x.stdout || ""), result: x.result === null || x.result === undefined ? null : cut(x.result), error, files }
+}
+
 /**
  * Run one call in the frame and give its result. The frame ends a call that runs past its time;
  * should the frame itself say nothing a while after that, it is replaced and the call says so.
@@ -114,8 +175,9 @@ async function run(request) {
   try {
     r = await frame()
   } catch (err) {
-    return failed(`Python could not start: ${err?.detail || err?.message || err}`)
+    return { ...failed(`Python could not start: ${err?.detail || err?.message || err}`), unready: true }
   }
+  r.used = true
   const seconds = Math.max(1, Number(request.limits?.seconds) || 30)
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -127,8 +189,7 @@ async function run(request) {
       if (e.source !== r.frame.contentWindow || e.data?.type !== "result" || e.data.call_id !== request.call_id) return
       clearTimeout(timer)
       window.removeEventListener("message", heard)
-      const x = e.data.result || {}
-      resolve({ stdout: String(x.stdout || ""), result: x.result ?? null, error: String(x.error || ""), files: Array.isArray(x.files) ? x.files : [] })
+      resolve(bounded(e.data.result || {}, request))
     }
     window.addEventListener("message", heard)
     r.frame.contentWindow.postMessage({ type: "run", request }, originOf(r.url))
@@ -196,9 +257,43 @@ async function loop(a) {
       continue
     }
     quiet = QUICK
-    const result = await (nextCall = nextCall.then(() => run(request)))
+    const { unready, ...result } = await (nextCall = nextCall.then(() => run(request)))
     await post(`/chats/${enc(a.chat)}/page/answer`, { page_id: a.page, call_id: request.call_id, result }).catch(() => {})
+    if (unready && !a.stopped) {
+      // The runner is gone and could not be made again: this window is not the chat's page
+      // until it can be -- said, so the server asks another page meanwhile.
+      clearInterval(a.timer)
+      post(`/chats/${enc(a.chat)}/page/withdraw`, { page_id: a.page }).catch(() => {})
+      return attach(a)
+    }
   }
+}
+
+/**
+ * Make the runner ready, then say this window is the chat's page and take its calls. Until the
+ * runner is there nothing is announced; where it cannot be made (the files could not be fetched
+ * or did not verify) it is tried again, each time after longer, and nothing is shown: the chat
+ * works as it does without a page here. Python off (409) ends it.
+ */
+async function attach(a) {
+  let pause = 2000
+  while (!a.stopped) {
+    try {
+      // Behind what is queued: the frame of the chat before is thrown away first.
+      await nextCall
+      if (a.stopped) return
+      await frame()
+      break
+    } catch (err) {
+      if (err?.status === 409) return stop(a)
+      await wait(pause)
+      pause = Math.min(pause * 2, 60000)
+    }
+  }
+  if (a.stopped) return
+  announce(a)
+  a.timer = setInterval(() => announce(a), ANNOUNCE_EVERY)
+  loop(a)
 }
 
 /**
@@ -208,6 +303,8 @@ async function loop(a) {
 export function pythonFor(chat) {
   const want = chat?.id && chat.kind === "chat" && !chat.archived && pythonOffered() ? chat.id : ""
   if (attached?.chat === want && !attached?.stopped) return
+  // Another chat's page, or none: what the chat before ran is not kept for the next.
+  fresh(!want)
   if (attached) {
     const old = attached
     attached = null
@@ -219,11 +316,9 @@ export function pythonFor(chat) {
   if (!want) return
   const a = { chat: want, page: pageId(), stopped: false, timer: 0 }
   attached = a
-  // The frame is made ready in the background: the first call waits for it, the chat does not.
-  frame().catch(() => {})
-  announce(a)
-  a.timer = setInterval(() => announce(a), ANNOUNCE_EVERY)
-  loop(a)
+  // The runner is made ready in the background; the chat does not wait for it, and the window
+  // is announced as its page only once it is there.
+  attach(a)
 }
 
 export function initPython(context) {

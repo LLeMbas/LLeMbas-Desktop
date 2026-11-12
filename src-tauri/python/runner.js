@@ -51,8 +51,13 @@ function run(request) {
     w.onmessage = (event) => {
       const data = event.data || {}
       if (data.type !== "result" || data.call_id !== request.call_id) return
-      const cap = Number(limits.output_chars) || 20000
-      finish({ stdout: String(data.stdout || "").slice(0, cap), result: data.result ?? null, error: data.error || "", files: data.files || [] })
+      // Held to the call's limits here, and again by the app's page: what was printed, the
+      // value and the error to `output_chars`; only the files the call asked to save.
+      const cap = Math.max(1, Number(limits.output_chars) || 20000)
+      const cut = (v) => String(v).slice(0, cap)
+      const wanted = new Set((request.save || []).map(String))
+      const files = (Array.isArray(data.files) ? data.files : []).filter((f) => f && typeof f.path === "string" && typeof f.content_b64 === "string" && wanted.delete(f.path))
+      finish({ stdout: cut(data.stdout || ""), result: data.result === null || data.result === undefined ? null : cut(data.result), error: cut(data.error || ""), files })
     }
     w.postMessage({ type: "run", request })
   })
@@ -79,5 +84,21 @@ window.addEventListener("message", async (event) => {
   }
 })
 
-// Here, and what it will load: the app waits for this before it says the chat has a runner.
-window.parent.postMessage({ type: "ready", version }, "*")
+// A frame is made new for every chat, and nothing of the one before may be found by it: what
+// code may have put in this origin's own storage (IndexedDB, caches) is cleared before the app
+// is told the runner is here. Pyodide itself keeps its files in memory only.
+async function forget() {
+  try {
+    for (const db of (await indexedDB.databases?.()) || []) if (db.name) indexedDB.deleteDatabase(db.name)
+  } catch {}
+  try {
+    for (const key of await caches.keys()) await caches.delete(key)
+  } catch {}
+}
+
+// Only as a frame of the app's page: opened as a page of its own, it does nothing.
+if (window.parent !== window) {
+  // Here, and what it will load. The app's page announces itself to the server as the chat's
+  // page only after this arrives; Pyodide itself is loaded by the worker at the first call.
+  forget().finally(() => window.parent.postMessage({ type: "ready", version }, "*"))
+}
