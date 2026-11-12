@@ -12,7 +12,7 @@ All notable changes to LLeMbas Desktop. The format follows
   interface has. Computer, folder and mode are three chips of the header's family on one line
   directly above the message box, each opening its menu upward -- no longer split between the
   header's title (computer, folder) and its settings (mode). A long computer name or path gives
-  with an ellipsis (the whole of it in the tooltip); the mode is never cut. Where the bar is
+  with an ellipsis (the whole of a longer one behind Details); the mode is never cut. Where the bar is
   narrower than 30rem it is one summary chip across it -- "studio · project · Edit" -- that
   opens the three as a column above it, each with its label in front; choosing closes it. The
   computer is always said, also where it is the only one linked. An open agent chat is unchanged:
@@ -31,7 +31,7 @@ All notable changes to LLeMbas Desktop. The format follows
   a call (the plan's own) is not drawn; a call still "running" in a reply that has ended is shown
   failed, never left spinning. What you opened stays open while the reply is written.
 - **How a reply that did not finish ended stays on it**: `Stopped: by you`, `Stopped: step
-  limit`, `Stopped`, or `Failed:` with the error's first line (the whole of it in the tooltip) --
+  limit`, `Stopped`, or `Failed:` with the error's first line (the whole of a longer one behind Details) --
   one line under the reply, in place of the raw error and "Stopped.".
 - **The progress texts and the display rules are the specification's own.** `ui/js/spec.js` is
   written by `scripts/fetch-spec.sh` from the CLI's `harness/loop.json` (3.7.0), with the

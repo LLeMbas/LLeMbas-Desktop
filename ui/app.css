@@ -1514,6 +1514,11 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   .target[data-open="true"] .target__chips .cchip__chev { justify-self: end; }
 }
 
+/* A touch screen: every chip of the bar is a thumb's height. */
+@media (pointer: coarse) {
+  .target .cchip { min-height: var(--tap-min); }
+}
+
 /* Files dragged over the window: where they will go, over the whole composer. */
 .composer__drop { display: none; }
 .composer[data-drag="true"] .composer__drop {

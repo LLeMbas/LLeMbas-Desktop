@@ -266,7 +266,7 @@ function control(frame) {
     say(frame.message || t("This terminal closed."), true)
     drop()
     offer(t("Reconnect"))
-    // CONTRACT (unpinned): at the limit the frame carries the person's open `shells`.
+    // At the limit the frame carries the person's open `shells` (fixture terminal_refused.json).
     if (Array.isArray(frame.shells)) drawShells(frame.shells)
   }
 }
@@ -336,14 +336,13 @@ const enc = encodeURIComponent
 
 /**
  * The account's open shells, and ending one.
- * CONTRACT (unpinned): `GET /terminals` -> { shells: [{ id, device, directory, seconds, chat,
- * watched }] } and `POST /terminals/{id}/end` -> 204, as the server's draft of these routes has
- * them (read in its working tree; the plan worded them `terminals` and DELETE, and no fixture is
- * pinned). A server without them answers 404, which is said.
+ * `GET /terminals` -> { shells: [{ id, device, directory, seconds, chat, watched }] } (fixture
+ * terminals.json) and `POST /terminals/{id}/end` -> 204. A server without them answers 404,
+ * which is said.
  */
 async function openShells() {
   const r = await get("/terminals")
-  const list = Array.isArray(r?.shells) ? r.shells : Array.isArray(r?.terminals) ? r.terminals : []
+  const list = Array.isArray(r?.shells) ? r.shells : []
   return list.filter((x) => x && typeof x.id === "string")
 }
 const endOne = (id) => post(`/terminals/${enc(id)}/end`)

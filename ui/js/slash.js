@@ -11,11 +11,10 @@
 // The menu is a box inside the composer card, placed by the card itself: its width, directly
 // above it (app.css `.cmenu`). Nothing is measured, so it is where the card is at any width.
 //
-// CONTRACT (unpinned): the three reads and the one write below are the server's `/api/v2` menu
-// routes as its draft has them (`api/v2/menus.py`, read in the server's working tree before it
-// was committed); no fixture of them is pinned in tests/ui/fixtures yet. Each is marked
-// `CONTRACT` where it is called. A server without them answers 404: the device's and the
-// server's groups are then simply absent.
+// The three reads and the one write below are the server's `/api/v2` menu routes; their answers
+// are pinned in tests/ui/fixtures (device_commands, device_files, mentions, mentions_url,
+// attachment_from). Each is marked `CONTRACT` where it is called. A server without them answers
+// 404: the device's and the server's groups are then simply absent.
 
 import { $, h, clear, icon, ICONS } from "./dom.js"
 import { get, post } from "./bridge.js"
