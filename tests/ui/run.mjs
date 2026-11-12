@@ -2456,10 +2456,10 @@ test("P2: something to do on the phone is said, and can be declined; every card'
 })
 
 const DIFF = "--- a/README.md\n+++ b/README.md\n@@ -1,3 +1,4 @@\n # Lembas\n-One bite.\n+One small bite\n+is enough.\n keeps\n"
-const call = (over = {}) => ({ id: "t1", name: "bash", status: "ok", args: { command: "bun test\n--bail" }, text: "12 pass", block: { kind: "shell", title: "bun test", chips: ["exit 0"], added: 0, removed: 0 }, ...over })
+const call = (over = {}) => ({ id: "t1", name: "bash", status: "ok", args: { command: "bun test\n--bail" }, text: "12 pass", block: { kind: "shell", title: "bun test", chips: [], added: 0, removed: 0 }, ...over })
 const CALLS = [
   call({ exit: 0 }),
-  call({ id: "t2", name: "edit", args: { path: "README.md" }, text: "", diff: DIFF, block: { kind: "edit", title: "README.md", chips: ["+2", "−1"], added: 2, removed: 1 } }),
+  call({ id: "t2", name: "edit", args: { path: "README.md" }, text: "", diff: DIFF, block: { kind: "edit", title: "README.md", chips: ["+2 −1"], added: 2, removed: 1 } }),
   call({ id: "t3", status: "error", exit: 2, error: "exit status 2\nmake: *** [all] Error 2", args: { command: "make" }, text: "", block: { kind: "shell", title: "make", chips: ["exit 2"], added: 0, removed: 0 } }),
   call({ id: "t4", name: "grep", args: { pattern: "TODO", path: "src" }, text: "", hits: 1400, block: { kind: "search", title: "TODO", chips: ["1400 hits"], added: 0, removed: 0 } }),
   call({ id: "t5", name: "todo_write", args: {}, text: "", block: { kind: "hidden", title: "", chips: [], added: 0, removed: 0 } }),
@@ -2528,6 +2528,51 @@ test("P2: while a reply is written a call runs, then is done; what the person op
   assert.deepEqual(p.errors, [])
 })
 
+test("P2: the server's own fixtures: its steps and the call running in its tail, a failed and a stopped reply's last line, and a call that may only be allowed once", async () => {
+  // While it is written: event_steps.json's finished call, event_tail.json's running one.
+  let p = await page(agentChatOpen([["steps", fixture("event_steps")], ["tail", fixture("event_tail")]]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live .msg__running .call.is-running")
+  const done = fixture("event_steps").steps.find((x) => x.kind === "tools").calls[0]
+  const runs = fixture("event_tail").calls[0]
+  let rows = await callRows(p, ".msg.is-live")
+  assert.deepEqual(rows.map((r) => [r.state, r.name, r.title, r.facts]), [["done", done.block.label, done.block.title, [done.block.duration]], ["running", runs.block.label, runs.block.title, []]], "the server's label, title and duration; no exit 0; nothing timed while it runs")
+  // Opened by the person, it stays open as the tail comes again; gone from the tail, it is gone.
+  await p.click(".msg.is-live .msg__running .call__head")
+  await p.evaluate(([path, f]) => window.__mock.frame(path, "tail", f), [STREAM2, fixture("event_tail")])
+  assert.ok(await p.$eval(".msg.is-live .msg__running .call", (x) => x.open))
+  await p.evaluate(([path, f]) => window.__mock.frame(path, "tail", { ...f, calls: [] }), [STREAM2, fixture("event_tail")])
+  await p.waitForSelector(".msg.is-live .msg__running", { state: "hidden" })
+  assert.deepEqual(p.errors, [])
+  await p.context().close()
+  // Stored: message_failed.json and message_stopped.json, their `end` as the line that stays.
+  const failed = fixture("message_failed")
+  const stopped = { ...fixture("message_stopped"), id: "msg6" }
+  p = await page({ status: status(), routes: baseRoutes({ "GET /chats/chat2": { chat: agentChat(), messages: [userMessage("m1", "Tidy the build"), failed, stopped], more: false, live: null }, "GET /models?chat=chat2": models() }), streams: {} })
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#messages .msg__end")
+  assert.deepEqual(await p.$$eval("#messages .msg__end", (l) => l.map((x) => x.textContent)), [failed.end.text, stopped.end.text])
+  rows = await callRows(p)
+  const calls = failed.steps.find((x) => x.kind === "tools").calls
+  assert.deepEqual(rows.map((r) => r.state), calls.map((c) => c.block.state))
+  const slow = calls.findIndex((c) => c.block.duration)
+  assert.ok(rows[slow].facts.includes(calls[slow].block.duration), `the server's duration as it wrote it: ${rows[slow].facts}`)
+  assert.deepEqual(p.errors, [])
+  await p.context().close()
+  // event_ask.json: `always` says whether Always allow is offered; absent offers it (the first P2 test).
+  const cards = fixture("event_ask").cards.filter((c) => c.kind === "approval")
+  assert.ok(cards.length && cards.every((c) => c.items[0].always === true))
+  for (const always of [true, false]) {
+    const card = { ...cards[0], items: cards[0].items.map((i) => ({ ...i, always })) }
+    p = await page(agentChatOpen([["ask", { cards: [card] }]]))
+    await openChatRow(p, "chat2")
+    await p.waitForSelector("#cards .ask")
+    assert.deepEqual(await actionWords(p), always ? ["Allow once", "Always allow", "Deny", "Deny, and say why"] : ["Allow once", "Deny", "Deny, and say why"])
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
 test("P2: how a reply that did not finish ended stays on it: Stopped, with the reason where one is known, or Failed with the error", async () => {
   // From what is stored: stopped, and failed with a long error -- its first line, once.
   let p = await page(p2calls({ stopped: true, steps: [{ index: 0, kind: "text", open: true, markdown: "Half an ans" }] }))
@@ -2538,6 +2583,9 @@ test("P2: how a reply that did not finish ended stays on it: Stopped, with the r
   await openChatRow(p, "chat2")
   assert.equal(await p.textContent(".msg--assistant .msg__end.is-failed"), "Failed: 502 Bad Gateway")
   assert.equal(await p.locator(".msg--assistant .msg__note.is-error").count(), 0, "the raw error is not printed beside it")
+  // The whole of it is behind Details, closed.
+  assert.equal(await p.$eval(".msg--assistant .msg__error", (x) => x.open), false)
+  assert.equal(await p.textContent(".msg--assistant .msg__error pre"), "502 Bad Gateway\nupstream said no")
   await p.context().close()
   // Live: the stream's last progress says why, and the line stays when the reply is done.
   p = await page(agentChatOpen([["status", { text: "Writing…" }]]))

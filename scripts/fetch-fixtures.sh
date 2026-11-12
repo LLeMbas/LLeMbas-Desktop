@@ -17,7 +17,7 @@ FILES="chat_agent.json event_ask.json event_status.json event_status_idle.json e
 event_status_stopped.json event_tree.json models_agent.json subagent_findings.json subagent_transcript.json tree.json
 me.json folders.json folder.json search.json memories.json memory.json scope.json push_schedule.json push_schedule_failed.json
 apps.json apps_stable.json event_schedules.json schedule.json schedule_on_device.json schedule_run.json chat.json chats_listed.json files_listing.json
-event_done.json event_done_title_pending.json event_title.json
+event_done.json event_done_title_pending.json event_title.json event_steps.json event_tail.json message_failed.json message_stopped.json
 mentions.json mentions_url.json device_commands.json device_files.json attachment_from.json
 devices.json terminals.json terminal_ready.json terminal_refused.json
 python_state.json python_call.json python_result.json"

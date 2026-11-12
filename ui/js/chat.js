@@ -388,7 +388,12 @@ function assistantMessage(m, chat, last = null) {
   renderSteps(steps, m.steps || [], chat)
   el.append(steps)
   const end = endOf(m, last)
-  if (end) el.append(h("p", { class: `msg__end is-${end.phase}`, title: m.error && end.phase === "failed" ? String(m.error) : null, text: endLine(end) }))
+  if (end) {
+    el.append(h("p", { class: `msg__end is-${end.phase}`, text: endLine(end) }))
+    // The line is the error's first line; the whole of a longer one is behind Details, not in a tooltip.
+    const whole = end.phase === "failed" && m.error ? String(m.error).trim() : ""
+    if (whole.includes("\n")) el.append(h("details", { class: "msg__error" }, h("summary", { text: t("Details") }), h("pre", { class: "call__pre", text: whole })))
+  }
   const meta = metricsLine(m.metrics)
   const model = m.model ? ctx.models().find((x) => x.id === m.model) || { id: m.model, name: m.model } : null
   el.append(
@@ -514,12 +519,15 @@ function toolCall(c, chat, live, key) {
   if (kind === "edit") {
     const n = block.added || block.removed ? { added: block.added || 0, removed: block.removed || 0 } : typeof c.diff === "string" && c.diff ? diffCounts(c.diff) : null
     if (n) facts.push(h("span", { class: "call__fact call__change", title: changeText(n) }, h("span", { class: "is-add", text: `+${count(n.added)}` }), " ", h("span", { class: "is-del", text: `−${count(n.removed)}` })))
-  } else if (kind === "shell" || (kind === "search" && typeof c.hits === "number")) {
+  } else if ((kind === "shell" && typeof c.exit === "number") || (kind === "search" && typeof c.hits === "number")) {
+    // From the call's own numbers, so a count is written as the page's language writes it.
     for (const f of callFacts({ block: kind, exit: c.exit, hits: c.hits })) facts.push(h("span", { class: `call__fact${kind === "shell" ? " is-bad" : ""}`, text: f }))
   } else {
     for (const x of block.chips || []) facts.push(h("span", { class: "call__fact", text: x }))
   }
-  const took = callDuration(state, block.duration_ms ?? c.duration_ms ?? c.ms)
+  // How long it took: the server's own word (`block.duration`, written the one way), else from
+  // the call's milliseconds; none while it runs or where it was not run.
+  const took = callDuration(state, 0) === null ? null : typeof block.duration === "string" && block.duration ? block.duration : callDuration(state, c.ms ?? block.duration_ms ?? c.duration_ms)
   const why = state === "failed" || state === "denied" ? firstLine(c.error || c.reason || "") : ""
   const body = h("div", { class: "call__body" })
   if (c.purpose) body.append(h("p", { class: "muted", text: c.purpose }))
@@ -585,7 +593,8 @@ class Live {
     this.thinking = h("p", { class: "msg__thinking muted" })
     this.status = h("p", { class: "msg__status muted", text: t("Writing…") })
     this.jobs = h("ul", { class: "msg__jobs", hidden: true })
-    this.el = h("article", { class: "msg msg--assistant is-live", dataset: { id: messageId } }, this.steps, this.thinking, this.tail, this.jobs, this.status)
+    this.calls = h("div", { class: "step step--tools msg__running", hidden: true })
+    this.el = h("article", { class: "msg msg--assistant is-live", dataset: { id: messageId } }, this.steps, this.thinking, this.tail, this.calls, this.jobs, this.status)
     this.done = false
     this.handle = null
     this.progress = null // the stream's `progress` (spec 3.4.0), drawn in place of `status` when it comes
@@ -701,6 +710,13 @@ class Live {
     this.thinking.textContent = tail.thinking ? `${t("Thinking")} ${tail.label || ""}…` : ""
     this.thinking.hidden = !tail.thinking
     clear(this.tail).append(markdown(tail.text || ""))
+    // The calls running right now (`tail.calls`), drawn as finished ones are; what the person
+    // opened stays open as the frames come again.
+    const calls = Array.isArray(tail.calls) ? tail.calls : []
+    const was = new Set([...this.calls.querySelectorAll("details[open]")].map((d) => d.dataset.key))
+    this.calls.replaceChildren(...calls.map((c, i) => toolCall(c, this.chat, true, `tail.${c.id || i}`)).filter(Boolean))
+    for (const d of this.calls.querySelectorAll("details")) if (was.has(d.dataset.key)) d.open = true
+    this.calls.hidden = !this.calls.childElementCount
   }
 
   end(err) {
@@ -899,9 +915,12 @@ function cardOf(chat, card) {
       btn(t("Dismiss"), () => send("deny")),
     )
   } else if (kind === "approval") {
-    actions.append(
+    append(
+      actions,
       btn(t(ACTIONS.approval.once), () => send("allow"), "btn--primary"),
-      btn(t(ACTIONS.approval.always), () => send("allow_always")),
+      // "Always allow" only where the server offers it (`always` on the item; a server that
+      // does not say offers it): a call that may only ever be allowed once has none.
+      card.items.some((i) => i.always === false) ? null : btn(t(ACTIONS.approval.always), () => send("allow_always")),
       btn(t(ACTIONS.approval.deny), () => send("deny")),
       btn(t(ACTIONS.approval.deny_reason), () => explain({ label: t("Why not, and what to do instead"), placeholder: t("Why not, and what to do instead…"), sendLabel: t(ACTIONS.approval.deny_reason), cls: "btn--danger" })),
     )

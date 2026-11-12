@@ -1,0 +1,85 @@
+{
+  "steps": [
+    {
+      "index": 0,
+      "kind": "thinking",
+      "open": false,
+      "text": "The reader wants a recipe.",
+      "label": "for 1 second · 6 tokens"
+    },
+    {
+      "index": 0,
+      "kind": "text",
+      "open": false,
+      "markdown": "Here is how it is made:\n\n```sh\nbake --slow\n```\n"
+    },
+    {
+      "index": 0,
+      "kind": "tools",
+      "open": false,
+      "calls": [
+        {
+          "id": "call1",
+          "name": "bash",
+          "kind": "shell",
+          "status": "ok",
+          "args": {
+            "command": "bake --slow"
+          },
+          "purpose": "Bake one loaf",
+          "text": "baked\n",
+          "exit": 0,
+          "ms": 2412,
+          "block": {
+            "kind": "shell",
+            "title": "bake --slow",
+            "chips": [],
+            "added": 0,
+            "removed": 0,
+            "state": "done",
+            "duration": "2.4s",
+            "label": "Bash"
+          }
+        }
+      ]
+    },
+    {
+      "index": 0,
+      "kind": "steer",
+      "open": false,
+      "messages": [
+        {
+          "id": "msg9",
+          "text": "and add honey"
+        }
+      ]
+    }
+  ],
+  "tail": {
+    "thinking": "",
+    "text": "Done. *Wrap",
+    "label": "4s",
+    "calls": [
+      {
+        "id": "call9",
+        "name": "bash",
+        "status": "running",
+        "args": {
+          "command": "bake --test",
+          "description": "Try it"
+        },
+        "results": [],
+        "block": {
+          "kind": "shell",
+          "title": "bake --test",
+          "chips": [],
+          "added": 0,
+          "removed": 0,
+          "state": "running",
+          "duration": "",
+          "label": "Bash"
+        }
+      }
+    ]
+  }
+}

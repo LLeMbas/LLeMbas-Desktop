@@ -104,6 +104,15 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ### Fixed
 
+- **Nothing asks the server again as fast as it answers.** A `python` poll answered with nothing
+  at once waits before the next (1 s, doubling to 30 s); an activity stream that closes as soon as
+  it opens is opened again more slowly each time; a reply whose stream keeps ending without its
+  end is read again three times, then says the connection was lost, with Read again.
+- **"Always allow" only where it may be.** An approval the server says can only be allowed once
+  (`always: false`) offers Allow once, Deny and Deny, and say why.
+- **The calls running right now are drawn while a reply is written** (the stream's `tail.calls`),
+  as finished ones are; a call's time is the server's own word for it. A failed reply's whole
+  error is behind Details under its last line, not in a tooltip.
 - **The Terminal panel did not open once Settings had been visited.** The switch "Let the server
   open a terminal here" in Settings had the panel's own id, so after Settings was drawn every
   later attempt to show the panel showed or hid that switch instead, and no shell was opened

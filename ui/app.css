@@ -717,6 +717,9 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 /* How a reply that did not finish ended: one line under it, stopped muted, failed in the warning. */
 .msg__end { font: var(--text-sm) var(--font-ui); color: var(--ink-muted); }
 .msg__end.is-failed { color: var(--warning); }
+.msg__error { font: var(--text-sm) var(--font-ui); color: var(--ink-muted); }
+.msg__error > summary { cursor: pointer; min-height: var(--control-h-sm); display: flex; align-items: center; }
+.msg__error > .call__pre { margin-top: var(--sp-1); }
 .call__body { display: grid; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3) var(--sp-3); border-top: var(--border-w) solid var(--border); font-size: var(--text-sm); line-height: var(--leading-normal); }
 .call__pre, .md-code pre {
   margin: 0;
