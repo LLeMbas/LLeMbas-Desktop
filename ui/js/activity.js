@@ -210,6 +210,7 @@ async function listenTo(id) {
   stream = pending
   let ended = false
   let handleId = null
+  const opened = Date.now()
   try {
     const handle = await follow(`/chats/${enc(id)}/activity/events`, {
       onFrame: (event, frame) => {
@@ -225,14 +226,18 @@ async function listenTo(id) {
         if (stream === pending || stream?.id === handleId) stream = null
         // Not while the window is hidden (in the tray): it is opened again when it shows.
         if (document.visibilityState === "hidden") return
-        failures = err ? failures + 1 : 0
+        // A stream the server closed in its own time is opened again at once; one that closed
+        // as soon as it was opened (a proxy that does not hold it) counts as broken, or opening
+        // it again at once would be a loop as fast as the server answers.
+        const broken = !!err || Date.now() - opened < 5000
+        failures = broken ? failures + 1 : 0
         retry = setTimeout(() => {
           retry = 0
           if (chat?.id === id && !stream) {
             if (err && panelOpen()) read(false)
             listenTo(id)
           }
-        }, err ? Math.min(60000, 5000 * failures) : 500)
+        }, broken ? Math.min(60000, 5000 * failures) : 500)
       },
     })
     handleId = handle.id

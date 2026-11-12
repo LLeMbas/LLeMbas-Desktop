@@ -18,8 +18,9 @@
 //            `terminal_open` fail; `terminalDelay` (ms) makes it slow to answer.
 //   python   { url, version } -- where `python_prepare` says the `python` tool's runner frame is.
 //   takes    { "/chats/c1/page/take": [call, …] } -- what a runner's long poll is handed, one
-//            call a poll, each poll answered after `takeDelay` ms (the server holds one 25 s);
-//            with none left it answers nothing (204). `__mock.call(path, call)` queues another.
+//            call a poll, each answered after `takeDelay` ms; with none left the poll is held
+//            as the server holds it (`takeHold` ms, 25 s unless said), then answered with
+//            nothing (204). `__mock.call(path, call)` queues another and lets a held poll go.
 //
 // Nothing here talks to a network: the page's policy allows it none, and this keeps it so.
 ;(function () {
@@ -36,6 +37,7 @@
   }
 
   const held = [] // [{ key, go }] answers waiting for `release`
+  const polls = new Set() // long polls held with nothing to hand over: { bare, go }
 
   function route(method, path) {
     if ((config.hold || []).includes(`${method} ${path}`)) {
@@ -47,10 +49,17 @@
   function answer(method, path) {
     const routes = config.routes || {}
     const bare = path.split("?")[0]
-    // A runner's long poll: the next queued call, or nothing, after a moment (never at once: a
-    // poll answered instantly with nothing is a loop as fast as the bridge).
+    // A runner's long poll: the next queued call after a moment, or -- with none queued -- held
+    // as the server holds it (`takeHold` ms, 25 s unless said) and then answered with nothing.
+    // A call queued meanwhile (`__mock.call`) or a changed answer (`__mock.answer`) lets it go.
     if (method === "GET" && config.takes && Object.prototype.hasOwnProperty.call(config.takes, bare) && !Object.prototype.hasOwnProperty.call(routes, `GET ${bare}`)) {
-      return new Promise((resolve) => setTimeout(() => resolve(JSON.parse(JSON.stringify(config.takes[bare].shift() ?? null))), config.takeDelay ?? 50))
+      const next = () => JSON.parse(JSON.stringify(config.takes[bare].shift() ?? null))
+      if (config.takes[bare].length) return new Promise((resolve) => setTimeout(() => resolve(next()), config.takeDelay ?? 50))
+      return new Promise((resolve) => {
+        const poll = { bare, go: () => (clearTimeout(timer), polls.delete(poll), resolve(answer(method, path))) }
+        const timer = setTimeout(() => (polls.delete(poll), resolve(null)), config.takeHold ?? 25000)
+        polls.add(poll)
+      })
     }
     for (const key of [`${method} ${path}`, `${method} ${bare}`]) {
       if (Object.prototype.hasOwnProperty.call(routes, key)) {
@@ -180,10 +189,12 @@
     call(path, request) {
       config.takes = config.takes || {}
       ;(config.takes[path] = config.takes[path] || []).push(request)
+      for (const poll of [...polls]) if (poll.bare === path) poll.go()
     },
     /** Change the server's answer for a route from now on. */
     answer(key, value) {
       config.routes[key] = value
+      for (const poll of [...polls]) if (key === `GET ${poll.bare}`) poll.go()
     },
     frame,
     emit: dispatch,

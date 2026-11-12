@@ -138,6 +138,8 @@ async function run(request) {
 // --- Being the chat's page ---------------------------------------------------------------------------
 
 const wait = (ms) => new Promise((done) => setTimeout(done, ms))
+/** A poll answered with nothing sooner than this (ms) was not held by the server. */
+const QUICK = 1000
 
 function announce(a) {
   if (a.stopped) return
@@ -160,8 +162,10 @@ function stop(a) {
  */
 async function loop(a) {
   let retry = 2000
+  let quiet = QUICK
   while (!a.stopped) {
     let request
+    const asked = Date.now()
     try {
       request = await get(`/chats/${enc(a.chat)}/page/take?page=${a.page}`)
       retry = 2000
@@ -180,7 +184,18 @@ async function loop(a) {
       }
       continue
     }
-    if (!request || typeof request.call_id !== "string") continue
+    if (!request || typeof request.call_id !== "string") {
+      // Nothing to run. The server holds a poll for a while before saying so; an answer that
+      // came at once (a proxy that does not hold it, a server that changed its mind) is not
+      // asked again at once -- that would be a loop as fast as the bridge -- but after a pause
+      // that grows while it goes on.
+      if (Date.now() - asked < QUICK) {
+        await wait(quiet)
+        quiet = Math.min(quiet * 2, 30000)
+      } else quiet = QUICK
+      continue
+    }
+    quiet = QUICK
     const result = await (nextCall = nextCall.then(() => run(request)))
     await post(`/chats/${enc(a.chat)}/page/answer`, { page_id: a.page, call_id: request.call_id, result }).catch(() => {})
   }

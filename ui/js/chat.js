@@ -669,6 +669,7 @@ class Live {
         break
       case "done":
         this.done = true
+        ended = { id: "", n: 0 }
         this.stopClock()
         // How it ended (stopped, failed) stays on the reply: the stream's last progress says why.
         this.el.replaceWith(assistantMessage(data.message, this.chat, this.progress))
@@ -708,6 +709,14 @@ class Live {
     this.stopClock()
     if (open?.live === this) open.live = null
     setRunning(false)
+    // A stream that ends without `done` is read again -- but a reply whose stream keeps ending
+    // so (the chat still says it is being written, the stream closes as it opens) would be read
+    // and followed in a loop as fast as the server answers: after a few times it is said, and
+    // the person reads again.
+    if (!err) {
+      ended = ended.id === this.id ? { id: this.id, n: ended.n + 1 } : { id: this.id, n: 1 }
+      if (ended.n > 3) err = { detail: t("The connection was lost.") }
+    }
     if (err) {
       this.status.textContent = t("The connection to the reply was lost: %(why)s", { why: why(err) })
       this.status.classList.add("is-error")
@@ -725,6 +734,9 @@ function setRunning(on) {
   $("stop").hidden = !on
   $("composer").dataset.running = String(on)
 }
+
+/** The reply whose stream last ended without `done`, and how many times running. */
+let ended = { id: "", n: 0 }
 
 function follower(chat, messageId) {
   if (open?.live) open.live.stop()

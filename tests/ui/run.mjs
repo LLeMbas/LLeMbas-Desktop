@@ -193,9 +193,14 @@ function baseRoutes(over = {}) {
 // --- The browser --------------------------------------------------------------------------------
 
 let browser
+// Every context a test opens, closed after the test whether it passed or not: a failed test used
+// to leave its pages alive, their timers running, for the rest of the run.
+const opened = new Set()
 
 async function page(config, { width = 1280, height = 860, clock = false, wait = "#shell:not([hidden])", lang = "" } = {}) {
   const context = await browser.newContext({ viewport: { width, height } })
+  opened.add(context)
+  context.on("close", () => opened.delete(context))
   const p = await context.newPage()
   // The page's own timers, moved on by the test (`p.clock.fastForward`) rather than waited for.
   if (clock) await p.clock.install()
@@ -2706,6 +2711,20 @@ test("P2: a reply is finished at `done`; the name a model gives the chat afterwa
   assert.deepEqual(p.errors, [])
 })
 
+test("P2: a reply whose stream keeps ending without `done` is not read and followed for ever: after a few times it says so, with Read again", async () => {
+  // The chat says a reply is being written; its stream closes as soon as it is opened.
+  const p = await page(agentChatOpen([["end", null]]))
+  await p.click('.chatrow[data-id="chat2"]')
+  await p.waitForSelector(".msg.is-live .btn")
+  assert.match(await p.textContent(".msg.is-live"), /The connection to the reply was lost/)
+  const opens = () => p.evaluate((path) => window.__mock.calls.filter((c) => c.cmd === "stream_open" && c.args.path === path).length, STREAM2)
+  const n = await opens()
+  assert.ok(n >= 2 && n <= 4, `followed a few times, then no more (${n})`)
+  await p.waitForTimeout(400)
+  assert.equal(await opens(), n, "it stays stopped")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- S3: the composer's `/` and `@` menus -----------------------------------------------------------
 //
 // The server's menu routes, by its own fixtures (tests/ui/fixtures, pinned by
@@ -3554,6 +3573,24 @@ test("PY: announced again every 20 s; a page the server forgot announces itself 
   assert.deepEqual(p.errors, [])
 })
 
+test("PY: a poll answered with nothing at once is not asked again at once: the pause grows, and a call still gets through", async () => {
+  // A bridge that does not hold the poll (`takeHold: 0`): without a pause this is a loop as fast as it answers.
+  const cfg = py()
+  cfg.takeHold = 0
+  const p = await page(cfg, { clock: true })
+  await openChatRow(p, "chat1")
+  const takes = () => p.evaluate(() => window.__mock.api("GET", "/chats/chat1/page/take").length)
+  await runUntil(p, () => window.__mock.api("GET", "/chats/chat1/page/take").length >= 1)
+  const first = await takes()
+  await p.clock.runFor(16000)
+  const asked = (await takes()) - first
+  assert.ok(asked >= 2 && asked <= 5, `1 s, 2 s, 4 s, 8 s apart, not hundreds (${asked})`)
+  await p.evaluate(() => window.__mock.call("/chats/chat1/page/take", { call_id: "call7", code: "print late", files: [], save: [], limits: { seconds: 30, memory: 256, output_chars: 20000 } }))
+  await runUntil(p, () => window.__mock.api("POST", "/chats/chat1/page/answer").length === 1, 500, 80)
+  assert.equal((await pagePosts(p, "answer"))[0].call_id, "call7")
+  assert.deepEqual(p.errors, [])
+})
+
 test("PY: files that could not be fetched or did not verify are said in the call's answer, and tried afresh for the next", async () => {
   const p = await page(py({ python: { __error: { status: 0, detail: "pyodide.asm.wasm is not the file the server's list names: it was not kept." } }, calls: [pyCall()] }))
   await openChatRow(p, "chat1")
@@ -3793,20 +3830,34 @@ test("V4: every screen at 1920, 1280, 1024, 800 and 390 px, dark and light: noth
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""
-browser = await launch()
+// One browser process does not carry the whole run: it is replaced every few tests, so what a
+// test's pages held is given back to the system, not kept until the end.
+const RELAUNCH_EVERY = Number(process.env.RELAUNCH_EVERY || 8)
 let failed = 0
-for (const { name, fn } of tests) {
-  if (only && !name.includes(only)) continue
-  try {
-    await fn()
-    console.log(`ok   ${name}`)
-  } catch (err) {
-    failed++
-    console.log(`FAIL ${name}\n     ${String(err?.stack || err).split("\n").slice(0, 6).join("\n     ")}`)
-    // On GitHub Actions, also as an annotation: readable without the job's log.
-    if (process.env.GITHUB_ACTIONS) console.log(`::error title=tests/ui::${`${name}: ${String(err?.message || err)} (${String(err?.stack || "").match(/run\.mjs:\d+/)?.[0] || ""})`.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").slice(0, 900)}`)
+let ran = 0
+try {
+  for (const { name, fn } of tests) {
+    if (only && !name.includes(only)) continue
+    if (!browser || ran % RELAUNCH_EVERY === 0) {
+      await browser?.close().catch(() => {})
+      browser = await launch()
+    }
+    ran++
+    try {
+      await fn()
+      console.log(`ok   ${name}`)
+    } catch (err) {
+      failed++
+      console.log(`FAIL ${name}\n     ${String(err?.stack || err).split("\n").slice(0, 6).join("\n     ")}`)
+      // On GitHub Actions, also as an annotation: readable without the job's log.
+      if (process.env.GITHUB_ACTIONS) console.log(`::error title=tests/ui::${`${name}: ${String(err?.message || err)} (${String(err?.stack || "").match(/run\.mjs:\d+/)?.[0] || ""})`.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").slice(0, 900)}`)
+    } finally {
+      for (const context of [...opened]) await context.close().catch(() => {})
+      opened.clear()
+    }
   }
+} finally {
+  await browser?.close().catch(() => {})
 }
-await browser.close()
-console.log(failed ? `tests/ui: ${failed} failed` : "tests/ui: all passed")
-process.exit(failed ? 1 : 0)
+console.log(failed ? `tests/ui: ${failed} failed` : ran ? "tests/ui: all passed" : "tests/ui: no test matches")
+process.exit(failed || !ran ? 1 : 0)
