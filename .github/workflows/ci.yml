@@ -65,7 +65,20 @@ jobs:
       - name: The page under a headless browser
         env:
           NODE_PATH: ${{ runner.temp }}/pw/node_modules
-        run: node tests/ui/run.mjs
+          SHOTS: ${{ runner.temp }}/shots
+        # The run's time and the most memory it held are said at its end (GNU time).
+        run: |
+          mkdir -p "$SHOTS"
+          /usr/bin/time -f 'tests/ui: %e s, %M KB at most (the runner alone; its browsers are separate processes)' node tests/ui/run.mjs
+      # What the tests saw, as pictures: every screen at every width in both looks.
+      - name: The screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: ${{ runner.temp }}/shots
+          retention-days: 7
+          if-no-files-found: ignore
 
   # The app started for real: it must still be running after 25 seconds (timeout's 124), and its
   # log must not say it stopped. Once under Xvfb (X11) and once under a headless Weston (Wayland,
