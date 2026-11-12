@@ -116,15 +116,23 @@ function terminalBlock() {
       how: t("The Terminal can be opened as soon as it is linked again."),
     }
   }
-  // CONTRACT (unpinned): the server's own reason for this device, where `GET /devices` gives one.
-  const said = typeof device.terminal_reason === "string" ? device.terminal_reason.trim() : ""
+  // The server says which thing stands in the way (`terminal_reason`: permission, instance,
+  // unlinked, device) and what to do about it, in a sentence (`terminal_hint`). Where it is this
+  // computer's own switch, the way to it is here.
+  const hint = typeof device.terminal_hint === "string" ? device.terminal_hint.trim() : ""
+  const mine = here && (device.terminal_reason === "device" || !device.terminal_reason)
+  if (mine) {
+    return {
+      here,
+      off: true,
+      words: t("The terminal is switched off for this computer."),
+      how: t("Switch it on in Settings, under %(section)s: %(setting)s.", { section: t("Project folders"), setting: t("Let the server open a terminal here") }),
+    }
+  }
   return {
     here,
-    off: here,
-    words: said || (here ? t("The terminal is switched off for this computer.") : t("That computer does not open terminals for you.")),
-    how: here
-      ? t("Switch it on in Settings, under Agent: %(setting)s.", { setting: t("Let the server open a terminal here") })
-      : t("Switch it on there: in LLeMbas Desktop under Settings, Agent; or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator."),
+    words: hint || t("That computer does not open terminals for you."),
+    how: hint ? "" : t("Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator."),
   }
 }
 
@@ -159,8 +167,8 @@ function terminalControl() {
             { class: "pop__body" },
             h("p", { class: "pop__title", text: t("Terminal") }),
             h("p", { text: block.words }),
-            h("p", { class: "hint", text: block.how }),
-            block.off && ctx.nav?.settings ? h("div", { class: "pop__actions" }, h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Open Settings"), onclick: () => (closePopover(), ctx.nav.settings("agent")) })) : null,
+            block.how ? h("p", { class: "hint", text: block.how }) : null,
+            block.off && ctx.nav?.settings ? h("div", { class: "pop__actions" }, h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Open Settings"), onclick: () => (closePopover(), ctx.nav.settings("folders")) })) : null,
           ),
           { align: "end", label: t("Terminal") },
         ),
@@ -1081,10 +1089,12 @@ async function teamOffered(chat) {
 // new chat they say what it will start with; for an open one, changing one changes the chat.
 
 /** One chip: an icon or a lead (an avatar), its words, and a chevron when it opens a menu. */
-function chip({ ico, lead, label, title, onclick, menuish = true, cls = "", disabled = false }) {
+function chip({ ico, lead, label, title, onclick, menuish = true, cls = "", disabled = false, name = "" }) {
   return h(
     "button",
     { type: "button", class: `cchip ${cls}`, title: title || label, "aria-haspopup": menuish ? "menu" : null, disabled, onclick },
+    // What the chip is, in front of what it says: shown only where the bar's chips are a column.
+    name ? h("span", { class: "target__name", text: name }) : null,
     lead || (ico ? icon(ico) : null),
     h("span", { class: "cchip__label", text: label }),
     menuish ? h("span", { class: "cchip__chev" }, icon(ICONS.chevronDown)) : null,
@@ -1145,6 +1155,7 @@ function modeChip(value, onChange, disabled) {
     label: modeName(value),
     title: `${t("Mode")}: ${MODE_WORDS[value]?.() || value}`,
     cls: "cchip--mode",
+    name: t("Mode"),
     disabled,
     onclick: (e) => menu(e.currentTarget, MODES.map((m) => ({ label: MODE_WORDS[m](), checked: m === value, run: () => m !== value && onChange(m) }))),
   })
@@ -1174,8 +1185,9 @@ function effortChip(model, value, onChange) {
   const words = (l) => (control === "switch" ? (l === "off" ? t("off") : t("Think before answering")) : levelWord(l))
   return chip({
     ico: ICONS.bulb,
-    label: control === "switch" ? (current === "off" ? t("off") : levelWord(current)) : levelWord(current),
-    title: `${t("Reasoning effort")}: ${levelWord(current)}`,
+    // A model with thinking on or off and nothing between: said as that, not as a level's name.
+    label: control === "switch" ? (current === "off" ? `${t("Thinking")}: ${t("off")}` : t("Thinking")) : levelWord(current),
+    title: control === "switch" ? `${t("Think before answering")}: ${current === "off" ? t("off") : levelWord(current)}` : `${t("Reasoning effort")}: ${levelWord(current)}`,
     cls: current === "off" ? "is-dim" : "",
     onclick: (e) => menu(e.currentTarget, levels.map((l) => ({ label: words(l), hint: control === "switch" && l !== "off" ? levelWord(l) : "", checked: l === current, run: () => l !== current && onChange(l) }))),
   })
@@ -1213,12 +1225,13 @@ function agentsChip(value, onChange, { cap, own } = {}) {
 
 /** The folder of a new agent chat: one of the agent's folders, or Add folder… where there is none. */
 function folderChip(roots, value, onChange) {
-  if (!roots.length) return chip({ ico: ICONS.folder, label: t("Add folder…"), menuish: false, cls: "cchip--folder is-warn", onclick: () => invoke("remote_add") })
+  if (!roots.length) return chip({ ico: ICONS.folder, label: t("Add folder…"), name: t("Folder"), menuish: false, cls: "cchip--folder is-warn", onclick: () => invoke("remote_add") })
   return chip({
     ico: ICONS.folder,
     label: folderName(value),
     title: `${t("Folder")}: ${value}`,
     cls: "cchip--folder",
+    name: t("Folder"),
     onclick: (e) =>
       menu(e.currentTarget, [
         ...roots.map((r) => ({ label: folderName(r), hint: r, checked: r === value, run: () => r !== value && onChange(r) })),
@@ -1237,6 +1250,7 @@ function deviceChip(others) {
   const current = deviceOf(draftDevice())
   const choose = (id) => {
     if (id === draftDevice()) return
+    closeTarget()
     draft.device = id
     const elsewhere = !ctx.thisDevices().includes(id)
     draft.dir = elsewhere ? knownFolders(id)[0] || "" : ""
@@ -1247,7 +1261,7 @@ function deviceChip(others) {
   const items = [{ label: t("This computer"), hint: ctx.status()?.host || "", checked: here, run: () => choose(hereDevice() || "") }]
   for (const d of others) items.push({ label: d.name || d.host || d.id, hint: [d.host, d.platform].filter(Boolean).join(" · "), checked: !here && current?.id === d.id, run: () => choose(d.id) })
   const label = deviceWord()
-  return chip({ ico: ICONS.terminal, label, title: `${t("Computer")}: ${label}`, cls: "cchip--device", onclick: (e) => menu(e.currentTarget, items) })
+  return chip({ ico: ICONS.terminal, label, name: t("Computer"), title: `${t("Computer")}: ${label}`, cls: "cchip--device", onclick: (e) => menu(e.currentTarget, items) })
 }
 
 /** The computer a new agent chat works on, in a word: this one, or the other's name. */
@@ -1258,11 +1272,19 @@ function deviceWord() {
 
 // --- Where a new agent chat works: one slim bar above the composer --------------------------------
 //
-// Computer · folder · mode, three chips of one family on one line, each opening its menu. The
-// line never scrolls and never cuts a chip off: the chips share its width (a long name gives way
-// with an ellipsis, its whole text in the title), and where the chat's column is narrow the three
-// fold into one summary chip -- "studio · project · Edit" -- which opens them, stacked, above it.
-// The fold is the column's width (a container query in app.css), not a measurement.
+// Computer · folder · mode, as the server's Working notes describe the bar the web interface and
+// this app both build ("The agent target bar"): three chips of the header's family on one line,
+// each opening its menu upward. The line never scrolls and never cuts a chip off: the mode is
+// its words' width, the two names give with an ellipsis (their whole text in the title). Where
+// the bar itself is narrow (a container query in app.css, not a measurement) the three are one
+// summary chip -- "studio · project · Edit" -- which opens them as a column above it, each with
+// its label in front; choosing, or pressing it again, closes them. Only before the chat exists:
+// once the first message is sent the three are facts, beside the title and in the settings.
+
+/** A choice was made in the folded bar's column: it closes, back to the one summary chip. */
+function closeTarget() {
+  $("chat-target").dataset.open = "false"
+}
 
 function renderTarget(chips, words) {
   const bar = $("chat-target")
@@ -1305,12 +1327,13 @@ function elsewhereFolderChip(device, value, onChange) {
     if (dir) onChange(dir)
   }
   const known = knownFolders(device)
-  if (!value && !known.length) return chip({ ico: ICONS.folder, label: t("Choose a folder…"), menuish: false, cls: "cchip--folder is-warn", onclick: type })
+  if (!value && !known.length) return chip({ ico: ICONS.folder, label: t("Choose a folder…"), name: t("Folder"), menuish: false, cls: "cchip--folder is-warn", onclick: type })
   return chip({
     ico: ICONS.folder,
     label: value ? folderName(value) : t("Choose a folder…"),
     title: value ? `${t("Folder")}: ${value}` : "",
     cls: `cchip--folder${value ? "" : " is-warn"}`,
+    name: t("Folder"),
     onclick: (e) =>
       menu(e.currentTarget, [
         ...known.map((r) => ({ label: folderName(r), hint: r, checked: r === value, run: () => r !== value && onChange(r) })),
@@ -1339,11 +1362,11 @@ async function renderChips() {
       if (draftHere()) {
         const roots = s?.remote?.enabled ? s.remote.roots : []
         if (!roots.includes(draft.dir)) draft.dir = roots[0] || ""
-        where.push(folderChip(roots, draft.dir, (d) => ((draft.dir = d), renderChips())))
+        where.push(folderChip(roots, draft.dir, (d) => ((draft.dir = d), closeTarget(), renderChips())))
       } else {
-        where.push(elsewhereFolderChip(draftDevice(), draft.dir, (d) => ((draft.dir = d), renderChips())))
+        where.push(elsewhereFolderChip(draftDevice(), draft.dir, (d) => ((draft.dir = d), closeTarget(), renderChips())))
       }
-      where.push(modeChip(draft.mode, (m) => ((draft.mode = m), renderChips())))
+      where.push(modeChip(draft.mode, (m) => ((draft.mode = m), closeTarget(), renderChips())))
       renderTarget(where, [
         { text: deviceWord() },
         { text: draft.dir ? folderName(draft.dir) : draftHere() ? t("Add folder…") : t("Choose a folder…"), cls: draft.dir ? "" : "is-warn" },

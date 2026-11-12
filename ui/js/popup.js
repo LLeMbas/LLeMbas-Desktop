@@ -81,7 +81,10 @@ export function menu(anchor, items) {
   el.style.width = `${width}px`
   el.style.left = `${Math.max(0, Math.min(at.left, window.innerWidth - width))}px`
   // Below the anchor where it fits, else above it (a chip under the message box opens upwards).
-  const above = at.top !== undefined && at.bottom + r.height > window.innerHeight && at.top - r.height >= 0
+  // A control that sits at the foot of the window by design (`data-menu-up` on it or what holds
+  // it: the bar above the composer) opens upward whenever there is room above.
+  const up = anchor instanceof Element && !!anchor.closest("[data-menu-up]")
+  const above = at.top !== undefined && at.top - r.height >= 0 && (up || at.bottom + r.height > window.innerHeight)
   el.style.top = above ? `${at.top - r.height}px` : `${Math.max(0, Math.min(at.bottom, window.innerHeight - r.height))}px`
   openMenu = { el, back: anchor instanceof Element ? anchor : document.activeElement }
   document.addEventListener("pointerdown", outside, true)

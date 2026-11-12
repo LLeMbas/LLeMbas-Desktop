@@ -442,9 +442,9 @@ async function boot() {
   // the computer links or the switch is turned, without the chat being opened again.
   setInterval(async () => {
     if (view !== "app" || page !== "chat" || document.visibilityState !== "visible" || !terminalWaiting()) return
-    const before = JSON.stringify(devices.map((d) => [d.id, d.terminal, d.terminal_reason]))
+    const before = JSON.stringify(devices.map((d) => [d.id, d.terminal, d.terminal_reason, d.terminal_hint]))
     await loadDevices()
-    if (JSON.stringify(devices.map((d) => [d.id, d.terminal, d.terminal_reason])) !== before) statusChanged()
+    if (JSON.stringify(devices.map((d) => [d.id, d.terminal, d.terminal_reason, d.terminal_hint])) !== before) statusChanged()
   }, DEVICES_EVERY)
   // The list keeps up with replies finished elsewhere (the web interface, the phone).
   setInterval(() => {

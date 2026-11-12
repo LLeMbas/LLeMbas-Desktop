@@ -194,7 +194,7 @@ function baseRoutes(over = {}) {
 
 let browser
 
-async function page(config, { width = 1280, height = 860, clock = false } = {}) {
+async function page(config, { width = 1280, height = 860, clock = false, wait = "#shell:not([hidden])", lang = "" } = {}) {
   const context = await browser.newContext({ viewport: { width, height } })
   const p = await context.newPage()
   // The page's own timers, moved on by the test (`p.clock.fastForward`) rather than waited for.
@@ -224,9 +224,11 @@ async function page(config, { width = 1280, height = 860, clock = false } = {}) 
   await p.addInitScript((c) => {
     window.__mockConfig = c
   }, config)
+  // Another language than the account's: chosen as Settings would keep it, before the page loads.
+  if (lang) await p.addInitScript((code) => localStorage.setItem("lembas.language", code), lang)
   await p.addInitScript({ path: join(HERE, "mock-tauri.js") })
   await p.goto(`${ORIGIN}/index.html`)
-  await p.waitForSelector("#shell:not([hidden])")
+  await p.waitForSelector(wait)
   p.errors = errors
   return p
 }
@@ -1059,7 +1061,8 @@ test("D4: with no other computer linked the bar still says the computer, its men
   await pickDevice(p, "studio")
   await p.waitForFunction(() => /studio/.test(document.querySelector("#target-chips .cchip--device")?.textContent || ""))
   assert.match(await p.textContent("#target-sum"), /studio.*site.*Edit/, "the summary says all three")
-  assert.equal(await p.getAttribute("#target-sum", "aria-expanded"), "true", "a choice keeps the three open")
+  assert.equal(await p.getAttribute("#target-sum", "aria-expanded"), "false", "choosing closes the column")
+  assert.ok(await p.isHidden("#target-chips"))
   assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
   await shot(p, "d4-device-390")
   assert.deepEqual(p.errors, [])
@@ -2213,12 +2216,40 @@ test("T1: at 1920, 1280, 1024, 800 and 390 px the bar's computer, folder and mod
       assert.ok(words.every(([, seen]) => seen), `${width}: ${JSON.stringify(words)}`)
       assert.equal(words[2][0], "Edit")
     }
+    if (folded) {
+      // The summary is across the bar; pressing it opens the three, pressing it again closes them.
+      const [sum, bar] = await p.evaluate(() => ["target-sum", "chat-target"].map((id) => { const el = document.getElementById(id); const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return { left: r.left, right: r.right, pl: parseFloat(cs.paddingLeft), pr: parseFloat(cs.paddingRight) } }))
+      assert.ok(Math.abs(sum.left - (bar.left + bar.pl)) < 1 && Math.abs(sum.right - (bar.right - bar.pr)) < 1, `${width}: the summary is the bar's width`)
+      await p.click("#target-sum")
+      await p.waitForSelector("#target-chips .cchip--device", { state: "visible" })
+      await p.click("#target-sum")
+      await p.waitForSelector("#target-chips", { state: "hidden" })
+    }
     await targetChips(p)
     // One family: the same height, on one line where they are side by side.
-    const boxes = await p.$$eval("#target-chips .cchip", (l) => l.map((x) => { const r = x.getBoundingClientRect(); return { h: r.height, top: r.top, cls: x.className } }))
+    const boxes = await p.$$eval("#target-chips .cchip", (l) => l.map((x) => { const r = x.getBoundingClientRect(); const v = x.querySelector(".cchip__label").getBoundingClientRect(); const n = x.querySelector(".target__name"); return { h: r.height, top: r.top, left: r.left, right: r.right, value: v.left, name: n.offsetParent ? n.textContent : "", cls: x.className } }))
     assert.equal(boxes.length, 3, `${width}: computer, folder, mode`)
     assert.equal(new Set(boxes.map((b) => b.h)).size, 1, `${width}: one height`)
-    if (!folded) assert.equal(new Set(boxes.map((b) => b.top)).size, 1, `${width}: one line`)
+    if (!folded) {
+      assert.equal(new Set(boxes.map((b) => b.top)).size, 1, `${width}: one line`)
+      assert.ok(boxes.every((b) => !b.name), `${width}: no labels in front on the line`)
+      // The names give at a chip's width; the mode is its words' width and never gives.
+      const rem = await p.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize))
+      assert.ok(boxes[0].right - boxes[0].left <= 12 * rem + 1 && boxes[1].right - boxes[1].left <= 16 * rem + 1, `${width}: the names are at most a chip wide`)
+    } else {
+      // A column: each the bar's width, its label in front, labels and values on shared tracks.
+      assert.deepEqual(boxes.map((b) => b.name), ["Computer", "Folder", "Mode"], `${width}: each says what it is`)
+      assert.equal(new Set(boxes.map((b) => Math.round(b.left))).size, 1, `${width}: one left edge`)
+      assert.equal(new Set(boxes.map((b) => Math.round(b.right))).size, 1, `${width}: one width`)
+      assert.equal(new Set(boxes.map((b) => Math.round(b.value))).size, 1, `${width}: the values start on one line`)
+      // A long name gives inside its chip: nothing of it runs past the chip, its chevron in place.
+      const inside = await p.$$eval("#target-chips .cchip", (l) => l.every((x) => { const r = x.getBoundingClientRect(); return [...x.children].every((c) => { const k = c.getBoundingClientRect(); return k.left >= r.left - 0.5 && k.right <= r.right + 0.5 }) }))
+      assert.ok(inside, `${width}: every part of a chip inside it`)
+    }
+    assert.ok(await p.$eval("#target-chips .cchip--mode .cchip__label", (x) => x.scrollWidth <= x.clientWidth + 1), `${width}: the mode is never cut`)
+    // Each chip is the thing a press at its centre lands on.
+    const hit = await p.$$eval("#target-chips .cchip", (l) => l.every((x) => { const r = x.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest(".cchip") === x }))
+    assert.ok(hit, `${width}: a press at a chip's centre lands on it`)
     assert.ok(await noSideways(p, width), `${width}: nothing sideways`)
     assert.deepEqual(await reachable(p, width), [], `${width}: every control inside`)
     assert.ok(await inside(p, "#chat-target button", width), `${width}: the bar inside the window`)
@@ -2232,10 +2263,14 @@ test("T1: at 1920, 1280, 1024, 800 and 390 px the bar's computer, folder and mod
       assert.match(await p.textContent(".menu"), word, `${width}: the ${cls} menu`)
       const m = await p.evaluate(() => { const r = document.querySelector(".menu").getBoundingClientRect(); return (r.left >= 0 && r.right <= innerWidth + 0.5 && r.top >= 0 && r.bottom <= innerHeight + 0.5) || [r.left, r.right, r.top, r.bottom, innerWidth, innerHeight] })
       assert.ok(m === true, `${width}: the ${cls} menu inside the window ${JSON.stringify(m)}`)
+      // The bar is at the foot of the window: its menus open upward.
+      const up = await p.evaluate((c) => document.querySelector(".menu").getBoundingClientRect().bottom <= document.querySelector(`#target-chips .cchip--${c}`).getBoundingClientRect().top + 1, cls)
+      assert.ok(up, `${width}: the ${cls} menu opens upward`)
       await p.keyboard.press("Escape")
     }
     await shot(p, `t1-target-${width}`)
     // The mode chosen there is the one the chat starts in.
+    await targetChips(p)
     await p.click("#target-chips .cchip--mode")
     await p.locator(".menu .menu__item", { hasText: "Plan" }).click()
     await p.fill("#composer-text", "Look around")
@@ -2583,42 +2618,105 @@ test("P2: the rest of the chat screen works: edit a message, regenerate, stop, a
   assert.deepEqual(p.errors, [])
 })
 
+test("P2: files pasted into the box and dropped on the window become tiles and go with the message; one taken off is deleted on the server", async () => {
+  const cfg = agentChatOpen([], {
+    "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?")], more: false, live: null },
+    "GET /models?chat=chat1": models(),
+    "POST /chats/chat1/messages": { message: userMessage("m7", "Here"), reply: null },
+    "DELETE /attachments/att2": null,
+  })
+  cfg.commands = {
+    attach_bytes: { id: "att1", name: "shot.png", size: 68, image: true },
+    attach_dropped: [{ name: "notes.md", size: 900, attachment: { id: "att2", name: "notes.md", size: 900, image: false } }, { name: "build", size: 0, reason: "folder" }],
+  }
+  const p = await page(cfg)
+  await openChatRow(p, "chat1")
+  // Pasted: a picture's bytes, sent through Rust with its name; its own thumbnail at once.
+  await p.focus("#composer-text")
+  await p.evaluate((png) => {
+    const bytes = Uint8Array.from(atob(png.split(",")[1]), (c) => c.charCodeAt(0))
+    const data = new DataTransfer()
+    data.items.add(new File([bytes], "shot.png", { type: "image/png" }))
+    document.getElementById("composer-text").dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }))
+  }, PNG)
+  await p.waitForSelector("#composer-files .tile.is-ready.has-thumb")
+  const sent = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "attach_bytes").length)
+  assert.equal(sent, 1)
+  // Dropped: Rust holds the paths; the page shows what became of each -- a folder is said, not sent.
+  await p.evaluate(() => window.__mock.emit("drag", true))
+  assert.equal(await p.getAttribute("#composer", "data-drag"), "true")
+  await p.evaluate(() => window.__mock.emit("drop", ["notes.md", "build"]))
+  await p.waitForSelector("#composer-files .tile.is-failed")
+  assert.equal(await p.getAttribute("#composer", "data-drag"), "false")
+  assert.match(await p.getAttribute("#composer-files .tile.is-failed", "title"), /This is a folder/)
+  assert.equal(await p.locator("#composer-files .tile.is-ready").count(), 2)
+  // One taken off before sending is deleted on the server; the rest go with the message.
+  await p.click("#composer-files .tile.is-ready:has-text('notes.md') .file__remove")
+  await p.waitForFunction(() => window.__mock.api("DELETE", "/attachments/att2").length === 1)
+  await p.fill("#composer-text", "Here")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/chats/chat1/messages")))[0].args.body, { text: "Here", attachments: ["att1"] })
+  assert.deepEqual(p.errors, [])
+})
+
+test("P2: a model that only thinks or does not: the header says Thinking, and its menu switches it", async () => {
+  const m = models()
+  m.models[0] = { ...m.models[0], efforts: [], thinking_switch: true, levels: ["off", "default"], effort: "default", control: "switch" }
+  const cfg = agentChatOpen([], {
+    "GET /models": m,
+    "GET /models?chat=chat1": m,
+    "GET /chats/chat1": { chat: chatRow({ effort: "default" }), messages: [userMessage("m5", "How is lembas made?")], more: false, live: null },
+    "PATCH /chats/chat1": { chat: chatRow({ effort: "off" }) },
+  })
+  const p = await page(cfg)
+  await openChatRow(p, "chat1")
+  await p.waitForSelector("#chat-settings .cchip--model")
+  const chip = p.locator("#chat-settings .cchip", { hasText: "Thinking" })
+  assert.equal((await chip.textContent()).trim(), "Thinking")
+  await chip.click()
+  assert.deepEqual(await p.$$eval(".menu .menu__item", (l) => l.map((x) => [x.textContent.replace(/✓/, "").trim(), x.getAttribute("aria-checked")])), [["off", "false"], ["Think before answeringdefault", "true"]])
+  await p.click(".menu .menu__item >> nth=0")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat1").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat1")))[0].args.body, { effort: "off" })
+  await p.waitForFunction(() => /Thinking: off/.test(document.getElementById("chat-settings").textContent))
+  assert.deepEqual(p.errors, [])
+})
+
 test("P2: a reply is finished at `done`; the name a model gives the chat afterwards arrives on the same stream and is drawn", async () => {
-  // The frames as server 2.0.0-beta.11 sends them (its fixtures event_done_title_pending.json and
-  // event_title.json, not pinned here yet): `done` with the name made from the prompt, then `title`.
+  // The server's own frames (event_done_title_pending.json, event_title.json), for this chat.
+  const done = fixture("event_done_title_pending")
+  const named = fixture("event_title")
+  assert.equal(done.chat.title_pending, true)
   const p = await page(agentChatOpen([["status", { text: "Writing…" }]]))
   await openChatRow(p, "chat2")
   await p.waitForSelector(".msg.is-live")
-  await p.evaluate(([path, m]) => window.__mock.frame(path, "done", { message: m, chat: { id: "chat2", title: "What is in build?", title_pending: true }, next: null }), [STREAM2, reply({ steps: [{ index: 0, kind: "text", open: true, markdown: "Files." }] })])
+  await p.evaluate(([path, f]) => window.__mock.frame(path, "done", f), [STREAM2, { ...done, message: { ...done.message, id: "m2" }, chat: { ...done.chat, id: "chat2" }, next: null }])
   await p.waitForSelector(".msg--assistant:not(.is-live)")
-  assert.equal(await p.textContent("#chat-title"), "What is in build?")
+  assert.equal(await p.textContent("#chat-title"), done.chat.title)
   assert.ok(await p.isHidden("#stop"), "finished: nothing waits for the name")
   const lists = await p.evaluate(() => window.__mock.api("GET", "/chats").filter((x) => x.args.path.startsWith("/chats?") || x.args.path === "/chats").length)
-  await p.evaluate((path) => {
-    window.__mock.frame(path, "title", { chat: { id: "chat2", title: "The build directory" } })
+  await p.evaluate(([path, f]) => {
+    window.__mock.frame(path, "title", f)
     window.__mock.frame(path, "close", {})
-  }, STREAM2)
-  await p.waitForFunction(() => document.getElementById("chat-title").textContent === "The build directory")
+  }, [STREAM2, { chat: { ...named.chat, id: "chat2" } }])
+  await p.waitForFunction((title) => document.getElementById("chat-title").textContent === title, named.chat.title)
+  assert.notEqual(named.chat.title, done.chat.title)
   await p.waitForFunction((n) => window.__mock.api("GET", "/chats").filter((x) => x.args.path.startsWith("/chats?") || x.args.path === "/chats").length > n, lists)
   assert.deepEqual(p.errors, [])
 })
 
 // --- S3: the composer's `/` and `@` menus -----------------------------------------------------------
 //
-// CONTRACT (unpinned): the server's menu routes as its draft has them (`api/v2/menus.py` and
-// `serialise.mentions`, read in the server's working tree before it was committed) --
-// GET /devices/{id}/commands, GET /devices/{id}/files, GET /mentions, POST /attachments/from.
-// The answers below are written to those shapes by hand; replace them with the server's
-// fixtures (scripts/fetch-fixtures.sh) once it has them.
+// The server's menu routes, by its own fixtures (tests/ui/fixtures, pinned by
+// scripts/fetch-fixtures.sh): GET /devices/{id}/commands (device_commands.json), GET
+// /devices/{id}/files (device_files.json), GET /mentions (mentions.json, mentions_url.json) and
+// POST /attachments/from (attachment_from.json). The names in them are the server's; where a
+// test needs a longer list or an awkward name, it adds rows of the same shape.
 
-const MENTIONS = {
-  items: [
-    { kind: "file", path: "/notes/recipes/lembas recipe #2.md", name: "lembas recipe #2.md", detail: "/notes/recipes/lembas recipe #2.md" },
-    { kind: "attachment", id: "att7", name: "oven.png", detail: "image" },
-  ],
-}
-const DEVICE_FILES = { files: [{ path: "src/app main.ts", kind: "file", name: "app main.ts" }, { path: "src/tui", kind: "dir", name: "tui" }], error: "", device: "workbench" }
-const DEVICE_COMMANDS = { commands: [{ name: "review", description: "Review the working tree", hint: "", kind: "custom" }, { name: "commit", description: "Commit with a message", hint: "<message>", kind: "skill" }, { name: "compact", description: "The device's own compact", hint: "", kind: "builtin" }], device: "workbench" }
+const MENTIONS = { items: [{ kind: "file", path: "/notes/recipes/lembas recipe #2.md", name: "lembas recipe #2.md", detail: "/notes/recipes/lembas recipe #2.md" }, ...fixture("mentions").items.filter((x) => x.kind === "attachment").map((x) => ({ ...x, id: "att7", name: "oven.png" }))] }
+const DEVICE_FILES = { ...fixture("device_files"), files: [{ path: "src/app main.ts", kind: "file", name: "app main.ts" }, { path: "src/tui", kind: "dir", name: "tui" }], device: "workbench" }
+const DEVICE_COMMANDS = { ...fixture("device_commands"), commands: [{ name: "review", description: "Review the working tree", hint: "", kind: "custom" }, { name: "commit", description: "Commit with a message", hint: "<message>", kind: "skill" }, ...fixture("device_commands").commands.filter((c) => c.name === "compact")], device: "workbench" }
 
 function s3(over = {}) {
   const cfg = i8()
@@ -2631,7 +2729,7 @@ function s3(over = {}) {
     "GET /mentions": MENTIONS,
     "GET /devices/token1/files": DEVICE_FILES,
     "GET /devices/token1/commands": DEVICE_COMMANDS,
-    "POST /attachments/from": { attachment: { id: "att9", name: "oven.png", mime: "image/png", size: 48000, kind: "image", image: false, width: 0, height: 0 } },
+    "POST /attachments/from": { attachment: { ...fixture("attachment_from").attachment, id: "att9", name: "oven.png" } },
     "POST /chats/chat1/messages": { message: userMessage("m7", "sent"), reply: null },
     "POST /chats/chat2/messages": { message: userMessage("m8", "sent"), reply: null },
     "PATCH /chats/chat1": { chat: chatRow({ title: "Waybread, properly" }) },
@@ -2955,18 +3053,40 @@ test("S3: in a chat on the server a file is mentioned by its path or attached as
   // A device that could not answer says so in its place (the server's `error`), and the rest shows.
   await o.evaluate(() => {
     window.__mock.answer("GET /devices/token1/files", { files: [], error: "The device did not answer in time.", device: "workbench" })
-    window.__mock.answer("GET /mentions", { items: [{ kind: "url", url: "https://example.org/a", name: "https://example.org/a", detail: "" }] })
   })
+  await o.evaluate((found) => window.__mock.answer("GET /mentions", found), fixture("mentions_url"))
   await o.keyboard.type("y")
   await o.clock.fastForward(400)
   await o.waitForFunction(() => /did not answer in time/.test(document.getElementById("composer-menu")?.textContent || ""))
   assert.deepEqual(await menuRows(o), ["# On the device", "# A page to read", "Fetch this page"])
+  assert.equal(await o.textContent("#composer-menu .cmenu__option .cmenu__note"), fixture("mentions_url").items[0].url)
   await o.keyboard.press("Escape")
   await o.fill("#composer-text", "")
   await o.keyboard.type("/")
   await o.waitForSelector("#composer-menu:not([hidden])")
   assert.ok((await menuRows(o)).includes("/help"), "the app's own commands need no route")
   assert.deepEqual(o.errors, [])
+  assert.deepEqual(p.errors, [])
+})
+
+test("S3: the server's own fixtures are drawn as they are: its device's commands and files, its mentions, and the attachment it answers", async () => {
+  const p = await page(s3({ "GET /mentions": fixture("mentions"), "GET /devices/token1/files": fixture("device_files"), "GET /devices/token1/commands": fixture("device_commands"), "POST /attachments/from": fixture("attachment_from") }), { clock: true })
+  await openChatRow(p, "chat2")
+  await p.click("#composer-text")
+  await p.keyboard.type("/")
+  await p.waitForFunction(() => /review/.test(document.getElementById("composer-menu")?.textContent || ""))
+  const rows = await menuRows(p)
+  assert.deepEqual(rows.slice(rows.indexOf("# workstation")), ["# workstation", "/review [base]"], "named as the server names the device; its /compact is the app's")
+  await p.fill("#composer-text", "")
+  await p.keyboard.type("@")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden]) .cmenu__option")
+  assert.deepEqual(await menuRows(p), ["# On the device · workstation", "README.md", "loader", "# Files", "bread.md", "# Already in this chat", "recipe.pdf"])
+  await p.keyboard.press("ArrowUp")
+  await p.keyboard.press("Enter")
+  await p.waitForSelector("#composer-files .tile.is-ready")
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/attachments/from")))[0].args.body, { attachment: "att1", chat: "chat2" })
+  assert.match(await p.textContent("#composer-files .tile.is-ready"), /bread\.md/, "the tile is the attachment the server answered")
   assert.deepEqual(p.errors, [])
 })
 
@@ -3007,12 +3127,11 @@ test("S3: the menu is the composer's own width, directly above it, at 1920, 1280
 
 // --- T3: the terminal -- typed ahead, ended, reconnected, switched off ------------------------------
 //
-// CONTRACT (unpinned): `GET /terminals` -> { shells: [{ id, device, directory, seconds, chat,
-// watched }] }, `POST /terminals/{id}/end` -> 204, the ready frame's `id` and `resumed`, and the
-// refusal's `shells` at the limit, as the server's draft has them (read in its working tree
-// before it was committed); the answers below are written to those shapes by hand, not copied
-// from a server fixture. The `closed` frame's `reason` is the server's own: exited, idle,
-// shutdown, revoked, error, ended.
+// The server's own fixtures (tests/ui/fixtures): GET /terminals (terminals.json), the socket's
+// ready frame with the shell's `id` and `resumed` (terminal_ready.json), its refusal at the limit
+// with the open `shells` (terminal_refused.json), and GET /devices with `terminal_reason` and
+// `terminal_hint` (devices.json); a shell is ended with POST /terminals/{id}/end. The `closed`
+// frame's `reason` is the server's own: exited, idle, shutdown, revoked, error, ended.
 
 const SHELLS = { shells: [{ id: "sh1", device: "workbench", directory: "/home/dev/project", seconds: 754, chat: "chat2", watched: true }, { id: "sh2", device: "workbench", directory: "/home/dev/other", seconds: 4000, chat: "", watched: false }] }
 /** Under a fake clock: move it on in steps (every timer runs) until the page says `fn` holds. */
@@ -3118,6 +3237,39 @@ test("T3: at the limit of open shells the ones open are listed, each with End; e
   assert.deepEqual(p.errors, [])
 })
 
+test("T3: the server's own fixtures: its ready frame names the shell that End shell ends; its refusal lists the shells it carries; its reason for no terminal is said", async () => {
+  const ready = fixture("terminal_ready")
+  let p = await page(b3({ [`POST /terminals/${ready.id}/end`]: null }, [["control", ready]]))
+  await openPanel(p)
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+  assert.equal(await p.textContent("#terminal-where"), ready.dir)
+  assert.ok(await p.isVisible("#terminal-prev"), "it marks its commands (`osc`)")
+  await p.click("#terminal-end")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction((id) => window.__mock.api("POST", `/terminals/${id}/end`).length === 1, ready.id)
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/terminals").length), 0, "the id came with the ready frame")
+  await p.context().close()
+  const refused = fixture("terminal_refused")
+  p = await page(b3({}, [["control", refused], ["end", { code: 1000, reason: "", status: null, error: null }]]))
+  await openPanel(p)
+  await p.waitForSelector("#terminal-shells:not([hidden]) .termpanel__shell")
+  assert.equal(await termSays(p), refused.message)
+  assert.deepEqual(await p.$$eval("#terminal-shells .termpanel__shell", (l) => l.map((x) => [x.dataset.id, ...[...x.querySelectorAll("span")].map((y) => y.textContent)])), refused.shells.map((x) => [x.id, x.device, x.directory, "12m 34s"]))
+  await p.context().close()
+  // GET /devices as the server answers it: a computer that opens no terminal says why, in the server's sentence.
+  const devices = fixture("devices")
+  const off = devices.devices.find((d) => !d.terminal)
+  const there = agentChat({ id: "chat9", title: "On the laptop", device: { token_id: off.id, directory: "/home/dev/site" } })
+  p = await page(b3({ "GET /devices": devices, "GET /chats": { chats: [chatRow(), there], more: false }, "GET /chats/chat9": { chat: there, messages: [userMessage("m1", "Hello")], more: false, live: null }, "GET /models?chat=chat9": models() }))
+  await openChatRow(p, "chat9")
+  await p.waitForSelector("#chat-tools [data-terminal-off]")
+  await p.click("#chat-tools [data-terminal-off]")
+  await p.waitForSelector(".pop")
+  assert.ok((await p.textContent(".pop")).includes(off.terminal_hint), "the server's own sentence")
+  assert.equal(await p.locator(".pop .btn--primary").count(), 0, "another computer's switch is not this app's to open")
+  assert.deepEqual(p.errors, [])
+})
+
 test("T3: a lost connection is tried again by itself, each time after longer, and says the shell is new; one that exited is not", async () => {
   const p = await page(b3(), { clock: true })
   await openPanel(p)
@@ -3178,7 +3330,7 @@ test("T3: a lost connection is tried again by itself, each time after longer, an
 })
 
 test("T3: where the computer opens no terminal the button is there, dimmed, and says why and how; it comes alive when the computer links", async () => {
-  const off = { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: false }] }
+  const off = { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: false, terminal_reason: "device", terminal_hint: "workbench does not open terminals. Switch it on there: in LLeMbas Desktop's settings, or with the LLeMbas CLI's remote.terminal setting." }] }
   const p = await page(b3({ "GET /devices": off }), { clock: true })
   await openChatRow(p, "chat2")
   await p.waitForSelector("#chat-tools [data-terminal-off]")
@@ -3187,12 +3339,12 @@ test("T3: where the computer opens no terminal the button is there, dimmed, and 
   assert.match(await p.getAttribute("#chat-tools [data-terminal-off]", "title"), /switched off for this computer/)
   await p.click("#chat-tools [data-terminal-off]")
   await p.waitForSelector(".pop")
-  assert.match(await p.textContent(".pop"), /The terminal is switched off for this computer\..*Switch it on in Settings, under Agent: Let the server open a terminal here\./s)
+  assert.match(await p.textContent(".pop"), /The terminal is switched off for this computer\..*Switch it on in Settings, under Project folders: Let the server open a terminal here\./s)
   assert.ok(await p.isHidden("#terminal"), "nothing is opened")
   await shot(p, "t3-terminal-off")
   // Open Settings leads to the switch.
   await p.click(".pop .btn--primary")
-  await p.waitForSelector("#settings:not([hidden]) #set-agent")
+  await p.waitForSelector("#settings:not([hidden]) #set-folders #set-terminal")
   await p.click("#settings-close")
   // Switched on meanwhile: read again within a few seconds, and the button opens a shell.
   await p.evaluate(() => window.__mock.answer("GET /devices", { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true }] }))
@@ -3210,9 +3362,9 @@ test("T3: where the computer opens no terminal the button is there, dimmed, and 
   await openChatRow(o, "chat9")
   await o.waitForSelector("#chat-tools [data-terminal-off]")
   assert.match(await o.getAttribute("#chat-tools [data-terminal-off]", "title"), /That computer is not linked to the server right now\./)
-  await o.evaluate(() => window.__mock.answer("GET /devices", { devices: [{ id: "token9", name: "studio", host: "studio", platform: "linux", terminal: false, terminal_reason: "Terminals are switched off on this instance." }] }))
+  await o.evaluate(() => window.__mock.answer("GET /devices", { devices: [{ id: "token9", name: "studio", host: "studio", platform: "linux", terminal: false, terminal_reason: "instance", terminal_hint: "The terminal is switched off on this instance." }] }))
   await o.clock.runFor(5200)
-  await o.waitForFunction(() => /Terminals are switched off on this instance\./.test(document.querySelector("#chat-tools [data-terminal-off]")?.title || ""))
+  await o.waitForFunction(() => /The terminal is switched off on this instance\./.test(document.querySelector("#chat-tools [data-terminal-off]")?.title || ""))
   await o.click("#chat-tools [data-terminal-off]")
   await o.waitForSelector(".pop")
   assert.equal(await o.locator(".pop .btn--primary").count(), 0, "not this computer's to switch")
@@ -3270,9 +3422,9 @@ test("T3: the panel fits at 1920, 1280, 1024, 800, 390 px and the window's small
 
 // --- PY: the `python` tool, run in this window for the chat it shows ----------------------------------
 //
-// The server's protocol is its draft's (`api/v2/python.py`, read in the server's working tree
-// before it was committed, and `services/pages.py`): announce / withdraw / take / answer under
-// /chats/{chat}/page/, `python` in `GET /me`. The frame, its worker and the policy they are
+// The server's protocol (`api/v2/python.py`, `services/pages.py`): announce / withdraw / take /
+// answer under /chats/{chat}/page/, `python` in `GET /me`; its own fixtures (python_state.json,
+// python_call.json, python_result.json) are held in the last-but-one test. The frame, its worker and the policy they are
 // served under are the app's real ones (src-tauri/python/, python.rs `POLICY`); Pyodide is the
 // stand-in unless $PYODIDE_DIR names a real, verified release (see the last test).
 
@@ -3418,6 +3570,22 @@ test("PY: files that could not be fetched or did not verify are said in the call
   assert.deepEqual(p.errors, [])
 })
 
+test("PY: the server's own fixtures: the call it hands a page is run, and what is answered has the shape of its result", async () => {
+  const call = fixture("python_call")
+  const expected = fixture("python_result")
+  // The stand-in does not speak Python: the fixture's call is taken as it is -- its id, files,
+  // save and limits -- with lines the stand-in runs in place of its code.
+  const p = await page(py({ me: { ...fixture("python_state"), version: "0.0.0-test" }, calls: [{ ...call, code: `read ${call.files[0].path}\nwrite ${call.save[0]} ok` }] }))
+  await openChatRow(p, "chat1")
+  const [said] = await answered(p)
+  assert.equal(said.call_id, call.call_id)
+  assert.deepEqual(Object.keys(said.result).sort(), Object.keys(expected).sort(), "stdout, result, error, files")
+  assert.deepEqual(said.result.files, expected.files, "the file it was asked to save, as the server's fixture has it")
+  assert.equal(said.result.stdout, Buffer.from(call.files[0].content_b64, "base64").toString().trimEnd())
+  assert.deepEqual([said.result.result, said.result.error], [expected.result, expected.error])
+  assert.deepEqual(p.errors, [])
+})
+
 test("PY: with a real Pyodide release ($PYODIDE_DIR) Python itself runs in the frame under the app's policy -- its output, its value, files, an error, the time limit, and no network", async () => {
   if (!process.env.PYODIDE_DIR) {
     console.log("     (skipped: set PYODIDE_DIR to a directory holding the server's pinned Pyodide files)")
@@ -3468,6 +3636,158 @@ test("V4: the title bar keeps every item on its own track at every width, down t
     assert.deepEqual(p.errors, [])
     await p.context().close()
   }
+})
+
+test("V4: at 390 px a scheduled task's name is whole in its header, its buttons under it; the composer's own chip is not cut where there is room", async () => {
+  const p = await page(gallery("moria"), { width: 390, height: 844 })
+  await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" }))
+  await p.waitForSelector("#scheduled-body .fact")
+  const title = await p.$eval("#scheduled-title", (x) => [x.textContent, x.scrollWidth <= x.clientWidth + 1])
+  assert.ok(/Nightly tests/.test(title[0]) && title[1], `the title is whole: ${title}`)
+  assert.deepEqual(await controlsOut(p, 390), [])
+  await p.evaluate(() => document.querySelector('.chatrow[data-id="chat1"]').click())
+  await p.waitForSelector("#composer-chips .cchip--picture")
+  assert.ok(await p.$eval("#composer-chips .cchip--picture .cchip__label", (x) => x.scrollWidth <= x.clientWidth + 1), "Draw a picture, whole")
+  // Send is at the card's edge with Dictate beside it: a hidden Stop leaves no gap behind.
+  const [send, card] = await p.evaluate(() => ["send", "composer"].map((id) => document.getElementById(id).getBoundingClientRect().right))
+  const pad = await p.$eval("#composer", (x) => parseFloat(getComputedStyle(x).paddingRight) + parseFloat(getComputedStyle(x).borderRightWidth))
+  assert.ok(Math.abs(card - pad - send) < 1, `Send at the card's inner edge (${card - pad - send})`)
+  assert.deepEqual(p.errors, [])
+})
+
+// Every screen, at the five widths, in both looks. What must hold on all of them is asserted --
+// the window never scrolls sideways, every control is inside the window and not cut off by what
+// holds it, no two controls of a row are drawn over each other -- and with $SHOTS each is left
+// as a picture, which is how the rest of the visual pass was done: by looking.
+
+function gallery(theme) {
+  const cfg = { status: status({ theme }), routes: {}, streams: {}, commands: {}, terminal: [READY, ["output", "dev@workbench:~/project$ ls\r\nbuild  src  README.md\r\ndev@workbench:~/project$ "]] }
+  for (const part of [fx(), g8(), c4(), archivedRoutes(), i8(), p2calls(), l8([bagEnd()])]) {
+    Object.assign(cfg.routes, part.routes)
+    Object.assign(cfg.commands, part.commands || {})
+  }
+  const m = models()
+  m.models[0] = { ...m.models[0], name: LONG_MODEL }
+  Object.assign(cfg.routes, {
+    "GET /me": { ...meAs({ theme, language: "en" }), services: { stt: true, tts: true, images: true, search: false, fetch: false }, scopes: ["app", "models"] },
+    "GET /models": m,
+    "GET /models?chat=chat1": m,
+    "GET /models?chat=chat2": m,
+    "GET /devices": { devices: [bagEnd({ id: "token1", name: "workbench", host: "workbench" }), { id: "token9", name: LONG_HOST, host: LONG_HOST, platform: "linux", terminal: true, scheduled: true, max_mode: "" }] },
+    "GET /chats": { chats: [chatRow({ pinned: true }), agentChat(), agentChat({ id: "chat9", title: "A chat whose title is long enough that the sidebar has to cut it short", device: { token_id: "token9", directory: LONG_DIR } })], more: false },
+    "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made? ".repeat(6)), reply({ id: "m6", steps: [{ index: 0, kind: "thinking", open: false, text: "Flour, water, care.", label: "2 s" }, { index: 1, kind: "text", open: true, markdown: "With **care**:\n\n1. Flour\n2. Water\n\n```python\nprint('lembas')\n```\n\n| Day | Loaves |\n|---|---|\n| One | 12 |" }] })], more: true, live: null },
+    "GET /chats/chat2": { chat: agentChat({ subagents: { offered: true, named_only: false, cap: 8 } }), messages: [userMessage("m1", "Tidy the build"), reply({ stopped: true })], more: false, live: null },
+    "GET /chats/chat2/activity": ACTIVITY,
+  })
+  return cfg
+}
+
+/** Open a chat from the sidebar, also where the sidebar is a drawer that is put away. */
+async function openRow(p, id) {
+  await p.evaluate((x) => document.querySelector(`.chatrow[data-id="${x}"]`).click(), id)
+  await p.waitForSelector(`#messages .msg`)
+}
+
+const SCREENS = [
+  ["chat", async (p) => openRow(p, "chat1")],
+  ["agent-chat", async (p) => openRow(p, "chat2")],
+  ["new-agent", async (p) => { await p.evaluate(() => document.getElementById("new-chat-btn").click()); await p.click(".kind__tab >> nth=0"); await p.waitForSelector("#target-chips .cchip", { state: "attached" }) }],
+  ["new-chat", async (p) => { await p.evaluate(() => document.getElementById("new-chat-btn").click()); await p.click(".kind__tab >> nth=1"); await p.waitForSelector("#composer-chips .cchip--picture") }],
+  ["slash-menu", async (p) => { await openRow(p, "chat2"); await p.click("#composer-text"); await p.keyboard.type("/"); await p.waitForSelector("#composer-menu:not([hidden])") }],
+  ["files-local", async (p) => { await p.evaluate(() => document.getElementById("nav-files").click()); await p.waitForSelector("#local-list .frow") }],
+  ["files-server", async (p) => { await openServerTab(p); await p.waitForSelector('#server-list .frow[data-path="/home"]') }],
+  ["scheduled", async (p) => { await p.evaluate(() => document.getElementById("nav-scheduled").click()); await p.waitForSelector("#scheduled-body .task, #scheduled-body button") }],
+  ["scheduled-task", async (p) => { await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" })); await p.waitForSelector("#scheduled-body .fact") }],
+  ["memory", async (p) => { await p.evaluate(() => document.getElementById("nav-memory").click()); await p.waitForSelector("#memory-body .memory, #memory-body textarea, #memory-body button") }],
+  ["archived", async (p) => { await p.evaluate(() => document.getElementById("nav-archived").click()); await p.waitForSelector("#archived-body .chatrow, #archived-body button") }],
+  ["settings", async (p) => { await p.evaluate(() => document.getElementById("settings-btn").click()); await p.waitForSelector("#set-look") }],
+  ["settings-agent", async (p) => { await p.evaluate(() => document.getElementById("settings-btn").click()); await p.waitForSelector("#set-agent"); await p.evaluate(() => document.getElementById("set-agent").scrollIntoView()) }],
+  ["settings-about", async (p) => { await p.evaluate(() => document.getElementById("settings-btn").click()); await p.waitForSelector("#set-about"); await p.evaluate(() => document.getElementById("set-about").scrollIntoView()) }],
+  ["activity", async (p) => { await openRow(p, "chat2"); await p.evaluate(() => document.getElementById("activity-open").click()); await p.waitForSelector("#activity:not([hidden]) .activity__body > *") }],
+  ["terminal", async (p) => { await openRow(p, "chat2"); await p.evaluate(() => document.querySelector("#chat-tools [data-terminal-toggle]").click()); await p.waitForFunction(() => document.querySelector("#terminal .xterm-rows")?.textContent.includes("README.md")) }],
+  ["palette", async (p) => { await p.keyboard.press("Control+k"); await p.waitForSelector("dialog[open] .palette__input") }],
+]
+
+/** Every visible control of the page that is outside the window, or cut off by a box that clips it. */
+const controlsOut = (p, width) =>
+  p.$$eval(
+    "button, input:not([type=hidden]), select, textarea, a[href]",
+    (l, w) =>
+      l
+        .filter((b) => b.offsetParent !== null && getComputedStyle(b).visibility !== "hidden" && !b.closest("[hidden], .xterm, .cm-editor"))
+        .filter((b) => {
+          const r = b.getBoundingClientRect()
+          if (r.width === 0 && r.height === 0) return false
+          let clip = { left: 0, right: w }
+          for (let el = b.parentElement; el; el = el.parentElement) {
+            const cs = getComputedStyle(el)
+            // A box that scrolls sideways on purpose (a table, a code block, the settings' tabs) is a scroller, not a cut.
+            if (cs.overflowX === "auto" || cs.overflowX === "scroll") return false
+            if (cs.overflowX !== "visible") {
+              const c = el.getBoundingClientRect()
+              clip = { left: Math.max(clip.left, c.left), right: Math.min(clip.right, c.right) }
+            }
+          }
+          return r.left < clip.left - 1 || r.right > clip.right + 1
+        })
+        .map((b) => `${b.tagName.toLowerCase()}#${b.id}.${String(b.className).replace(/\s+/g, ".")} "${(b.textContent || b.getAttribute("aria-label") || "").trim().slice(0, 30)}"`),
+    width,
+  )
+
+test("V4: every screen at 1920, 1280, 1024, 800 and 390 px, dark and light: nothing scrolls sideways and no control is outside the window or cut off", async () => {
+  const problems = []
+  // $GALLERY narrows the round while a screen is being worked on, and can ask for another
+  // language than English (the words are longer in most): "shire", "390", "shire:390", "sk", "de:390".
+  const only = (process.env.GALLERY || "").split(":")
+  const lang = only.find((o) => /^[a-z]{2}$/.test(o)) || ""
+  const themes = ["moria", "shire"].filter((x) => !only.some((o) => /^[a-z]{3,}$/.test(o)) || only.includes(x))
+  const sizes = [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844]].filter(([w]) => !only.some((o) => /^\d+$/.test(o)) || only.includes(String(w)))
+  for (const theme of themes) {
+    for (const [width, height] of sizes) {
+      // One window per look and width, taken from screen to screen as a person would go: a page
+      // load for each of them made the round too slow to run with the rest.
+      const p = await page(gallery(theme), { width, height, lang })
+      // A screen that does not come up is a finding, said at once, not after half a minute.
+      p.setDefaultTimeout(8000)
+      for (const [name, open] of SCREENS) {
+        try {
+          // Back to a new chat with nothing open over it.
+          await p.keyboard.press("Escape")
+          await p.evaluate(() => {
+            for (const id of ["terminal-close", "activity-close", "viewer-close"]) if (!document.getElementById(id).closest("aside").hidden) document.getElementById(id).click()
+            document.querySelector("dialog[open]")?.close()
+            document.getElementById("new-chat-btn").click()
+            document.getElementById("composer-text").value = ""
+            document.getElementById("composer-text").dispatchEvent(new Event("input"))
+          })
+          await open(p)
+          await p.waitForTimeout(120)
+          if (!(await noSideways(p, width))) problems.push(`${name} ${width} ${theme}: scrolls sideways (${await p.evaluate(() => document.documentElement.scrollWidth)})`)
+          const out = await controlsOut(p, width)
+          if (out.length) problems.push(`${name} ${width} ${theme}: ${out.slice(0, 4).join(", ")}`)
+          await shot(p, `v4-${name}-${theme}-${width}${lang ? `-${lang}` : ""}`)
+        } catch (err) {
+          problems.push(`${name} ${width} ${theme}: ${String(err.message || err).split("\n").slice(0, process.env.GALLERY ? 12 : 1).join(" / ")}`)
+        }
+      }
+      if (p.errors.length) problems.push(`${width} ${theme}: ${p.errors[0]}`)
+      await p.context().close()
+    }
+  }
+  // The sign-in page: looking for a server, a server found, a refusal.
+  for (const theme of themes) {
+    for (const [width, height] of sizes) {
+      for (const [name, st] of [["found", { account: null, linked: false }], ["refused", { account: null, linked: false, discovery: null, refused: "This is not a LLeMbas server: it answered with a page, not with its description." }], ["waiting", { account: null, linked: false, signing_in: true }]]) {
+        const p = await page({ status: status({ theme, ...st }), routes: {}, streams: {} }, { width, height, lang, wait: "#setup:not([hidden]) #setup-body > *" })
+        if (!(await noSideways(p, width))) problems.push(`sign-in ${name} ${width} ${theme}: scrolls sideways`)
+        const out = await controlsOut(p, width)
+        if (out.length) problems.push(`sign-in ${name} ${width} ${theme}: ${out.join(", ")}`)
+        await shot(p, `v4-signin-${name}-${theme}-${width}${lang ? `-${lang}` : ""}`)
+        await p.context().close()
+      }
+    }
+  }
+  assert.equal(problems.length, 0, `\n${problems.join("\n")}`)
 })
 
 // --- Run ----------------------------------------------------------------------------------------

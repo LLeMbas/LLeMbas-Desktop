@@ -8,12 +8,13 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ### Changed
 
-- **Where a new agent chat works is one slim bar above the composer.** Computer, folder and mode
-  are three chips of the header's family on one line directly above the message box, each opening
-  its menu -- no longer split between the header's title (computer, folder) and its settings
-  (mode). The three share the line: a long computer name or path gives way with an ellipsis (the
-  whole of it in the tooltip) and the mode is never pushed out. On a phone's width of chat the
-  bar is one summary chip -- "studio · project · Edit" -- that opens the three above it. The
+- **Where a new agent chat works is one slim bar above the composer**, the same bar the web
+  interface has. Computer, folder and mode are three chips of the header's family on one line
+  directly above the message box, each opening its menu upward -- no longer split between the
+  header's title (computer, folder) and its settings (mode). A long computer name or path gives
+  with an ellipsis (the whole of it in the tooltip); the mode is never cut. Where the bar is
+  narrower than 30rem it is one summary chip across it -- "studio · project · Edit" -- that
+  opens the three as a column above it, each with its label in front; choosing closes it. The
   computer is always said, also where it is the only one linked. An open agent chat is unchanged:
   its folder and computer beside the title, its mode with the settings.
 - **The composer's chips wrap; nothing in it scrolls out of sight.** The chips' line was a
@@ -92,6 +93,14 @@ All notable changes to LLeMbas Desktop. The format follows
 - **A reply ends when it is saved; the chat's name follows.** With server 2.0.0-beta.11 a new
   chat is named by a model after the reply is done: the name arrives on the same stream and the
   header and the sidebar take it, without waiting for the next refresh.
+
+- **A visual pass over every screen** at 1920, 1280, 1024, 800 and 390 px, dark and light: the
+  composer's Send sits at the card's edge (a hidden Stop left its gap behind); a scheduled
+  task's history has its columns shared by every row, so a status is never cut short and the
+  dates line up; at 390 px a scheduled task's name is whole in its header with the buttons under
+  it, and Draw a picture is not cut; a model that only thinks or does not says Thinking instead
+  of a level's name. The test suite now walks every screen at those sizes in both looks and
+  refuses a sideways scroll or a control outside the window or cut off.
 
 ### Fixed
 

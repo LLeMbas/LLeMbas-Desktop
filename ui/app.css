@@ -1351,13 +1351,21 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .composer textarea::placeholder { color: var(--ink-faint); }
 .composer__files { justify-content: start; }
+/* Three tracks, each part named into its own: attach, the chips (the one that gives), and the
+   send cluster -- Dictate, Stop, Send, a row of its own whose hidden buttons take no room. A
+   button that is not shown used to leave its track and gap behind, or move its neighbours one
+   track over; here none can. */
 .composer__bar {
   display: grid;
-  grid-template-columns: var(--chip-h) minmax(0, 1fr) auto auto auto;
+  grid-template-columns: var(--chip-h) minmax(0, 1fr) auto;
+  grid-template-areas: "attach chips send";
   gap: var(--sp-2);
   align-items: center;
 }
-.composer[data-attach="false"] .composer__bar { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+.composer__attach { grid-area: attach; }
+.composer__chips { grid-area: chips; }
+.composer__send { grid-area: send; display: flex; gap: var(--sp-2); align-items: center; justify-content: end; }
+.composer[data-attach="false"] .composer__bar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "chips send"; }
 /* Dictate: a round tool beside Send; while it records it says so in the accent. */
 .composer__mic { width: var(--round); height: var(--round); border-radius: var(--radius-full); }
 .composer .composer__mic.is-recording { color: var(--accent-ink); background: var(--accent); }
@@ -1368,6 +1376,8 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
    wider than the line gives way with an ellipsis. Nothing here scrolls, so nothing is hidden. */
 .composer__chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); min-width: 0; align-items: center; }
 .composer__chips > * { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+/* A chip of the message's own has the line to itself: it is cut only where the line is. */
+.composer__chips .cchip { max-width: 100%; }
 /* Send and Stop: round, one size, side by side when both show (a message typed while a reply runs). */
 .round {
   display: grid;
@@ -1472,19 +1482,34 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .sheet__title { font: 600 var(--text-xs) var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); }
 .thread__note.is-info { background: var(--surface); color: var(--ink-muted); border: var(--border-w) solid var(--border); }
 
-/* Where a new agent chat works, above the composer: computer · folder · mode, three chips of the
-   header's family on one line. The three share the line's width -- a track each, none wider than
-   its words, a long name giving way with an ellipsis -- so none is ever cut off or scrolled out
-   of reach. Where the chat's column is narrow (the `chat` container, below) they fold into the
-   one summary chip, which opens them stacked above it. */
-.target { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); justify-items: start; padding: 0 var(--sp-2); }
+/* Where a new agent chat works, above the composer: computer · folder · mode, as the server's
+   Working notes describe the bar both apps build ("The agent target bar"). Three chips of the
+   header's family on one line that never wraps and never scrolls: the mode is its words' width
+   and never gives; the computer and the folder are names, so each is at most a chip's width
+   (`--w-chip-sm`, `--w-chip`) and gives with an ellipsis. Measured by the bar's own width (a
+   container query: a sidebar or a panel takes from it, not from the window): under 30rem the
+   three are one summary chip across the bar, which opens them as a column above it -- each the
+   bar's width, its label in front, the labels and the values on tracks all three share. */
+.target { container: target / inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
 .target[hidden] { display: none; }
-.target__chips { display: grid; grid-template-columns: repeat(3, minmax(0, max-content)); gap: var(--sp-1); max-width: 100%; }
+.target__chips { display: grid; grid-template-columns: fit-content(var(--w-chip-sm)) fit-content(var(--w-chip)) max-content; gap: var(--sp-2); justify-content: start; min-width: 0; }
 .target .cchip { min-width: 0; max-width: 100%; }
 .target .cchip.target__sum { display: none; }
+.target__name { display: none; color: var(--ink-faint); }
 .target__word { overflow: hidden; text-overflow: ellipsis; }
 .target__word.is-warn { color: var(--warning); }
 .target__dot { color: var(--ink-faint); }
+@container target (max-width: 30rem) {
+  /* icon · computer · folder · mode, then the chevron at the bar's end. */
+  .target .cchip.target__sum { display: grid; grid-auto-flow: row; grid-template-columns: 16px minmax(0, max-content) auto minmax(0, max-content) auto max-content minmax(var(--sp-2), 1fr); width: 100%; border-color: var(--border); }
+  .target__sum > .cchip__chev { justify-self: end; }
+  .target__chips { display: none; }
+  .target[data-open="true"] .target__chips { display: grid; grid-template-columns: max-content 16px minmax(0, 1fr) 12px; gap: var(--sp-1) var(--sp-2); order: -1; }
+  .target[data-open="true"] .target__chips > .cchip { display: grid; grid-auto-flow: row; grid-column: 1 / -1; grid-template-columns: subgrid; width: 100%; text-align: left; border-color: var(--border); }
+  .target[data-open="true"] .target__chips .cchip__label { min-width: 0; }
+  .target[data-open="true"] .target__name { display: block; }
+  .target[data-open="true"] .target__chips .cchip__chev { justify-self: end; }
+}
 
 /* Files dragged over the window: where they will go, over the whole composer. */
 .composer__drop { display: none; }
@@ -1806,10 +1831,14 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .runs-next li { display: grid; grid-template-columns: var(--sp-6) minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; min-height: var(--control-h-sm); font-size: var(--text-sm); counter-increment: next; }
 .runs-next li::before { content: counter(next); font: var(--text-xs) var(--font-ui); color: var(--ink-faint); text-align: right; }
 .sched__history { display: grid; gap: var(--sp-2); }
-.runs { list-style: none; margin: 0; padding: 0; display: grid; }
+/* A run's row: how it went · when · on what · its note or Open. The tracks are the list's, shared
+   by every row (subgrid): the first is as wide as the longest status in the list -- whatever its
+   words are in a language -- so no status is cut short and every date starts on one line. */
+.runs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr) minmax(0, var(--w-field-sm)) auto; column-gap: var(--sp-3); }
 .run {
   display: grid;
-  grid-template-columns: var(--w-field-sm) minmax(0, 1fr) minmax(0, var(--w-field-sm)) auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   gap: var(--sp-3);
   align-items: center;
   min-height: var(--control-h);
@@ -2094,14 +2123,10 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   .head.chathead[data-fold="true"][data-unfold="true"] { grid-template-areas: "title set fold tools" "place place place place" "row row row row"; }
 }
 
-/* A phone's width of chat: the bar above the composer is its one summary chip, the three chips
-   stacked above it once it is opened. */
+/* A phone's width of chat: a card's typed rows put the box under its words. */
 @container chat (max-width: 30rem) {
   .ask__options { grid-template-columns: minmax(0, 1fr); }
   .opt.opt--typed { grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-2); }
-  .target .cchip.target__sum { display: inline-grid; }
-  .target__chips { display: none; }
-  .target[data-open="true"] .target__chips { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start; order: -1; }
 }
 
 /* 48rem (--bp-narrow): the sidebar is a drawer over the page, opened from the title bar. */
@@ -2135,6 +2160,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   .settings__body { padding: var(--sp-4) var(--sp-3) var(--sp-8); }
   .set__line { grid-template-columns: minmax(0, 1fr); }
   .set__control { justify-items: start; }
+  .runs { grid-template-columns: minmax(0, 1fr); }
   .run { grid-template-columns: minmax(0, 1fr) auto; }
   .run__model { display: none; }
   .run__status { grid-row: 1; }
@@ -2146,6 +2172,11 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 
 /* Very narrow: the agent's words go, its dot stays; the row's button goes under its field. */
 @media (max-width: 30rem) {
+  /* Scheduled: its buttons have words, and beside them the title -- the task's own name -- was
+     cut to "Sched…". The title has the line; the buttons go under it. */
+  #page-scheduled > .head { grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-2); }
+  #page-scheduled > .head > .head__place:empty { display: none; }
+  #page-scheduled > .head > .head__tools { justify-content: start; flex-wrap: wrap; }
   /* The window's three buttons at the title bar's own height, so the bar fits the smallest window. */
   .bar { grid-template-columns: var(--titlebar-h) var(--titlebar-h) auto minmax(0, 1fr) auto auto var(--titlebar-h) var(--border-w) repeat(3, var(--titlebar-h)); }
   .bar__agent-text { display: none; }

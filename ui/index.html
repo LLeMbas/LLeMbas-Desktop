@@ -80,16 +80,18 @@
         <div class="cards" id="cards" hidden></div>
         <div class="notice" id="link-notice" hidden></div>
         <div class="strip" id="activity-strip" hidden aria-live="polite"></div>
-        <div class="target" id="chat-target" hidden data-open="false"></div>
+        <div class="target" id="chat-target" hidden data-open="false" data-menu-up></div>
         <form class="composer" id="composer" hidden data-running="false" data-drag="false">
           <ul class="composer__files" id="composer-files" hidden></ul>
           <textarea id="composer-text" rows="1" placeholder="Message" aria-label="Message" data-i18n-placeholder data-i18n-aria-label></textarea>
           <div class="composer__bar">
             <button type="button" class="tool composer__attach" id="attach" aria-label="Attach files" title="Attach files" data-i18n-aria-label data-i18n-title></button>
             <div class="composer__chips" id="composer-chips"></div>
-            <button type="button" class="tool composer__mic" id="dictate" hidden aria-pressed="false"></button>
-            <button type="button" class="round round--stop" id="stop" hidden aria-label="Stop" title="Stop" data-i18n-aria-label data-i18n-title></button>
-            <button type="submit" class="round" id="send" aria-label="Send" title="Send" data-i18n-aria-label data-i18n-title></button>
+            <div class="composer__send">
+              <button type="button" class="tool composer__mic" id="dictate" hidden aria-pressed="false"></button>
+              <button type="button" class="round round--stop" id="stop" hidden aria-label="Stop" title="Stop" data-i18n-aria-label data-i18n-title></button>
+              <button type="submit" class="round" id="send" aria-label="Send" title="Send" data-i18n-aria-label data-i18n-title></button>
+            </div>
           </div>
           <p class="composer__drop" aria-hidden="true" data-i18n>Drop the files to attach them</p>
         </form>
