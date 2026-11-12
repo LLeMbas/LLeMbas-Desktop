@@ -25,7 +25,7 @@
 ;(function () {
   const config = window.__mockConfig || {}
   const listeners = new Map() // event name -> [callback]
-  const streams = new Map() // stream id -> path
+  const streams = new Map() // stream id -> { path, started, queue }
   const terminals = new Map() // terminal id -> { target, open }
   let nextTerminal = 0
   let nextStream = 0
@@ -73,8 +73,14 @@
     }
   }
 
+  // A frame a test sends for a reply whose first frames (the table's) have not gone out yet
+  // waits behind them: sent ahead, the table's would arrive after it and undo it.
   function frame(path, event, data) {
-    for (const [id, p] of streams) if (p === path) dispatch("stream", { id, event, data })
+    for (const [id, s] of streams) {
+      if (s.path !== path) continue
+      if (s.started) dispatch("stream", { id, event, data })
+      else s.queue.push([event, data])
+    }
   }
 
   async function invoke(cmd, args) {
@@ -88,10 +94,13 @@
         return route("GET", args.path)
       case "stream_open": {
         const id = ++nextStream
-        streams.set(id, args.path)
+        const s = { path: args.path, started: false, queue: [] }
+        streams.set(id, s)
         const frames = (config.streams || {})[args.path] || []
         setTimeout(() => {
           for (const [event, data] of frames) dispatch("stream", { id, event, data })
+          s.started = true
+          for (const [event, data] of s.queue.splice(0)) if (streams.has(id)) dispatch("stream", { id, event, data })
         }, 0)
         return id
       }
@@ -180,7 +189,7 @@
     emit: dispatch,
     /** The calls of one command, or of `api` with one method and path prefix. */
     api: (method, prefix) => calls.filter((c) => c.cmd === "api" && c.args.method === method && c.args.path.startsWith(prefix)),
-    streams: () => [...streams.values()],
+    streams: () => [...streams.values()].map((s) => s.path),
     shell,
     /** The terminals opened so far: [{ id, target, open }]. */
     terminals: () => [...terminals].map(([id, t]) => ({ id, ...t })),

@@ -956,7 +956,7 @@ async fn python_prepare(handle: AppHandle) -> Result<PythonRunner, ApiError> {
         .map_err(|e| ApiError::new(0, e.to_string()))?
         .join("pyodide");
     let h = handle.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<PythonRunner, ApiError> {
         let me = server::request(&app_url, &token, "GET", "/me", None)?;
         let app = h.state::<App>();
         let said = python::specs(me.get("python").unwrap_or(&Value::Null))
