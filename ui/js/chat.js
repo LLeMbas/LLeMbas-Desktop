@@ -20,6 +20,8 @@ import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
 import { folderName, listed, folderTree, newFolder } from "./list.js"
 import { unarchive } from "./archived.js"
 import { isProgress, progressLine, progressTicks } from "./progress.js"
+import { ACTIONS, callDuration, callFacts, callTitle, changeText, count, diffCounts, drawn, endLine } from "./display.js"
+import { DISPLAY } from "./spec.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 import { scopePopover } from "./scope.js"
 import { readAloudButton } from "./voice.js"
@@ -269,20 +271,33 @@ async function regenerate(m) {
 function metricsLine(x) {
   if (!x) return null
   const parts = []
-  if (x.total_tokens) parts.push(t("%(n)s tokens", { n: x.total_tokens.toLocaleString() }))
+  if (x.total_tokens) parts.push(t("%(n)s tokens", { n: count(x.total_tokens) }))
   if (x.tok_s) parts.push(`${x.tok_s} tok/s`)
   if (x.elapsed_ms) parts.push(`${(x.elapsed_ms / 1000).toFixed(1)} s`)
   if (x.context_limit && x.percent !== undefined) parts.push(`${x.percent} % ctx`)
   return parts.length ? h("p", { class: "msg__metrics", text: parts.join(" · ") }) : null
 }
 
-function assistantMessage(m, chat) {
+/**
+ * How a reply that did not finish ended, as a progress object (spec 3.7.0, display.md §4): the
+ * one the server stored with it (`end`) or the last the stream sent, else what the message's
+ * own `error` and `stopped` say -- a reason only where one is known. Null for a finished reply.
+ */
+function endOf(m, last) {
+  if (endLine(m.end)) return m.end
+  if (endLine(last)) return last
+  if (m.error) return { phase: "failed", reason: String(m.error).trim().split("\n")[0] }
+  if (m.stopped) return { phase: "stopped" }
+  return null
+}
+
+function assistantMessage(m, chat, last = null) {
   const el = h("article", { class: "msg msg--assistant", dataset: { id: m.id } })
   const steps = h("div", { class: "msg__steps" })
   renderSteps(steps, m.steps || [], chat)
   el.append(steps)
-  if (m.error) el.append(h("p", { class: "msg__note is-error", text: m.error }))
-  if (m.stopped) el.append(h("p", { class: "msg__note", text: t("Stopped.") }))
+  const end = endOf(m, last)
+  if (end) el.append(h("p", { class: `msg__end is-${end.phase}`, title: m.error && end.phase === "failed" ? String(m.error) : null, text: endLine(end) }))
   const meta = metricsLine(m.metrics)
   const model = m.model ? ctx.models().find((x) => x.id === m.model) || { id: m.model, name: m.model } : null
   el.append(
@@ -304,24 +319,28 @@ function assistantMessage(m, chat) {
   return el
 }
 
-function renderSteps(box, steps, chat) {
+function renderSteps(box, steps, chat, live = false) {
+  // What the person opened or closed stays so while the reply is written: a call is known by
+  // its id (or its place), and the server sends every step again with each change.
+  const was = new Map([...box.querySelectorAll("details[data-key]")].map((d) => [d.dataset.key, d.open]))
   clear(box)
-  for (const s of steps) box.append(step(s, chat))
+  for (const s of steps) box.append(step(s, chat, live))
+  for (const d of box.querySelectorAll("details[data-key]")) if (was.has(d.dataset.key)) d.open = was.get(d.dataset.key)
 }
 
-function step(s, chat) {
+function step(s, chat, live) {
   switch (s.kind) {
     case "thinking":
       return h(
         "details",
-        { class: "step step--thinking", open: s.open || null },
+        { class: "step step--thinking", open: s.open || null, dataset: { key: `think${s.index ?? ""}` } },
         h("summary", { class: "step__row" }, h("span", { class: "step__icon" }, icon(ICONS.bulb)), h("span", { class: "step__label" }, t("Thought"), s.label ? h("span", { class: "step__meta", text: ` · ${s.label}` }) : null), h("span", { class: "step__chev" }, icon(ICONS.chevron))),
         h("div", { class: "step__pre", text: s.text || "" }),
       )
     case "text":
       return h("div", { class: "step step--text md" }, markdown(s.markdown || ""))
     case "tools":
-      return h("div", { class: "step step--tools" }, (s.calls || []).map((c) => toolCall(c, chat)))
+      return h("div", { class: "step step--tools" }, (s.calls || []).map((c, i) => toolCall(c, chat, live, `call${s.index ?? ""}.${c.id || i}`)))
     case "steer":
       return h(
         "div",
@@ -356,27 +375,83 @@ function shownSource(call, chat) {
   return q ? { local: false, path: s.path || "", url: `/chats/${encodeURIComponent(chat.id)}/show?${q}` } : null
 }
 
-function toolCall(c, chat) {
+// --- A tool call, as every LLeMbas client shows one (harness spec 3.7.0, display.md) ---------------
+//
+// One row: the state's mark, the kind's icon, what the tool is called, the call's one short
+// title, the facts from its result (+3 −1, exit 2, 14 hits), how long it took. The server says
+// the kind, the title and an edit's counts in the call's `block`; the page adds nothing of its
+// own to them and falls back to the spec's rules (display.js) only where the server says nothing.
+
+const KIND_ICONS = { shell: ICONS.terminal, edit: ICONS.edit, read: ICONS.fileText, search: ICONS.search, web: ICONS.link, task: ICONS.users, tool: ICONS.tools }
+const STATE_WORDS = { running: () => t("Running"), done: () => t("Done"), failed: () => t("Failed"), denied: () => t("Denied") }
+
+/**
+ * Which of the four states a call is in: the server's word where it sends one, else from the
+ * call's `status`. A call still "running" in a reply that is no longer being written never got
+ * its result: failed, not left spinning.
+ */
+function callState(c, live) {
+  const said = c.block?.state || c.state
+  if (DISPLAY.states.includes(said)) return said === "running" && !live ? "failed" : said
+  if (c.status === "denied" || c.denied) return "denied"
+  if (c.status === "error" || c.error) return "failed"
+  if (c.status === "running") return live ? "running" : "failed"
+  return "done"
+}
+
+const firstLine = (x) => String(typeof x === "string" ? x : JSON.stringify(x)).trim().split("\n")[0]
+
+/** A unified diff, a line a row: added, removed, a hunk's header, the rest. */
+function diffBlock(diff) {
+  const pre = h("pre", { class: "call__pre call__diff" })
+  for (const line of String(diff).replace(/\n$/, "").split("\n")) {
+    const cls = /^(\+\+\+ |--- |diff |index |Index: |=====)/.test(line) ? "is-meta" : line.startsWith("@@") ? "is-hunk" : line.startsWith("+") ? "is-add" : line.startsWith("-") ? "is-del" : ""
+    pre.append(h("span", { class: `diff__line ${cls}`, text: line || " " }))
+  }
+  return pre
+}
+
+function toolCall(c, chat, live, key) {
   const block = c.block || {}
-  const failed = c.status === "error" || !!c.error
+  const kind = block.kind || "tool"
+  if (!drawn(kind)) return null
+  const state = callState(c, live)
+  const title = block.title || callTitle(c.args) || ""
+  const label = block.label || c.label || c.name || ""
+  // The facts after the title: from the server's own numbers, written the spec's way.
+  const facts = []
+  if (kind === "edit") {
+    const n = block.added || block.removed ? { added: block.added || 0, removed: block.removed || 0 } : typeof c.diff === "string" && c.diff ? diffCounts(c.diff) : null
+    if (n) facts.push(h("span", { class: "call__fact call__change", title: changeText(n) }, h("span", { class: "is-add", text: `+${count(n.added)}` }), " ", h("span", { class: "is-del", text: `−${count(n.removed)}` })))
+  } else if (kind === "shell" || (kind === "search" && typeof c.hits === "number")) {
+    for (const f of callFacts({ block: kind, exit: c.exit, hits: c.hits })) facts.push(h("span", { class: `call__fact${kind === "shell" ? " is-bad" : ""}`, text: f }))
+  } else {
+    for (const x of block.chips || []) facts.push(h("span", { class: "call__fact", text: x }))
+  }
+  const took = callDuration(state, block.duration_ms ?? c.duration_ms ?? c.ms)
+  const why = state === "failed" || state === "denied" ? firstLine(c.error || c.reason || "") : ""
   const body = h("div", { class: "call__body" })
   if (c.purpose) body.append(h("p", { class: "muted", text: c.purpose }))
   if (c.args?.command) body.append(h("pre", { class: "call__pre", text: c.args.command }))
-  if (c.diff) body.append(h("pre", { class: "call__pre call__diff", text: typeof c.diff === "string" ? c.diff : JSON.stringify(c.diff, null, 2) }))
+  if (c.diff) body.append(typeof c.diff === "string" ? diffBlock(c.diff) : h("pre", { class: "call__pre", text: JSON.stringify(c.diff, null, 2) }))
   if (c.text) body.append(h("pre", { class: "call__pre", text: c.text }))
   if (c.error) body.append(h("p", { class: "msg__note is-error", text: typeof c.error === "string" ? c.error : JSON.stringify(c.error) }))
   if (c.truncated) body.append(h("p", { class: "muted", text: t("Cut short here; the whole of it is in the web interface.") }))
-  const isShow = c.name === "show" && !failed && shownSource(c, chat)
+  if (!body.childElementCount && state === "running") body.append(h("p", { class: "muted", text: t("Running") }))
+  const isShow = c.name === "show" && state === "done" && shownSource(c, chat)
   const summary = h(
     "summary",
     { class: "call__head" },
-    h("span", { class: `dot${failed ? " is-error" : c.status === "running" ? " is-busy" : " is-ok"}`, "aria-hidden": "true" }),
-    h("span", { class: "call__name", text: c.name || "" }),
-    h("span", { class: "call__title", title: block.title || c.name, text: block.title && block.title !== c.name ? block.title : "" }),
-    h("span", { class: "call__chips" }, (block.chips || []).map((x) => h("span", { class: "chip", text: x }))),
+    h("span", { class: `call__state dot${state === "failed" ? " is-error" : state === "running" ? " is-busy" : state === "denied" ? " is-denied" : " is-ok"}`, role: "img", "aria-label": STATE_WORDS[state](), title: STATE_WORDS[state]() }),
+    h("span", { class: "call__icon", "aria-hidden": "true" }, icon(KIND_ICONS[kind] || ICONS.tools)),
+    h("span", { class: "call__name", text: label }),
+    h("span", { class: "call__title", title: title || null, text: title }),
+    why ? h("span", { class: "call__why", title: why, text: why }) : null,
+    h("span", { class: "call__facts" }, state === "denied" ? h("span", { class: "call__fact is-bad", text: t("Denied") }) : null, facts, took ? h("span", { class: "call__fact call__took", text: took }) : null),
     h("span", { class: "step__chev" }, icon(ICONS.chevron)),
   )
-  const el = h("details", { class: `call${failed ? " is-failed" : ""}` }, summary, body)
+  // An edit shows its change without a click, as the web and the phone do.
+  const el = h("details", { class: `call call--${kind} is-${state}`, open: kind === "edit" && !!c.diff ? true : null, dataset: { key, state, kind } }, summary, body.childElementCount ? body : null)
   if (isShow) {
     el.append(h("button", { type: "button", class: "btn btn--sm call__open", text: t("Open in the viewer"), onclick: () => openShown(c, chat) }))
   }
@@ -469,7 +544,7 @@ class Live {
     }
     switch (event) {
       case "steps":
-        renderSteps(this.steps, data.steps || [], this.chat)
+        renderSteps(this.steps, data.steps || [], this.chat, true)
         this.tailed(data.tail)
         break
       case "tail":
@@ -501,7 +576,8 @@ class Live {
       case "done":
         this.done = true
         this.stopClock()
-        this.el.replaceWith(assistantMessage(data.message, this.chat))
+        // How it ended (stopped, failed) stays on the reply: the stream's last progress says why.
+        this.el.replaceWith(assistantMessage(data.message, this.chat, this.progress))
         renderCards(this.chat, [])
         if (data.chat?.title) setTitle(data.chat.title)
         ctx.changed(this.chat)
@@ -587,11 +663,26 @@ function renderCards(chat, cards) {
   box.hidden = !box.children.length
 }
 
+// The server's mark for "the answer is what was typed beside it" (services/interaction.py OTHER):
+// sent only where typed words go with picked options; alone, they are the answer as they are.
+const OTHER = "__other__"
+
+/**
+ * One card, with what every LLeMbas client offers on it (harness spec 3.7.0, display.md §5, the
+ * words `display.actions`), answered through POST /chats/{chat}/interactions/{card}:
+ *  - an approval: Allow once, Always allow, Deny, and Deny, and say why (the words go to the
+ *    model as `reason`); a command can be corrected before it is allowed (`texts[key]`);
+ *  - a question: its options, the recommended first; Something else (typed: `texts[key]`) and a
+ *    question asked back (`asks[key]`) where the item takes free text; Dismiss where the card may be;
+ *  - a plan: Approve -- into Edit or Manual where the device offers the choice (`choices[key]`)
+ *    -- Revise with what to change (`reason`, verdict deny), and Dismiss;
+ *  - something to do on the phone: said, and Decline.
+ */
 function cardOf(chat, card) {
-  const answers = { choices: {}, texts: {} }
-  const decides = card.items.some((i) => i.kind === "approval" || i.kind === "plan")
-  const el = h("section", { class: `ask ask--${card.kind}`, "aria-label": t("Waiting for your answer") })
-  if (card.why) el.append(h("p", { class: "muted", text: card.why }))
+  const answers = { choices: {}, texts: {}, asks: {} }
+  const kind = card.kind || (card.items.some((i) => i.kind === "plan") ? "plan" : card.items.some((i) => i.kind === "approval") ? "approval" : "question")
+  const el = h("section", { class: `ask ask--${kind}`, "aria-label": t("Waiting for your answer") })
+  if (card.why) el.append(h("p", { class: "muted", text: t("It says: %(purpose)s", { purpose: card.why }) }))
   for (const item of card.items) {
     const part = h("div", { class: "ask__item" })
     // A background subagent asks, not the conversation's own turn: said first (`job`).
@@ -623,8 +714,14 @@ function cardOf(chat, card) {
         if (item.detail) part.append(h("pre", { class: "call__pre", text: item.detail }))
         detailShown = true
       }
-    } else if (item.kind === "plan" && item.plan) {
-      part.append(h("p", { class: "ask__title", text: item.plan.title || item.title }), planList(item.plan))
+    } else if (item.kind === "plan") {
+      part.append(h("p", { class: "ask__title", text: item.plan?.title || item.title || t("The plan") }))
+      if (item.plan) part.append(planList(item.plan))
+      else if (item.detail) part.append(h("div", { class: "ask__plan md" }, markdown(item.detail)))
+      detailShown = true
+    } else if (item.kind === "phone_action") {
+      part.append(h("p", { class: "ask__title", text: item.title }), h("p", { class: "muted", text: t("Confirm it on your phone, in the app. It is not done until you do.") }))
+      detailShown = true
     } else {
       part.append(h("p", { class: "ask__title", text: item.title }))
     }
@@ -632,49 +729,17 @@ function cardOf(chat, card) {
     // The model's account of what it is for, attributed to it; then the server's reason for asking.
     if (item.purpose) part.append(h("p", { class: "muted", text: t("It says: %(purpose)s", { purpose: item.purpose }) }))
     if (item.reason) part.append(h("p", { class: "muted ask__reason", text: item.reason }))
-    if (item.options?.length) {
-      const picked = new Set()
-      const opts = h("div", { class: "ask__options", role: item.multiple ? "group" : "radiogroup" })
-      for (const o of item.options) {
-        const b = h(
-          "button",
-          { type: "button", class: "opt", "aria-pressed": "false" },
-          h("span", { class: "opt__label", text: o.label }),
-          o.description ? h("span", { class: "opt__desc", text: o.description }) : null,
-          o.recommended ? h("span", { class: "chip", text: t("Recommended") }) : null,
-        )
-        b.addEventListener("click", () => {
-          if (!item.multiple) {
-            picked.clear()
-            for (const x of opts.children) x.setAttribute("aria-pressed", "false")
-          }
-          if (picked.has(o.label)) picked.delete(o.label)
-          else picked.add(o.label)
-          b.setAttribute("aria-pressed", String(picked.has(o.label)))
-          answers.choices[item.key] = [...picked]
-        })
-        opts.append(b)
-      }
-      part.append(opts)
-    }
-    if (item.free_text && item.kind === "question") {
-      const typed = h("input", { type: "text", class: "ask__text", placeholder: t("Or type an answer"), "aria-label": t("Your answer") })
-      typed.addEventListener("input", () => {
-        answers.texts[item.key] = typed.value
-      })
-      part.append(typed)
-    }
+    if (item.kind === "question") part.append(questionOptions(item, answers))
     el.append(part)
   }
   const said = h("p", { class: "ask__said", "aria-live": "polite" })
-  const send = async (verdict) => {
-    for (const b of el.querySelectorAll(".ask__actions button")) b.disabled = true
+  const send = async (verdict, more = {}) => {
+    for (const b of el.querySelectorAll("button")) b.disabled = true
+    const body = { verdict, choices: { ...answers.choices, ...(more.choices || {}) }, texts: answers.texts }
+    if (Object.keys(answers.asks).length) body.asks = answers.asks
+    if (more.reason) body.reason = more.reason
     try {
-      await post(`/chats/${encodeURIComponent(chat.id)}/interactions/${encodeURIComponent(card.id)}`, {
-        verdict,
-        choices: answers.choices,
-        texts: answers.texts,
-      })
+      await post(`/chats/${encodeURIComponent(chat.id)}/interactions/${encodeURIComponent(card.id)}`, body)
       el.remove()
       if (!$("cards").children.length) $("cards").hidden = true
     } catch (err) {
@@ -684,22 +749,129 @@ function cardOf(chat, card) {
         return
       }
       said.textContent = why(err)
-      for (const b of el.querySelectorAll(".ask__actions button")) b.disabled = false
+      for (const b of el.querySelectorAll("button")) b.disabled = false
     }
   }
+  const btn = (label, onclick, cls = "") => h("button", { type: "button", class: `btn ${cls}`, onclick }, h("span", { text: label }))
   const actions = h("div", { class: "ask__actions" })
-  if (decides) {
-    const isPlan = card.items.some((i) => i.kind === "plan")
-    append(actions, [
-      h("button", { type: "button", class: "btn btn--primary", text: isPlan ? t("Carry it out") : t("Allow"), onclick: () => send("allow") }),
-      isPlan ? null : h("button", { type: "button", class: "btn", text: t("Always allow"), onclick: () => send("allow_always") }),
-      h("button", { type: "button", class: "btn", text: isPlan ? t("Not yet") : t("Deny"), onclick: () => send("deny") }),
-    ])
+  // A second step in the card's own place: words for the model with a refusal (why not; what to
+  // change in the plan). The first row comes back with Cancel; nothing is sent until its button.
+  const explain = ({ label, placeholder, sendLabel, cls }) => {
+    const box = h("textarea", { class: "ask__reason-input", rows: "2", spellcheck: "false", "aria-label": label, placeholder })
+    const go = btn(sendLabel, () => send("deny", { reason: box.value.trim() }), cls)
+    const form = h("div", { class: "ask__explain" }, box, h("div", { class: "ask__actions" }, go, btn(t("Cancel"), () => (form.remove(), (actions.hidden = false)))))
+    box.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) go.click()
+    })
+    actions.hidden = true
+    actions.after(form)
+    box.focus()
+  }
+  if (kind === "plan") {
+    const item = card.items.find((i) => i.kind === "plan") || card.items[0]
+    if (item?.mode_choice) {
+      // A device's plan: approved into the mode the work goes on in, never beyond these two.
+      actions.append(
+        btn(t(ACTIONS.plan.approve_edit), () => send("allow", { choices: { [item.key]: ["edit"] } }), "btn--primary"),
+        btn(t(ACTIONS.plan.approve_manual), () => send("allow", { choices: { [item.key]: ["manual"] } })),
+      )
+    } else {
+      el.append(h("p", { class: "muted ask__note", text: t("Approving ends Plan mode: the model carries the plan out in this reply, keeping it current above the message box.") }))
+      actions.append(btn(t("Approve"), () => send("allow"), "btn--primary"))
+    }
+    actions.append(
+      btn(t(ACTIONS.plan.revise), () => explain({ label: t("What to change"), placeholder: t("What to change in the plan…"), sendLabel: t("Send it back"), cls: "btn--primary" })),
+      btn(t("Dismiss"), () => send("deny")),
+    )
+  } else if (kind === "approval") {
+    actions.append(
+      btn(t(ACTIONS.approval.once), () => send("allow"), "btn--primary"),
+      btn(t(ACTIONS.approval.always), () => send("allow_always")),
+      btn(t(ACTIONS.approval.deny), () => send("deny")),
+      btn(t(ACTIONS.approval.deny_reason), () => explain({ label: t("Why not, and what to do instead"), placeholder: t("Why not, and what to do instead…"), sendLabel: t(ACTIONS.approval.deny_reason), cls: "btn--danger" })),
+    )
+  } else if (kind === "phone_action") {
+    actions.append(btn(t("Decline"), () => send("deny")))
   } else {
-    actions.append(h("button", { type: "button", class: "btn btn--primary", text: t("Answer"), onclick: () => send("") }))
+    actions.append(btn(card.items.length === 1 ? t("Answer") : t("Send answers"), () => send(""), "btn--primary"))
+    if (card.dismissable) actions.append(btn(t("Dismiss"), () => send("deny")))
+    el.append(h("p", { class: "muted ask__note", text: card.items.length > 1 ? t("All of them at once. Leave any blank to skip it.") : t("Leave any blank to skip it.") }))
   }
   el.append(actions, said)
   return el
+}
+
+/**
+ * A question's answers: its options (the recommended first, marked), one or several as the
+ * model said; and, where it takes free text, a row of the person's own -- Something else -- and
+ * a question back to the model instead of an answer. Each row is the same two tracks, so the
+ * typed rows line up with the options above them.
+ */
+function questionOptions(item, answers) {
+  const picked = new Set()
+  let typed = ""
+  const opts = h("div", { class: "ask__options", role: item.multiple ? "group" : "radiogroup" })
+  const settle = () => {
+    // Typed words beside picked options need the server's mark to count; alone they are the answer.
+    const picks = [...picked]
+    if (typed && picks.length) picks.push(OTHER)
+    if (picks.length) answers.choices[item.key] = picks
+    else delete answers.choices[item.key]
+    if (typed) answers.texts[item.key] = typed
+    else delete answers.texts[item.key]
+  }
+  const options = [...(item.options || [])].sort((a, b) => Number(!!b.recommended) - Number(!!a.recommended))
+  const other = item.free_text ? h("input", { type: "text", class: "ask__text", autocomplete: "off", placeholder: t("Your own answer…"), "aria-label": t(ACTIONS.question.something_else) }) : null
+  for (const o of options) {
+    const b = h(
+      "button",
+      { type: "button", class: "opt", "aria-pressed": "false" },
+      h("span", { class: "opt__label", text: o.label }),
+      o.description ? h("span", { class: "opt__desc", text: o.description }) : null,
+      o.recommended ? h("span", { class: "chip", text: t("Recommended") }) : null,
+    )
+    b.addEventListener("click", () => {
+      if (!item.multiple) {
+        const was = picked.has(o.label)
+        picked.clear()
+        for (const x of opts.querySelectorAll("button.opt")) x.setAttribute("aria-pressed", "false")
+        if (was) picked.add(o.label)
+        // One answer: choosing an option puts the typed one aside.
+        if (other && !was) {
+          other.value = ""
+          typed = ""
+          other.closest(".opt").dataset.on = "false"
+        }
+      }
+      if (picked.has(o.label)) picked.delete(o.label)
+      else picked.add(o.label)
+      b.setAttribute("aria-pressed", String(picked.has(o.label)))
+      settle()
+    })
+    opts.append(b)
+  }
+  if (other) {
+    const row = h("label", { class: "opt opt--typed", dataset: { on: "false" } }, h("span", { class: "opt__label", text: t(ACTIONS.question.something_else) }), other)
+    other.addEventListener("input", () => {
+      typed = other.value.trim()
+      row.dataset.on = String(!!typed)
+      if (typed && !item.multiple) {
+        picked.clear()
+        for (const x of opts.querySelectorAll("button.opt")) x.setAttribute("aria-pressed", "false")
+      }
+      settle()
+    })
+    const back = h("input", { type: "text", class: "ask__text", autocomplete: "off", placeholder: t("Your question for the model…"), "aria-label": t("Ask it something back") })
+    const backRow = h("label", { class: "opt opt--typed", dataset: { on: "false" } }, h("span", { class: "opt__label", text: t("Ask it something back") }), back)
+    back.addEventListener("input", () => {
+      const q = back.value.trim()
+      backRow.dataset.on = String(!!q)
+      if (q) answers.asks[item.key] = q
+      else delete answers.asks[item.key]
+    })
+    opts.append(row, backRow)
+  }
+  return opts
 }
 
 // --- Opening a chat --------------------------------------------------------------------------------

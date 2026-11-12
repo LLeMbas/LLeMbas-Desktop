@@ -656,6 +656,43 @@ test("B1: every conformance case of the spec draws the same text and line", asyn
   assert.deepEqual(p.errors, [])
 })
 
+test("B1: the display rules of spec 3.7.0: every conformance case's title, duration, change, facts, end line and drawn", async () => {
+  const { cases } = JSON.parse(readFileSync(join(HERE, "conformance", "display.json"), "utf8"))
+  const p = await page(b3())
+  const got = await p.evaluate(async (cs) => {
+    const m = await import("/js/display.js")
+    return cs.map((c) => {
+      switch (c.show) {
+        case "title":
+          return { title: m.callTitle(c.args) }
+        case "duration":
+          return { duration: m.callDuration(c.state, c.ms) }
+        case "change": {
+          const n = m.diffCounts(c.diff)
+          return { ...n, text: m.changeText(n, true) }
+        }
+        case "facts":
+          return { facts: m.callFacts(c, true) }
+        case "end":
+          return { line: m.endLine(c.progress, c.now) }
+        case "drawn":
+          return { drawn: m.drawn(c.block) }
+        default:
+          return { unknown: c.show }
+      }
+    })
+  }, cases)
+  assert.ok(cases.length > 50, "the spec's cases are there")
+  cases.forEach((c, i) => assert.deepEqual(got[i], c.expect, `${c.show}: ${c.about}`))
+  // The page's texts are the spec's own objects, not a copy.
+  const same = await p.evaluate(async () => {
+    const spec = await import("/js/spec.js")
+    return [spec.SPEC_VERSION, spec.PROGRESS.phases.length, Object.keys(spec.DISPLAY.actions).sort().join()]
+  })
+  assert.deepEqual(same, [readFileSync(join(HERE, "conformance", "SOURCE"), "utf8").trim().split(" ").pop(), 13, "approval,plan,question"])
+  assert.deepEqual(p.errors, [])
+})
+
 test("B1: a reply being written draws the stream's progress, its clock moving, and the status text without one", async () => {
   const p = await page(agentChatOpen([["status", { text: "Writing…" }]]))
   await openChatRow(p, "chat2")
@@ -2209,6 +2246,322 @@ test("T1: the composer's chips wrap and never scroll: with a file, Draw a pictur
     assert.deepEqual(p.errors, [])
     await p.context().close()
   }
+})
+
+// --- P2: the chat screen against the web -- cards, tool calls, the end of a reply, the rest ------
+//
+// What each card offers is display.md §5 (spec 3.7.0), under the spec's words; what is sent is the
+// body `POST /api/v2/chats/{chat}/interactions/{card}` documents (verdict, reason, choices, texts,
+// asks). A tool call is drawn from its `block` as `api/v2/serialise.py:tool_call` sends it.
+
+const answersTo = (p, card) => p.evaluate((c) => window.__mock.api("POST", `/chats/chat2/interactions/${c}`).map((x) => x.args.body), card)
+const actionWords = (p) => p.$$eval("#cards .ask > .ask__actions .btn", (l) => l.filter((b) => b.offsetParent !== null).map((b) => b.textContent.trim()))
+
+function p2(cards, over = {}) {
+  const routes = {}
+  for (const id of ["q1", "q2", "q3", "pl1", "pl2", "ph1", "card7", "card8"]) routes[`POST /chats/chat2/interactions/${id}`] = { answered: true, remembered: false, not_remembered: [] }
+  return agentChatOpen([["ask", { cards }]], { ...routes, ...over })
+}
+
+const item = (over = {}) => ({ index: 0, key: "0", kind: "question", tool: "", title: "Which database?", header: "Database", detail: "", reason: "", purpose: "", options: [], multiple: false, free_text: true, editable: false, plan: null, mode_choice: false, job: "", ...over })
+const OPTIONS = [
+  { label: "SQLite", description: "One file, no server.", recommended: false },
+  { label: "Postgres", description: "A server of its own.", recommended: true },
+  { label: "None", description: "", recommended: false },
+]
+
+test("P2: an approval offers Allow once, Always allow, Deny, and Deny, and say why -- the reason goes with the refusal", async () => {
+  const p = await page(p2([deviceBashCard()]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#cards .ask__edit")
+  assert.deepEqual(await actionWords(p), ["Allow once", "Always allow", "Deny", "Deny, and say why"])
+  await p.click("#cards .btn >> text=Deny, and say why")
+  await p.waitForSelector("#cards .ask__reason-input")
+  assert.deepEqual(await actionWords(p), [], "the first row gives way to the reason")
+  assert.equal(await p.evaluate(() => document.activeElement.className), "ask__reason-input")
+  // Cancel: back to the four, nothing sent.
+  await p.click("#cards .ask__explain .btn >> text=Cancel")
+  assert.equal((await actionWords(p)).length, 4)
+  assert.deepEqual(await answersTo(p, "card7"), [])
+  await p.click("#cards .btn >> text=Deny, and say why")
+  await p.fill("#cards .ask__reason-input", "Not there: look in dist instead")
+  await shot(p, "p2-deny-reason")
+  await p.click("#cards .ask__explain .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/card7").length === 1)
+  assert.deepEqual(await answersTo(p, "card7"), [{ verdict: "deny", choices: {}, texts: {}, reason: "Not there: look in dist instead" }])
+  await p.waitForSelector("#cards", { state: "hidden" })
+  // Always allow.
+  await p.evaluate(([path, c]) => window.__mock.frame(path, "ask", { cards: [c] }), [STREAM2, deviceBashCard({ id: "card8" })])
+  await p.click("#cards .btn >> text=Always allow")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/card8").length === 1)
+  assert.equal((await answersTo(p, "card8"))[0].verdict, "allow_always")
+  assert.deepEqual(p.errors, [])
+})
+
+test("P2: a question: the recommended option first, Something else typed, and a question asked back", async () => {
+  const card = { id: "q1", kind: "question", why: "The schema is open.", dismissable: true, expires_in: null, items: [item({ options: OPTIONS })] }
+  const p = await page(p2([card]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#cards .opt")
+  assert.deepEqual(await p.$$eval("#cards .opt .opt__label", (l) => l.map((x) => x.textContent)), ["Postgres", "SQLite", "None", "Something else", "Ask it something back"])
+  assert.match(await p.textContent("#cards .ask"), /It says: The schema is open\./)
+  assert.deepEqual(await actionWords(p), ["Answer", "Dismiss"])
+  // One answer: an option, then a typed one takes its place.
+  await p.click("#cards button.opt >> text=SQLite")
+  assert.equal(await p.getAttribute("#cards button.opt:has-text('SQLite')", "aria-pressed"), "true")
+  await p.fill("#cards .opt--typed >> nth=0 >> input", "DuckDB")
+  assert.equal(await p.getAttribute("#cards button.opt:has-text('SQLite')", "aria-pressed"), "false", "one answer: the typed one")
+  await shot(p, "p2-question")
+  await p.click("#cards .ask__actions .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/q1").length === 1)
+  assert.deepEqual(await answersTo(p, "q1"), [{ verdict: "", choices: {}, texts: { 0: "DuckDB" } }])
+  // Several: picked options and typed words together carry the server's mark for "something else".
+  const many = { ...card, id: "q2", dismissable: false, items: [item({ options: OPTIONS, multiple: true }), item({ index: 1, key: "1", title: "Which cache?", header: "Cache", options: [] })] }
+  await p.evaluate(([path, c]) => window.__mock.frame(path, "ask", { cards: [c] }), [STREAM2, many])
+  await p.waitForSelector("#cards .ask[data-card='q2']")
+  assert.deepEqual(await actionWords(p), ["Send answers"])
+  await p.click("#cards button.opt >> text=SQLite")
+  await p.click("#cards button.opt >> text=None")
+  await p.fill("#cards .ask__item >> nth=0 >> .opt--typed >> nth=0 >> input", "and a flat file")
+  await p.fill("#cards .ask__item >> nth=1 >> .opt--typed >> nth=1 >> input", "Is a cache needed at all?")
+  await p.click("#cards .ask__actions .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/q2").length === 1)
+  assert.deepEqual(await answersTo(p, "q2"), [{ verdict: "", choices: { 0: ["SQLite", "None", "__other__"] }, texts: { 0: "and a flat file" }, asks: { 1: "Is a cache needed at all?" } }])
+  // Dismiss, where the card may be put aside.
+  await p.evaluate(([path, c]) => window.__mock.frame(path, "ask", { cards: [c] }), [STREAM2, { ...card, id: "q3" }])
+  await p.waitForSelector("#cards .ask[data-card='q3']")
+  await p.click("#cards .btn >> text=Dismiss")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/q3").length === 1)
+  assert.equal((await answersTo(p, "q3"))[0].verdict, "deny")
+  assert.deepEqual(p.errors, [])
+})
+
+test("P2: a plan: approved into Edit or Manual where the device offers the choice, revised with what to change, or dismissed", async () => {
+  const plan = { title: "Tidy the build", phases: [{ title: "Clean", tasks: [{ text: "Remove dist", status: "pending" }, { text: "Run the tests", status: "pending" }] }] }
+  const card = { id: "pl1", kind: "plan", why: "", dismissable: true, expires_in: null, items: [item({ kind: "plan", title: "The plan", header: "", free_text: false, plan, mode_choice: true })] }
+  const p = await page(p2([card]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#cards .ask--plan")
+  assert.match(await p.textContent("#cards .ask"), /Remove dist/)
+  assert.deepEqual(await actionWords(p), ["Approve, continue in Edit", "Approve, continue in Manual", "Revise", "Dismiss"])
+  await shot(p, "p2-plan")
+  await p.click("#cards .btn >> text=Approve, continue in Manual")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/pl1").length === 1)
+  assert.deepEqual(await answersTo(p, "pl1"), [{ verdict: "allow", choices: { 0: ["manual"] }, texts: {} }])
+  // A chat's own plan (no mode to choose), as text: Approve, and Revise sends it back with words.
+  const own = { ...card, id: "pl2", items: [item({ kind: "plan", title: "The plan", header: "", free_text: false, plan: null, detail: "1. Remove **dist**\n2. Run the tests", mode_choice: false })] }
+  await p.evaluate(([path, c]) => window.__mock.frame(path, "ask", { cards: [c] }), [STREAM2, own])
+  await p.waitForSelector("#cards .ask[data-card='pl2']")
+  assert.deepEqual(await actionWords(p), ["Approve", "Revise", "Dismiss"])
+  assert.equal(await p.textContent("#cards .ask__plan strong"), "dist", "a plan sent as text is drawn as markdown")
+  assert.match(await p.textContent("#cards .ask"), /Approving ends Plan mode/)
+  await p.click("#cards .btn >> text=Revise")
+  await p.fill("#cards .ask__reason-input", "Keep dist/assets")
+  await p.click("#cards .ask__explain .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/pl2").length === 1)
+  assert.deepEqual(await answersTo(p, "pl2"), [{ verdict: "deny", choices: {}, texts: {}, reason: "Keep dist/assets" }])
+  assert.deepEqual(p.errors, [])
+})
+
+test("P2: something to do on the phone is said, and can be declined; every card's buttons are reachable at 390 px", async () => {
+  const phone = { id: "ph1", kind: "phone_action", why: "", dismissable: true, expires_in: null, items: [item({ kind: "phone_action", title: "Open the timetable", header: "", free_text: false })] }
+  let p = await page(p2([phone]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#cards .ask--phone_action")
+  assert.match(await p.textContent("#cards .ask"), /Open the timetable.*Confirm it on your phone/s)
+  assert.deepEqual(await actionWords(p), ["Decline"])
+  await p.click("#cards .btn >> text=Decline")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/ph1").length === 1)
+  assert.equal((await answersTo(p, "ph1"))[0].verdict, "deny")
+  await p.context().close()
+  const plan = { id: "pl1", kind: "plan", why: "", dismissable: true, expires_in: null, items: [item({ kind: "plan", title: "The plan", header: "", free_text: false, plan: { title: "Tidy", phases: [{ title: "Clean", tasks: [{ text: "Remove dist", status: "pending" }] }] }, mode_choice: true })] }
+  const question = { id: "q1", kind: "question", why: "", dismissable: true, expires_in: null, items: [item({ options: OPTIONS })] }
+  for (const [name, card] of [["approval", deviceBashCard()], ["plan", plan], ["question", question]]) {
+    p = await page(p2([card]), { width: 390, height: 844 })
+    await p.evaluate(() => document.querySelector('.chatrow[data-id="chat2"]').click())
+    await p.waitForSelector("#cards .ask")
+    const out = await p.$$eval("#cards .ask button, #cards .ask input, #cards .ask textarea", (l) => l.filter((b) => b.offsetParent !== null).filter((b) => { const r = b.getBoundingClientRect(); return r.left < 0 || r.right > innerWidth + 0.5 || r.width < 24 }).map((b) => b.textContent || b.className))
+    assert.deepEqual(out, [], `${name}: inside the window`)
+    const heights = await p.$$eval("#cards .ask > .ask__actions .btn", (l) => [...new Set(l.map((b) => Math.round(b.getBoundingClientRect().height)))])
+    assert.equal(heights.length, 1, `${name}: the buttons are one height (${heights})`)
+    assert.ok(await noSideways(p, 390), `${name}: nothing sideways`)
+    if (name === "approval") {
+      await p.click("#cards .btn >> text=Deny, and say why")
+      const box = await p.locator("#cards .ask__reason-input").boundingBox()
+      assert.ok(box.x >= 0 && box.x + box.width <= 390, "the reason's box inside")
+    }
+    await shot(p, `p2-card-${name}-390`)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+const DIFF = "--- a/README.md\n+++ b/README.md\n@@ -1,3 +1,4 @@\n # Lembas\n-One bite.\n+One small bite\n+is enough.\n keeps\n"
+const call = (over = {}) => ({ id: "t1", name: "bash", status: "ok", args: { command: "bun test\n--bail" }, text: "12 pass", block: { kind: "shell", title: "bun test", chips: ["exit 0"], added: 0, removed: 0 }, ...over })
+const CALLS = [
+  call({ exit: 0 }),
+  call({ id: "t2", name: "edit", args: { path: "README.md" }, text: "", diff: DIFF, block: { kind: "edit", title: "README.md", chips: ["+2", "−1"], added: 2, removed: 1 } }),
+  call({ id: "t3", status: "error", exit: 2, error: "exit status 2\nmake: *** [all] Error 2", args: { command: "make" }, text: "", block: { kind: "shell", title: "make", chips: ["exit 2"], added: 0, removed: 0 } }),
+  call({ id: "t4", name: "grep", args: { pattern: "TODO", path: "src" }, text: "", hits: 1400, block: { kind: "search", title: "TODO", chips: ["1400 hits"], added: 0, removed: 0 } }),
+  call({ id: "t5", name: "todo_write", args: {}, text: "", block: { kind: "hidden", title: "", chips: [], added: 0, removed: 0 } }),
+  call({ id: "t6", name: "read", status: "running", args: { path: "src/app.ts" }, text: "", block: { kind: "read", title: "src/app.ts", chips: [], added: 0, removed: 0 } }),
+  call({ id: "t7", name: "bash", status: "denied", error: "Not there: look in dist instead", args: { command: "rm -rf build" }, text: "", block: { kind: "shell", title: "rm -rf build", chips: [], added: 0, removed: 0 } }),
+  call({ id: "t8", name: "mcp_weather", args: { city: "Bree" }, text: "rain", duration_ms: 8449, block: { kind: "tool", title: "", label: "Weather", chips: [], added: 0, removed: 0 } }),
+]
+const reply = (over = {}) => ({ id: "m2", role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", metrics: { total_tokens: 12480, tok_s: 12.5, elapsed_ms: 8400 }, steps: [{ index: 0, kind: "tools", open: false, calls: CALLS }, { index: 1, kind: "text", open: true, markdown: "Done." }], ...over })
+const callRows = (p, scope = "#messages") => p.$$eval(`${scope} .call`, (l) => l.map((c) => ({ id: c.dataset.key.split(".").pop(), state: c.dataset.state, kind: c.dataset.kind, name: c.querySelector(".call__name").textContent, title: c.querySelector(".call__title").textContent, facts: [...c.querySelectorAll(".call__fact")].map((f) => f.textContent), open: c.open, mark: c.querySelector(".call__state").getAttribute("aria-label") })))
+
+function p2calls(over = {}, routes = {}) {
+  return {
+    status: status(),
+    routes: baseRoutes({ "GET /chats/chat2": { chat: agentChat(), messages: [userMessage("m1", "Tidy the build"), reply(over)], more: false, live: null }, "GET /models?chat=chat2": models(), ...routes }),
+    streams: {},
+  }
+}
+
+test("P2: a tool call is drawn from the server's block: what it is called, its title, state, the facts and how long it took", async () => {
+  const p = await page(p2calls(), { width: 1280, height: 1000 })
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#messages .call")
+  const rows = await callRows(p)
+  assert.deepEqual(rows.map((r) => r.id), ["t1", "t2", "t3", "t4", "t6", "t7", "t8"], "a hidden tool is not drawn as a call")
+  const by = Object.fromEntries(rows.map((r) => [r.id, r]))
+  assert.deepEqual([by.t1.state, by.t1.name, by.t1.title, by.t1.facts], ["done", "bash", "bun test", []], "exit 0 is no fact")
+  assert.deepEqual([by.t2.kind, by.t2.title, by.t2.facts, by.t2.open], ["edit", "README.md", ["+2 −1"], true], "an edit: +added −removed, its change shown")
+  assert.deepEqual([by.t3.state, by.t3.facts, by.t3.mark], ["failed", ["exit 2"], "Failed"])
+  assert.equal(await p.textContent(".call[data-key$='t3'] .call__why"), "exit status 2", "the first line of the error")
+  assert.deepEqual(by.t4.facts, ["1,400 hits"], "a count in the page's number format")
+  assert.equal(by.t6.state, "failed", "a call still running in a finished reply never got its result")
+  assert.deepEqual([by.t7.state, by.t7.facts, by.t7.mark], ["denied", ["Denied"], "Denied"])
+  assert.deepEqual([by.t8.name, by.t8.title, by.t8.facts], ["Weather", "", ["8.4s"]], "the server's label, and the duration where it is kept")
+  // The change, a line a row, coloured by what it does.
+  assert.deepEqual(await p.$$eval(".call[data-key$='t2'] .diff__line", (l) => l.map((x) => x.className.replace("diff__line", "").trim())), ["is-meta", "is-meta", "is-hunk", "", "is-del", "is-add", "is-add", ""])
+  // The four states are told apart by the mark itself.
+  const marks = await p.$$eval("#messages .call__state", (l) => [...new Set(l.map((x) => x.className))])
+  assert.equal(marks.length, 3, `done, failed and denied look different: ${marks}`)
+  assert.match(await p.textContent(".msg--assistant .msg__metrics"), /12,480 tokens/)
+  await shot(p, "p2-calls-1280")
+  assert.deepEqual(p.errors, [])
+  await p.context().close()
+  // At 390 px every row stays inside the reply, the title giving way.
+  const n = await page(p2calls(), { width: 390, height: 844 })
+  await n.evaluate(() => document.querySelector('.chatrow[data-id="chat2"]').click())
+  await n.waitForSelector("#messages .call")
+  const out = await n.$$eval("#messages .call__head > *", (l) => l.filter((x) => x.offsetParent !== null).filter((x) => { const r = x.getBoundingClientRect(); return r.right > innerWidth + 0.5 || r.left < 0 }).length)
+  assert.equal(out, 0, "nothing past the window")
+  assert.ok(await noSideways(n, 390))
+  await shot(n, "p2-calls-390")
+  assert.deepEqual(n.errors, [])
+})
+
+test("P2: while a reply is written a call runs, then is done; what the person opened stays open as the steps come again", async () => {
+  const running = [{ index: 0, kind: "tools", open: true, calls: [call({ status: "running", text: "" })] }]
+  const p = await page(agentChatOpen([["steps", { steps: running, tail: { thinking: false, text: "", label: "" } }]]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live .call")
+  let [row] = await callRows(p, ".msg.is-live")
+  assert.deepEqual([row.state, row.mark, row.open], ["running", "Running", false])
+  await p.click(".msg.is-live .call__head")
+  await p.evaluate(([path, c]) => window.__mock.frame(path, "steps", { steps: [{ index: 0, kind: "tools", open: true, calls: [c] }], tail: { thinking: false, text: "", label: "" } }), [STREAM2, call({ exit: 0, duration_ms: 412 })])
+  await p.waitForSelector(".msg.is-live .call.is-done")
+  ;[row] = await callRows(p, ".msg.is-live")
+  assert.deepEqual([row.state, row.facts, row.open], ["done", ["0.4s"], true])
+  assert.deepEqual(p.errors, [])
+})
+
+test("P2: how a reply that did not finish ended stays on it: Stopped, with the reason where one is known, or Failed with the error", async () => {
+  // From what is stored: stopped, and failed with a long error -- its first line, once.
+  let p = await page(p2calls({ stopped: true, steps: [{ index: 0, kind: "text", open: true, markdown: "Half an ans" }] }))
+  await openChatRow(p, "chat2")
+  assert.equal(await p.textContent(".msg--assistant .msg__end"), "Stopped")
+  await p.context().close()
+  p = await page(p2calls({ error: "502 Bad Gateway\nupstream said no", steps: [] }))
+  await openChatRow(p, "chat2")
+  assert.equal(await p.textContent(".msg--assistant .msg__end.is-failed"), "Failed: 502 Bad Gateway")
+  assert.equal(await p.locator(".msg--assistant .msg__note.is-error").count(), 0, "the raw error is not printed beside it")
+  await p.context().close()
+  // Live: the stream's last progress says why, and the line stays when the reply is done.
+  p = await page(agentChatOpen([["status", { text: "Writing…" }]]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live")
+  await p.evaluate(([path, f, m]) => {
+    window.__mock.frame(path, "status", f)
+    window.__mock.frame(path, "done", { message: m, chat: null, next: false })
+  }, [STREAM2, fixture("event_status_stopped"), reply({ stopped: true, steps: [{ index: 0, kind: "text", open: true, markdown: "Half" }] })])
+  await p.waitForSelector(".msg--assistant:not(.is-live) .msg__end")
+  assert.equal(await p.textContent(".msg--assistant .msg__end"), "Stopped: by you")
+  assert.deepEqual(p.errors, [])
+})
+
+test("P2: the rest of the chat screen works: edit a message, regenerate, stop, a queued message, earlier messages, attach, the chat's menu", async () => {
+  const cfg = agentChatOpen([["status", { text: "Writing…" }]], {
+    "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?"), reply({ id: "m6", steps: [{ index: 0, kind: "text", open: true, markdown: "With **care**." }] })], more: true, live: null },
+    "GET /models?chat=chat1": models(),
+    "GET /chats/chat1/messages?before=m5": { messages: [userMessage("m3", "An earlier question")], more: false },
+    "POST /chats/chat1/messages/m5/edit": { ok: true },
+    "POST /chats/chat1/messages/m6/regenerate": { ok: true },
+    "POST /chats/chat1/messages": { message: { ...userMessage("m7", "And how long does it keep?"), queued: true }, reply: null },
+    "POST /chats/chat2/messages": { message: { ...userMessage("m8", "Also the docs"), queued: true }, reply: null },
+    "POST /chats/chat2/messages/m2/stop": { stopped: true },
+    "PATCH /chats/chat1": { chat: chatRow({ title: "Waybread, properly" }) },
+    "DELETE /chats/chat1": { deleted: true },
+  })
+  cfg.commands = { attach_pick: [{ name: "recipe.md", size: 2048, attachment: { id: "att1", name: "recipe.md", size: 2048, image: false } }] }
+  const p = await page(cfg)
+  await openChatRow(p, "chat1")
+  // Earlier messages are put above, and the button goes when there are no more.
+  await p.click(".thread__earlier")
+  await p.waitForFunction(() => document.querySelector("#messages .msg")?.dataset.id === "m3")
+  assert.equal(await p.locator(".thread__earlier").count(), 0)
+  // Edit: the box holds the text; saving posts it.
+  await p.hover(".msg--user[data-id='m5']")
+  await p.click(".msg--user[data-id='m5'] .msg__act >> nth=0")
+  assert.equal(await p.inputValue(".msg__edit"), "How is lembas made?")
+  await p.fill(".msg__edit", "How was lembas made?")
+  await p.click(".msg__editbar .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages/m5/edit").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/chats/chat1/messages/m5/edit")))[0].args.body, { text: "How was lembas made?" })
+  // Regenerate, on the last reply only.
+  await p.waitForSelector(".msg--assistant[data-id='m6'] .msg__regen")
+  await p.click(".msg--assistant[data-id='m6'] .msg__regen")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages/m6/regenerate").length === 1)
+  // Attach: the file Rust sent is a tile, and goes with the message.
+  await p.waitForSelector("#messages .msg")
+  await p.click("#attach")
+  await p.waitForSelector("#composer-files .tile.is-ready")
+  assert.match(await p.textContent("#composer-files"), /recipe\.md/)
+  await p.fill("#composer-text", "And how long does it keep?")
+  await p.keyboard.press("Enter")
+  const sentTo = (chat) => p.evaluate((c) => window.__mock.api("POST", `/chats/${c}/messages`).filter((x) => x.args.path === `/chats/${c}/messages`), chat)
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages").some((x) => x.args.path === "/chats/chat1/messages"))
+  assert.deepEqual((await sentTo("chat1"))[0].args.body, { text: "And how long does it keep?", attachments: ["att1"] })
+  assert.ok(await p.isHidden("#composer-files"), "the files went with the message")
+  assert.equal(await p.inputValue("#composer-text"), "")
+  // The chat's menu: rename, and delete after asking.
+  await p.click("#chat-tools .tool[aria-label='More']")
+  await p.click(".menu__item >> text=Rename")
+  await p.fill("dialog[open] .dialog__input", "Waybread, properly")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => document.getElementById("chat-title").textContent === "Waybread, properly")
+  await p.click("#chat-tools .tool[aria-label='More']")
+  await p.click(".menu__item >> text=Delete chat")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("DELETE", "/chats/chat1").length === 1)
+  // A reply being written: Stop asks the server; a message typed meanwhile waits behind it.
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live")
+  assert.ok(await p.isVisible("#stop"))
+  assert.ok(await p.isHidden("#send"), "Stop takes Send's place until something is typed")
+  await p.fill("#composer-text", "Also the docs")
+  assert.ok(await p.isVisible("#send"))
+  await p.click("#send")
+  await p.waitForSelector(".msg--user.is-queued")
+  assert.match(await p.textContent(".msg--user.is-queued"), /Waiting for the reply before it/)
+  await p.evaluate((path) => window.__mock.frame(path, "steered", { ids: ["m8"] }), STREAM2)
+  await p.waitForSelector(".msg--user[data-id='m8']:not(.is-queued)")
+  await p.click("#stop")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/messages/m2/stop").length === 1)
+  assert.deepEqual(p.errors, [])
 })
 
 // --- Run ----------------------------------------------------------------------------------------

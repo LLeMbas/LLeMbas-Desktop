@@ -119,6 +119,12 @@ Three things in `ui/` are copied from the LLeMbas server and committed, each pin
 - `ui/i18n.js`, the page's words in the server's languages: `scripts/gen-i18n.py`, from the
   server's catalogues and the script's own table. Run it when a sentence on the page changes.
 
+And one from the LLeMbas CLI, where the harness specification lives: `ui/js/spec.js`, the
+specification's progress texts and display rules (a tool call's title, states and facts, the
+cards' actions), with its conformance cases under `tests/ui/conformance/`:
+`scripts/fetch-spec.sh <cli ref>` from a checkout of the CLI beside this repository
+(`../LLeMbas-CLI`, or `LEMBAS_CLI`). `scripts/gen-i18n.py` reads its sentences from that file.
+
 `scripts/check-ui.sh` parses the page's scripts and refuses any that sets HTML from a string;
 `scripts/hygiene.sh` keeps private names out of this public repository. CI runs both, and starts
 the built app under X11 and under Wayland (`scripts/ci-start.sh`).

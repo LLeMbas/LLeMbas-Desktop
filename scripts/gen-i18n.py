@@ -46,7 +46,6 @@ KEYS = (
     # chat.js
     "Waiting for the reply before it",
     "%(n)s tokens",
-    "Stopped.",
     "Thought",
     "Taken in while it ran:",
     "Cut short here; the whole of it is in the web interface.",
@@ -64,12 +63,7 @@ KEYS = (
     "%(job)s asks:",
     "It says: %(purpose)s",
     "Recommended",
-    "Or type an answer",
-    "Your answer",
-    "Carry it out",
-    "Allow",
     "Always allow",
-    "Not yet",
     "Deny",
     "Answer",
     "New chat",
@@ -399,34 +393,6 @@ KEYS = (
     "Put the last command and its output into the message box",
     "Sign in again: the server no longer accepts this app's sign-in.",
     "The terminal needs a newer LLeMbas server. Ask its administrator to update it.",
-    # progress.js (harness spec 3.4.0: loop.json progress.texts, keyed as the spec writes them)
-    "Queued",
-    "Queued: {{ahead}} ahead",
-    "Waiting for {{model}}: {{reason}}",
-    "Loading {{model}}",
-    "Reading the prompt: {{done}} / {{total}} tokens ({{percent}}%)",
-    "Reading the prompt",
-    "Writing: {{rate}} tok/s",
-    "Writing",
-    "Running {{tool}}: {{what}}",
-    "Running {{tool}}",
-    "Waiting for you: {{what}}",
-    "Waiting for subagents: {{running}} running",
-    "Compacting the conversation",
-    "Retrying in {{in}} s: {{reason}}",
-    "Stopped",
-    "Stopped: {{reason}}",
-    "Failed: {{reason}}",
-    "it serves one request at a time and is answering another",
-    "all its slots are in use",
-    "its server holds another model now",
-    "allow {{tool}}?",
-    "an approval",
-    "a question",
-    "the plan",
-    "by you",
-    "step limit",
-    "budget",
     # tree.js, activity.js (the subagent tree), chat.js (a subagent's approval)
     "waiting for a slot",
     "finished",
@@ -568,6 +534,25 @@ KEYS = (
     "Chat settings",
     # chat.js: where a new agent chat works, the bar above the composer
     "Where the agent works",
+    # chat.js: the cards' actions, a tool call's states, and the end of a reply (harness spec 3.7.0)
+    "Dismiss",
+    "Decline",
+    "Approve",
+    "Send it back",
+    "What to change",
+    "What to change in the plan…",
+    "Why not, and what to do instead",
+    "Why not, and what to do instead…",
+    "Send answers",
+    "All of them at once. Leave any blank to skip it.",
+    "Leave any blank to skip it.",
+    "Your own answer…",
+    "Your question for the model…",
+    "Ask it something back",
+    "The plan",
+    "Confirm it on your phone, in the app. It is not done until you do.",
+    "Approving ends Plan mode: the model carries the plan out in this reply, keeping it current above the message box.",
+    "Denied",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -609,7 +594,6 @@ OWN: dict[str, dict[str, str]] = {
         "Close (LLeMbas stays in the tray)": "Zavřít (LLeMbas zůstane v oznamovací oblasti)",
         "Read again": "Načíst znovu",
         "Waiting for the reply before it": "Čeká na odpověď před ní",
-        "Stopped.": "Zastaveno.",
         "Taken in while it ran:": "Převzato během běhu:",
         "Cut short here; the whole of it is in the web interface.": "Zde zkráceno; celé je to ve webovém rozhraní.",
         "Open in the viewer": "Otevřít v prohlížeči souborů",
@@ -623,10 +607,7 @@ OWN: dict[str, dict[str, str]] = {
         "The agent asks:": "Agent se ptá:",
         "Command": "Příkaz",
         "Recommended": "Doporučeno",
-        "Or type an answer": "Nebo napište odpověď",
-        "Your answer": "Vaše odpověď",
         "Always allow": "Vždy povolit",
-        "Not yet": "Ještě ne",
         "Another device": "Jiné zařízení",
         "Loading…": "Načítá se…",
         "Earlier messages": "Starší zprávy",
@@ -853,6 +834,14 @@ OWN: dict[str, dict[str, str]] = {
         "Choose a file to see it here.": "Vyberte soubor a uvidíte ho tady.",
         "Details": "Podrobnosti",
         "Where the agent works": "Kde agent pracuje",
+        "Allow once": "Povolit jednou",
+        "Deny, and say why": "Zamítnout a říct proč",
+        "Approve, continue in Edit": "Schválit, pokračovat v režimu Edit",
+        "Approve, continue in Manual": "Schválit, pokračovat v režimu Manual",
+        "exit {{code}}": "kód {{code}}",
+        "{{count}} hits": "nálezů: {{count}}",
+        "{{count}} hit": "{{count}} nález",
+        "Denied": "Zamítnuto",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -889,7 +878,6 @@ OWN: dict[str, dict[str, str]] = {
         "Close (LLeMbas stays in the tray)": "Schließen (LLeMbas bleibt im Benachrichtigungsbereich)",
         "Read again": "Neu lesen",
         "Waiting for the reply before it": "Wartet auf die Antwort davor",
-        "Stopped.": "Angehalten.",
         "Taken in while it ran:": "Während des Laufs übernommen:",
         "Cut short here; the whole of it is in the web interface.": "Hier gekürzt; vollständig steht es in der Weboberfläche.",
         "Open in the viewer": "Im Betrachter öffnen",
@@ -903,10 +891,7 @@ OWN: dict[str, dict[str, str]] = {
         "The agent asks:": "Der Agent fragt:",
         "Command": "Befehl",
         "Recommended": "Empfohlen",
-        "Or type an answer": "Oder eine Antwort eingeben",
-        "Your answer": "Ihre Antwort",
         "Always allow": "Immer erlauben",
-        "Not yet": "Noch nicht",
         "Another device": "Ein anderes Gerät",
         "Loading…": "Wird geladen…",
         "Earlier messages": "Frühere Nachrichten",
@@ -1133,6 +1118,14 @@ OWN: dict[str, dict[str, str]] = {
         "Choose a file to see it here.": "Wählen Sie eine Datei, um sie hier zu sehen.",
         "Details": "Details",
         "Where the agent works": "Wo der Agent arbeitet",
+        "Allow once": "Einmal erlauben",
+        "Deny, and say why": "Ablehnen und begründen",
+        "Approve, continue in Edit": "Genehmigen, im Modus Edit fortfahren",
+        "Approve, continue in Manual": "Genehmigen, im Modus Manual fortfahren",
+        "exit {{code}}": "Exit {{code}}",
+        "{{count}} hits": "{{count}} Treffer",
+        "{{count}} hit": "{{count}} Treffer",
+        "Denied": "Abgelehnt",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1169,7 +1162,6 @@ OWN: dict[str, dict[str, str]] = {
         "Close (LLeMbas stays in the tray)": "Cerrar (LLeMbas sigue en la bandeja del sistema)",
         "Read again": "Leer de nuevo",
         "Waiting for the reply before it": "Esperando la respuesta anterior",
-        "Stopped.": "Detenido.",
         "Taken in while it ran:": "Incorporado mientras se ejecutaba:",
         "Cut short here; the whole of it is in the web interface.": "Recortado aquí; completo está en la interfaz web.",
         "Open in the viewer": "Abrir en el visor",
@@ -1183,10 +1175,7 @@ OWN: dict[str, dict[str, str]] = {
         "The agent asks:": "El agente pregunta:",
         "Command": "Comando",
         "Recommended": "Recomendado",
-        "Or type an answer": "O escriba una respuesta",
-        "Your answer": "Su respuesta",
         "Always allow": "Permitir siempre",
-        "Not yet": "Todavía no",
         "Another device": "Otro dispositivo",
         "Loading…": "Cargando…",
         "Earlier messages": "Mensajes anteriores",
@@ -1413,6 +1402,14 @@ OWN: dict[str, dict[str, str]] = {
         "Choose a file to see it here.": "Elige un archivo para verlo aquí.",
         "Details": "Detalles",
         "Where the agent works": "Dónde trabaja el agente",
+        "Allow once": "Permitir una vez",
+        "Deny, and say why": "Denegar y decir por qué",
+        "Approve, continue in Edit": "Aprobar y continuar en modo Edit",
+        "Approve, continue in Manual": "Aprobar y continuar en modo Manual",
+        "exit {{code}}": "salida {{code}}",
+        "{{count}} hits": "{{count}} resultados",
+        "{{count}} hit": "{{count}} resultado",
+        "Denied": "Denegado",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1449,7 +1446,6 @@ OWN: dict[str, dict[str, str]] = {
         "Close (LLeMbas stays in the tray)": "Fermer (LLeMbas reste dans la zone de notification)",
         "Read again": "Relire",
         "Waiting for the reply before it": "En attente de la réponse précédente",
-        "Stopped.": "Arrêté.",
         "Taken in while it ran:": "Pris en compte pendant l'exécution :",
         "Cut short here; the whole of it is in the web interface.": "Tronqué ici ; le tout est dans l'interface web.",
         "Open in the viewer": "Ouvrir dans la visionneuse",
@@ -1463,10 +1459,7 @@ OWN: dict[str, dict[str, str]] = {
         "The agent asks:": "L'agent demande :",
         "Command": "Commande",
         "Recommended": "Recommandé",
-        "Or type an answer": "Ou saisissez une réponse",
-        "Your answer": "Votre réponse",
         "Always allow": "Toujours autoriser",
-        "Not yet": "Pas encore",
         "Another device": "Un autre appareil",
         "Loading…": "Chargement…",
         "Earlier messages": "Messages précédents",
@@ -1693,6 +1686,14 @@ OWN: dict[str, dict[str, str]] = {
         "Choose a file to see it here.": "Choisissez un fichier pour le voir ici.",
         "Details": "Détails",
         "Where the agent works": "Où travaille l’agent",
+        "Allow once": "Autoriser une fois",
+        "Deny, and say why": "Refuser et dire pourquoi",
+        "Approve, continue in Edit": "Approuver, continuer en mode Edit",
+        "Approve, continue in Manual": "Approuver, continuer en mode Manual",
+        "exit {{code}}": "code {{code}}",
+        "{{count}} hits": "{{count}} résultats",
+        "{{count}} hit": "{{count}} résultat",
+        "Denied": "Refusé",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1729,7 +1730,6 @@ OWN: dict[str, dict[str, str]] = {
         "Close (LLeMbas stays in the tray)": "Bezárás (a LLeMbas a tálcán marad)",
         "Read again": "Újraolvasás",
         "Waiting for the reply before it": "Az előző válaszra vár",
-        "Stopped.": "Leállítva.",
         "Taken in while it ran:": "Futás közben átvéve:",
         "Cut short here; the whole of it is in the web interface.": "Itt rövidítve; a teljes a webes felületen van.",
         "Open in the viewer": "Megnyitás a megjelenítőben",
@@ -1743,10 +1743,7 @@ OWN: dict[str, dict[str, str]] = {
         "The agent asks:": "Az ügynök kérdezi:",
         "Command": "Parancs",
         "Recommended": "Ajánlott",
-        "Or type an answer": "Vagy írjon választ",
-        "Your answer": "Az Ön válasza",
         "Always allow": "Mindig engedélyez",
-        "Not yet": "Még nem",
         "Another device": "Másik eszköz",
         "Loading…": "Betöltés…",
         "Earlier messages": "Korábbi üzenetek",
@@ -1973,6 +1970,14 @@ OWN: dict[str, dict[str, str]] = {
         "Choose a file to see it here.": "Válasszon egy fájlt, hogy itt lássa.",
         "Details": "Részletek",
         "Where the agent works": "Hol dolgozik az ügynök",
+        "Allow once": "Engedélyezés egyszer",
+        "Deny, and say why": "Elutasítás indoklással",
+        "Approve, continue in Edit": "Jóváhagyás, folytatás Edit módban",
+        "Approve, continue in Manual": "Jóváhagyás, folytatás Manual módban",
+        "exit {{code}}": "kilépési kód {{code}}",
+        "{{count}} hits": "{{count}} találat",
+        "{{count}} hit": "{{count}} találat",
+        "Denied": "Elutasítva",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -2009,7 +2014,6 @@ OWN: dict[str, dict[str, str]] = {
         "Close (LLeMbas stays in the tray)": "Chiudi (LLeMbas resta nell'area di notifica)",
         "Read again": "Rileggi",
         "Waiting for the reply before it": "In attesa della risposta precedente",
-        "Stopped.": "Interrotto.",
         "Taken in while it ran:": "Accolto durante l'esecuzione:",
         "Cut short here; the whole of it is in the web interface.": "Troncato qui; il resto è nell'interfaccia web.",
         "Open in the viewer": "Apri nel visualizzatore",
@@ -2023,10 +2027,7 @@ OWN: dict[str, dict[str, str]] = {
         "The agent asks:": "L'agente chiede:",
         "Command": "Comando",
         "Recommended": "Consigliato",
-        "Or type an answer": "Oppure scriva una risposta",
-        "Your answer": "La sua risposta",
         "Always allow": "Consenti sempre",
-        "Not yet": "Non ancora",
         "Another device": "Un altro dispositivo",
         "Loading…": "Caricamento…",
         "Earlier messages": "Messaggi precedenti",
@@ -2253,6 +2254,14 @@ OWN: dict[str, dict[str, str]] = {
         "Choose a file to see it here.": "Scegli un file per vederlo qui.",
         "Details": "Dettagli",
         "Where the agent works": "Dove lavora l’agente",
+        "Allow once": "Consenti una volta",
+        "Deny, and say why": "Nega e spiega perché",
+        "Approve, continue in Edit": "Approva, continua in modalità Edit",
+        "Approve, continue in Manual": "Approva, continua in modalità Manual",
+        "exit {{code}}": "uscita {{code}}",
+        "{{count}} hits": "{{count}} risultati",
+        "{{count}} hit": "{{count}} risultato",
+        "Denied": "Negato",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2289,7 +2298,6 @@ OWN: dict[str, dict[str, str]] = {
         "Close (LLeMbas stays in the tray)": "Zamknij (LLeMbas zostaje w zasobniku systemowym)",
         "Read again": "Wczytaj ponownie",
         "Waiting for the reply before it": "Czeka na odpowiedź przed nią",
-        "Stopped.": "Zatrzymano.",
         "Taken in while it ran:": "Przejęte w trakcie działania:",
         "Cut short here; the whole of it is in the web interface.": "Tu skrócone; całość jest w interfejsie WWW.",
         "Open in the viewer": "Otwórz w podglądzie",
@@ -2303,10 +2311,7 @@ OWN: dict[str, dict[str, str]] = {
         "The agent asks:": "Agent pyta:",
         "Command": "Polecenie",
         "Recommended": "Zalecane",
-        "Or type an answer": "Albo wpisz odpowiedź",
-        "Your answer": "Twoja odpowiedź",
         "Always allow": "Zawsze zezwalaj",
-        "Not yet": "Jeszcze nie",
         "Another device": "Inne urządzenie",
         "Loading…": "Wczytywanie…",
         "Earlier messages": "Wcześniejsze wiadomości",
@@ -2533,6 +2538,14 @@ OWN: dict[str, dict[str, str]] = {
         "Choose a file to see it here.": "Wybierz plik, aby zobaczyć go tutaj.",
         "Details": "Szczegóły",
         "Where the agent works": "Gdzie pracuje agent",
+        "Allow once": "Zezwól raz",
+        "Deny, and say why": "Odrzuć i powiedz dlaczego",
+        "Approve, continue in Edit": "Zatwierdź, kontynuuj w trybie Edit",
+        "Approve, continue in Manual": "Zatwierdź, kontynuuj w trybie Manual",
+        "exit {{code}}": "kod {{code}}",
+        "{{count}} hits": "trafień: {{count}}",
+        "{{count}} hit": "{{count}} trafienie",
+        "Denied": "Odrzucono",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2569,7 +2582,6 @@ OWN: dict[str, dict[str, str]] = {
         "Close (LLeMbas stays in the tray)": "Zavrieť (LLeMbas zostane v oznamovacej oblasti)",
         "Read again": "Načítať znova",
         "Waiting for the reply before it": "Čaká na odpoveď pred ňou",
-        "Stopped.": "Zastavené.",
         "Taken in while it ran:": "Prevzaté počas behu:",
         "Cut short here; the whole of it is in the web interface.": "Tu skrátené; celé je to vo webovom rozhraní.",
         "Open in the viewer": "Otvoriť v prehliadači súborov",
@@ -2583,10 +2595,7 @@ OWN: dict[str, dict[str, str]] = {
         "The agent asks:": "Agent sa pýta:",
         "Command": "Príkaz",
         "Recommended": "Odporúčané",
-        "Or type an answer": "Alebo napíšte odpoveď",
-        "Your answer": "Vaša odpoveď",
         "Always allow": "Vždy povoliť",
-        "Not yet": "Ešte nie",
         "Another device": "Iné zariadenie",
         "Loading…": "Načítava sa…",
         "Earlier messages": "Staršie správy",
@@ -2813,10 +2822,47 @@ OWN: dict[str, dict[str, str]] = {
         "Choose a file to see it here.": "Vyberte súbor a uvidíte ho tu.",
         "Details": "Podrobnosti",
         "Where the agent works": "Kde agent pracuje",
+        "Allow once": "Povoliť raz",
+        "Deny, and say why": "Zamietnuť a povedať prečo",
+        "Approve, continue in Edit": "Schváliť, pokračovať v režime Edit",
+        "Approve, continue in Manual": "Schváliť, pokračovať v režime Manual",
+        "exit {{code}}": "kód {{code}}",
+        "{{count}} hits": "nálezov: {{count}}",
+        "{{count}} hit": "{{count}} nález",
+        "Denied": "Zamietnuté",
     },
 }
 
 FIELD = re.compile(r"%\((\w+)\)s")
+BRACES = re.compile(r"\{\{(\w+)\}\}")  # the spec's fields, which a translation must keep
+SPEC = ROOT / "ui" / "js" / "spec.js"
+
+
+def spec_sentences() -> tuple[str, ...]:
+    """The harness spec's own sentences the page says (ui/js/spec.js, written by
+    scripts/fetch-spec.sh from the CLI's harness/loop.json): the progress texts and the words
+    their fields stand for, a call's facts, the cards' actions. Read from the file, so a
+    sentence the spec gains or rewords is translated -- or reported -- without a list here."""
+    data: dict[str, dict] = {}
+    for line in SPEC.read_text(encoding="utf-8").splitlines():
+        for name in ("PROGRESS", "DISPLAY"):
+            head = f"export const {name} = "
+            if line.startswith(head):
+                data[name] = json.loads(line[len(head):])
+    if set(data) != {"PROGRESS", "DISPLAY"}:
+        sys.exit(f"gen-i18n: {SPEC} has no PROGRESS and DISPLAY line: run scripts/fetch-spec.sh")
+    progress, display = data["PROGRESS"], data["DISPLAY"]
+    out: list[str] = []
+    for table in (progress["texts"], progress["reason"], progress["what"], progress["stopped_reason"]):
+        out += list(table.values())
+    out += [display["exit"], display["hits"], display["hit"]]
+    for card in display["actions"].values():
+        out += list(card.values())
+    seen: list[str] = []
+    for text in out:
+        if text not in seen:
+            seen.append(text)
+    return tuple(seen)
 
 
 def server_catalogue(server: Path, lang: str) -> dict[str, str]:
@@ -2842,12 +2888,14 @@ def main() -> None:
     server = Path(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("LEMBAS_SERVER", ROOT.parent / "LLeMbas"))
     catalogue: dict[str, dict[str, str]] = {}
     problems = 0
+    # The page's own sentences, then the spec's (those not already among them).
+    keys = KEYS + tuple(k for k in spec_sentences() if k not in KEYS)
     for lang in LANGS:
         theirs = server_catalogue(server, lang)
         ours = OWN.get(lang, {})
         table: dict[str, str] = {}
         from_server = 0
-        for key in KEYS:
+        for key in keys:
             text = theirs.get(key)
             if text:
                 from_server += 1
@@ -2857,17 +2905,17 @@ def main() -> None:
                 print(f"gen-i18n: {lang}: no translation of {key!r} (English will show)", file=sys.stderr)
                 problems += 1
                 continue
-            if set(FIELD.findall(text)) != set(FIELD.findall(key)):
+            if set(FIELD.findall(text)) != set(FIELD.findall(key)) or set(BRACES.findall(text)) != set(BRACES.findall(key)):
                 print(f"gen-i18n: {lang}: the fields of {text!r} do not match {key!r}", file=sys.stderr)
                 problems += 1
                 continue
             table[key] = text
         for key in ours:
-            if key not in KEYS:
+            if key not in keys:
                 print(f"gen-i18n: {lang}: OWN has {key!r}, which no page uses", file=sys.stderr)
                 problems += 1
         catalogue[lang] = table
-        print(f"gen-i18n: {lang}: {len(table)} sentences, {from_server} of the page's {len(KEYS)} from the server")
+        print(f"gen-i18n: {lang}: {len(table)} sentences, {from_server} of the page's {len(keys)} from the server")
 
     body = json.dumps(catalogue, ensure_ascii=False, indent=2, sort_keys=True)
     names = json.dumps({"en": "English", **NAMES}, ensure_ascii=False, sort_keys=True)
@@ -2937,7 +2985,7 @@ def main() -> None:
         "else translatePage()\n"
     )
     OUT.write_text(out, encoding="utf-8")
-    print(f"gen-i18n: wrote {OUT.relative_to(ROOT)} ({len(LANGS)} languages, {len(KEYS)} sentences)")
+    print(f"gen-i18n: wrote {OUT.relative_to(ROOT)} ({len(LANGS)} languages, {len(keys)} sentences)")
     if problems:
         sys.exit(1)
 

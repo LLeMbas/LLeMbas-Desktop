@@ -20,8 +20,40 @@ All notable changes to LLeMbas Desktop. The format follows
   sideways scroller with its scrollbar hidden. It wraps onto another line now, and a chip wider
   than the line shortens with an ellipsis (checked at 1920, 1280, 1024, 800 and 390 px).
 
+- **A tool call is shown as in every LLeMbas app** (harness specification 3.7.0). One row: a mark
+  for its state -- running, done, failed, denied, each told apart at a glance -- an icon for its
+  kind, what the tool is called, the call's one short title (the command, the file, the pattern,
+  as the server's `block` says it), then the facts from its result: `+3 −1` for an edit, `exit 2`
+  for a command that failed, the hits of a search, and how long it took where the server keeps
+  it. An edit shows its change without a click, as a diff coloured line by line instead of raw
+  text. A failed or denied call says the first line of why beside its title. A tool that is not
+  a call (the plan's own) is not drawn; a call still "running" in a reply that has ended is shown
+  failed, never left spinning. What you opened stays open while the reply is written.
+- **How a reply that did not finish ended stays on it**: `Stopped: by you`, `Stopped: step
+  limit`, `Stopped`, or `Failed:` with the error's first line (the whole of it in the tooltip) --
+  one line under the reply, in place of the raw error and "Stopped.".
+- **The progress texts and the display rules are the specification's own.** `ui/js/spec.js` is
+  written by `scripts/fetch-spec.sh` from the CLI's `harness/loop.json` (3.7.0), with the
+  specification's conformance cases beside the tests; the thirteen phase texts are no longer a
+  hand-kept copy in the page, and `scripts/gen-i18n.py` reads the sentences to translate from
+  that file.
+
+### Added
+
+- **Approval cards: Deny, and say why.** The four actions every LLeMbas app offers, under the
+  same words: Allow once, Always allow, Deny, and Deny, and say why -- your words go to the model
+  with the refusal, so it need not ask what you would rather.
+- **Question cards: Something else, and asking back.** Under the options (the recommended one
+  first) a row of your own to type an answer, and one to ask the model a question back instead of
+  answering. Several questions are sent at once; a card that may be put aside has Dismiss.
+- **Plan cards: Revise, and the mode the work goes on in.** A device's plan is approved into Edit
+  or Manual; Revise sends it back with what to change; Dismiss decides nothing. A plan sent as
+  text is drawn as Markdown.
+- **Something to do on the phone** is said on a card (confirm it there), and can be declined.
+
 ### Fixed
 
+- A question's typed answer was ignored when an option was also picked.
 - A menu opened at the window's right edge could reach half a pixel past it.
 
 ## [1.0.0-beta.8] — 2026-11-10
