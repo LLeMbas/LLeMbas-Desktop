@@ -15,13 +15,15 @@ import { readLocal } from "./explorer.js"
 import { menu, ask, showLine, popover, closePopover } from "./popup.js"
 import { avatar, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
-import { watchActivity, activityChanged, planList, activityButton, treeChanged } from "./activity.js"
+import { watchActivity, activityChanged, planList, activityButton, treeChanged, showPanel, panelOpen } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
 import { folderName, listed, folderTree, newFolder } from "./list.js"
 import { unarchive } from "./archived.js"
 import { isProgress, progressLine, progressTicks } from "./progress.js"
 import { ACTIONS, callDuration, callFacts, callTitle, changeText, count, diffCounts, drawn, endLine } from "./display.js"
 import { DISPLAY } from "./spec.js"
+import { initSlash, commandIn, commandTable, closeComposerMenu } from "./slash.js"
+import { accountThemes, accountTheme, chooseTheme } from "./look.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 import { scopePopover } from "./scope.js"
 import { readAloudButton } from "./voice.js"
@@ -1309,6 +1311,7 @@ async function renderChips() {
   }
   const models = await chatModels(chat)
   if (drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
+  open.models = models // the models this chat may use, as /effort reads its levels
   const current = models.find((m) => m.id === chat.model) || { id: chat.model, name: chat.model, efforts: [] }
   const parts = []
   if (chat.kind === "agent") parts.push(modeChip(chat.mode || "edit", (m) => save({ mode: m })))
@@ -1481,11 +1484,19 @@ function modeName(m) {
   return { manual: "Manual", edit: "Edit", auto: "Auto", plan: "Plan" }[m] || m
 }
 
-function alertIn(text) {
+let noteTimer = 0
+
+/** A line above the composer: something that went wrong (it stays), or `info` (it goes by itself). */
+function alertIn(text, info = false) {
   const box = $("thread-note")
+  clearTimeout(noteTimer)
   box.textContent = text
   box.hidden = !text
+  box.classList.toggle("is-error", !info)
+  box.classList.toggle("is-info", info)
+  if (text && info) noteTimer = setTimeout(() => box.classList.contains("is-info") && alertIn(""), 6000)
 }
+const note = (text) => alertIn(text, true)
 
 /** Open a chat by id: its newest page, and the reply being written, if one is. */
 export async function openChat(id) {
@@ -1494,6 +1505,7 @@ export async function openChat(id) {
   open = { chat: { id }, live: null, more: false }
   draft = null
   closePopover()
+  closeComposerMenu()
   invoke("set_open_chat", { chat: id })
   showComposer(true)
   $("new-chat").hidden = true
@@ -1677,6 +1689,7 @@ async function createChat(text, attachments) {
   if (typeof draft.effort === "string" && draft.effort) body.effort = draft.effort
   const agents = draft.agents
   if (agents && (agents.min || agents.max)) body.agents = agents
+  if (draft.temporary && draft.kind === "chat") body.temporary = true
   if (draft.kind === "agent") {
     const device = draftDevice()
     if (draftHere()) {
@@ -1718,6 +1731,15 @@ function showComposer(on) {
 async function submit() {
   const box = $("composer-text")
   const text = box.value.trim()
+  closeComposerMenu()
+  // One of the app's own commands, sent with the button rather than Enter: run, never posted.
+  const command = commandIn(box.value)
+  if (command) {
+    box.value = ""
+    grow()
+    slashCommands().find((c) => c.name === command.name)?.run(command.rest)
+    return
+  }
   if (sending()) {
     alertIn(t("Wait until the files are sent."))
     return
@@ -1746,6 +1768,233 @@ async function submit() {
   } finally {
     $("send").disabled = false
     setRunning(!!open?.live)
+  }
+}
+
+// --- The composer's commands: the web's set, each wired to what this app has ------------------------
+//
+// `when` says whether a command makes sense now; one that does not is not a command at all -- it
+// is neither listed nor taken, and what was typed is sent as the message it is. `run(rest)` gets
+// what follows the name. The device's own commands (an agent chat) are slash.js's: they are
+// sent as the literal message.
+
+const chatId = () => (draft ? "" : open?.chat?.id || "")
+const isAgent = () => (draft ? draft.kind === "agent" : open?.chat?.kind === "agent")
+const chatModel = () => {
+  const id = draft ? draft.model : open?.chat?.model
+  return (open?.models || []).find((m) => m.id === id) || ctx.models().find((m) => m.id === id) || (id ? { id, name: id, efforts: [] } : null)
+}
+
+async function saveChat(body, done) {
+  const chat = open?.chat
+  if (!chat?.id) return
+  try {
+    const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, body)
+    if (open?.chat?.id === chat.id && r?.chat) {
+      open.chat = r.chat
+      setTitle(r.chat.title)
+      renderChips()
+    }
+    ctx.changed(r?.chat)
+    if (done) note(done)
+  } catch (err) {
+    alertIn(why(err))
+  }
+}
+
+function setEffort(rest) {
+  const model = chatModel()
+  const { levels, control } = levelsOf(model)
+  if (!model || control === "none") return alertIn(t("This model offers no choice of effort. An administrator sets what it takes on the model's page."))
+  const current = draft ? draft.effort : open?.chat?.effort || levelsOf(model).start
+  let wanted = rest.trim().toLowerCase()
+  const listed = levels.join(", ")
+  if (!wanted) return note(t("Effort is %(level)s. /effort %(levels)s.", { level: current, levels: listed }))
+  // Words fingers will type: "none" is off, and "on" the first level that is not off.
+  if (wanted === "none") wanted = "off"
+  else if (wanted === "on") wanted = levels.find((l) => l !== "off") || wanted
+  if (!levels.includes(wanted)) return alertIn(t("“%(level)s” is not a level this model offers. Try %(levels)s.", { level: wanted, levels: listed }))
+  const said = wanted === "off" ? t("Thinking switched off.") : t("Effort set to %(level)s.", { level: wanted })
+  if (draft) {
+    draft.effort = wanted
+    renderChips()
+    note(said)
+  } else saveChat({ effort: wanted }, said)
+}
+
+function setMode(rest) {
+  const wanted = rest.trim().toLowerCase()
+  if (!wanted) return note(t("Modes: manual, edit, auto, plan."))
+  if (!MODES.includes(wanted)) return alertIn(t("“%(mode)s” is not a mode.", { mode: wanted }))
+  const said = t("Mode set to %(mode)s.", { mode: modeName(wanted) })
+  if (draft) {
+    draft.mode = wanted
+    renderChips()
+    note(said)
+  } else saveChat({ mode: wanted }, said)
+}
+
+async function compactNow() {
+  const id = chatId()
+  if (!id) return
+  const yes = await ask({
+    title: t("Compact this chat"),
+    text: t("Summarise everything before the last reply? The messages stay in the transcript; they just stop being sent to the model."),
+    ok: t("Compact"),
+    cancel: t("Cancel"),
+  })
+  if (!yes) return
+  note(t("Summarising the earlier messages…"))
+  try {
+    await post(`/chats/${encodeURIComponent(id)}/compact`)
+    alertIn("")
+    if (openChatId() === id) reload()
+    activityChanged()
+  } catch (err) {
+    alertIn(why(err))
+  }
+}
+
+async function continueReply() {
+  const id = chatId()
+  if (!id || !$("messages").querySelector(".msg--assistant")) return note(t("There is no reply to continue yet."))
+  try {
+    const r = await post(`/chats/${encodeURIComponent(id)}/continue`)
+    if (openChatId() !== id) return
+    if (r.message) $("messages").append(userMessage(r.message))
+    if (r.reply) follower(open.chat, r.reply.id)
+    toBottom(true)
+  } catch (err) {
+    alertIn(why(err))
+  }
+}
+
+function drawPicture(rest) {
+  const wanted = rest.trim()
+  if (!wanted) return note(t("Say what to draw: /image a red bicycle in the rain."))
+  wantPicture = true
+  $("composer-text").value = wanted
+  submit()
+}
+
+function themeNames() {
+  const offered = accountThemes()
+  return offered ? offered.map((x) => (typeof x === "string" ? x : x.id || x.name || x.value)).filter(Boolean) : ["moria", "shire"]
+}
+
+async function setTheme(rest) {
+  const names = themeNames()
+  const wanted = rest.trim().toLowerCase()
+  const now = document.documentElement.dataset.theme
+  // A name the server offers, else the other of the two looks.
+  const next = names.includes(wanted) ? wanted : names[(names.indexOf(accountThemes() ? accountTheme() : now) + 1) % names.length]
+  try {
+    await chooseTheme(next)
+  } catch (err) {
+    alertIn(why(err))
+  }
+}
+
+/** Commands and keyboard shortcuts, as a sheet. Everything in it is text. */
+function helpSheet() {
+  const row = (a, b) => h("tr", null, h("td", { class: "sheet__key", text: a }), h("td", { text: b }))
+  const keys = [
+    ["Ctrl + K", t("Search chats, files and commands")],
+    ["Ctrl + N", t("New chat")],
+    ["Ctrl + B", t("Sidebar")],
+    ["Ctrl + ,", t("Settings")],
+    ["Enter", t("Send")],
+    ["Shift + Enter", t("A new line")],
+    ["/", t("Open the command menu")],
+    ["@", t("Mention a file, or attach one")],
+    ["Esc", t("Close what is open")],
+  ]
+  const close = h("button", { type: "button", class: "btn btn--primary", text: t("Close") })
+  const dlg = h(
+    "dialog",
+    { class: "dialog dialog--wide", "aria-label": t("Commands and shortcuts") },
+    h(
+      "div",
+      { class: "dialog__body" },
+      h("h2", { class: "dialog__title", text: t("Commands and shortcuts") }),
+      h("div", { class: "sheet__scroll" }, h("table", { class: "sheet" }, h("tbody", null, commandTable().map((c) => row(`/${c.name}${c.argument ? ` ${c.argument}` : ""}`, c.summary)))), h("h3", { class: "sheet__title", text: t("Keyboard") }), h("table", { class: "sheet" }, h("tbody", null, keys.map(([a, b]) => row(a, b))))),
+      h("p", { class: "muted", text: t("A message that starts with a slash but is not a command is sent as written.") }),
+      h("div", { class: "dialog__actions" }, close),
+    ),
+  )
+  const done = () => {
+    dlg.close()
+    dlg.remove()
+    $("composer-text").focus()
+  }
+  close.addEventListener("click", done)
+  dlg.addEventListener("cancel", (e) => (e.preventDefault(), done()))
+  dlg.addEventListener("click", (e) => e.target === dlg && done())
+  document.body.append(dlg)
+  dlg.showModal()
+  close.focus()
+}
+
+function slashCommands() {
+  const nav = ctx.nav || {}
+  return [
+    { name: "help", summary: t("Commands and keyboard shortcuts"), run: helpSheet },
+    { name: "usage", summary: t("Tokens and context used by this chat"), when: () => !!chatId(), run: () => showPanel(true) },
+    { name: "compact", summary: t("Summarise the earlier turns so they stop costing context"), when: () => !!chatId() && !!$("messages").querySelector(".msg"), run: compactNow },
+    { name: "effort", summary: t("How hard a reasoning model should think"), argument: () => levelsOf(chatModel()).levels.join(" | ") || "low | medium | high | off", when: () => !!chatModel(), run: setEffort },
+    { name: "mode", summary: t("Approval mode: manual, edit, auto or plan"), argument: "manual | edit | auto | plan", when: isAgent, run: setMode },
+    {
+      name: "title",
+      summary: t("Rename this chat"),
+      argument: t("the new title"),
+      when: () => !!chatId(),
+      run: (rest) => (rest.trim() ? saveChat({ title: rest.trim() }, t("Renamed.")) : note(t("Give it a title: /title Something."))),
+    },
+    { name: "terminal", summary: t("Show or hide the terminal"), when: () => !!terminalTarget(), run: () => toggleTerminal() },
+    { name: "activity", summary: t("Show or hide the activity panel"), when: () => !!chatId(), run: () => showPanel(!panelOpen()) },
+    { name: "sidebar", summary: t("Show or hide the sidebar"), when: () => !!nav.sidebar, run: () => nav.sidebar() },
+    { name: "theme", summary: t("Switch theme"), argument: () => themeNames().join(" | "), run: setTheme },
+    { name: "image", summary: t("Draw a picture"), argument: t("what to draw"), when: () => !isAgent() && picturesOffered() && !open?.chat?.archived, run: drawPicture },
+    { name: "new", summary: t("Start a new chat"), when: () => !!nav.startNew, run: () => nav.startNew() },
+    {
+      name: "temp",
+      summary: t("Start a temporary chat that saves nothing"),
+      when: () => !!nav.startNew,
+      run: () => {
+        nav.startNew("chat")
+        if (draft) draft.temporary = true
+        setTitle(t("Temporary chat"))
+        note(t("A temporary chat: nothing of it is kept once it is closed."))
+      },
+    },
+    { name: "continue", summary: t("Carry on from where the reply stopped"), when: () => !!chatId() && !open?.live, run: continueReply },
+    { name: "stop", summary: t("Stop the reply being written"), run: () => (open?.live ? $("stop").click() : note(t("Nothing is being written."))) },
+    { name: "devices", summary: t("Your devices: the LLeMbas CLI signed in as you"), when: () => !!nav.settings, run: () => nav.settings("agent") },
+    { name: "scheduled", summary: t("Your scheduled tasks"), when: () => !!nav.scheduled, run: () => nav.scheduled() },
+  ]
+}
+
+/** What slash.js needs to know of the page: where the composer writes to, and how to act on it. */
+function menuContext() {
+  return {
+    commands: slashCommands,
+    where: () => {
+      if (draft) {
+        const device = draft.kind === "agent" ? draftDevice() : ""
+        return { chat: "", device, cwd: device ? draft.dir || "" : "", deviceName: device ? deviceWord() : "" }
+      }
+      const chat = open?.chat
+      const device = chat?.kind === "agent" ? chat.device?.token_id || "" : ""
+      return { chat: chat?.id || "", device, cwd: device ? chat.device.directory || "" : "", deviceName: device ? deviceOf(device)?.name || (onThisComputer(chat) ? t("This computer") : "") : "" }
+    },
+    send: (text) => {
+      $("composer-text").value = text
+      submit()
+    },
+    changed: () => {
+      grow()
+      if (open?.live) $("send").hidden = !$("composer-text").value.trim()
+    },
   }
 }
 
@@ -1783,6 +2032,7 @@ export function initChat(context) {
     }
   })
   onAgentChange(renderNotice)
+  initSlash(menuContext())
   initHead()
   showComposer(false)
 }

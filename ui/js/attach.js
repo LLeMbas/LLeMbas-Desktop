@@ -115,6 +115,18 @@ async function track(names, call) {
   }
 }
 
+/**
+ * A file the server makes for the next message from something it already has -- an earlier
+ * attachment, a file of its tree, a page -- chosen in the composer's `@` menu: shown as being
+ * sent while `call` asks for it, then as the tile any attached file is.
+ */
+export function attachFrom(name, call) {
+  return track([name], async () => {
+    const attachment = await call()
+    return [{ name: attachment.name || name, size: attachment.size || 0, attachment }]
+  })
+}
+
 /** A pasted picture's own bytes as a `data:` URL: the page's policy allows images from there. */
 function dataUrl(file) {
   return new Promise((resolve) => {

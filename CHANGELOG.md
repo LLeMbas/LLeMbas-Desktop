@@ -40,6 +40,21 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ### Added
 
+- **The composer has the `/` and `@` menus.** Typing `/` at the start of the message lists the
+  commands: the app's own -- `/help`, `/usage`, `/compact`, `/effort`, `/mode`, `/title`,
+  `/terminal`, `/activity`, `/sidebar`, `/theme`, `/image`, `/new`, `/temp`, `/continue`,
+  `/stop`, `/devices`, `/scheduled`, each doing what the app's own control does -- and, on an
+  agent chat, the computer's own commands and skills, which are sent to it as the message they
+  are. Typing `@` after a space lists what can be mentioned: on an agent chat the computer's
+  files first (chosen, the path goes into the message as the agent reads it), a web address as
+  a page to read, the server's files, and what is already in the chat. **A file on the server
+  can be attached this way**: in a chat on the server Enter mentions it by its path and
+  Shift+Enter (or the row's button) attaches a copy; in an agent chat it is attached. An
+  earlier attachment and a page are attached as the usual tile. Arrows choose, Tab completes,
+  Enter runs or attaches, Esc closes; a message that only starts with a slash (`//`, a path, an
+  unknown name) is sent as written. The menu is the composer's own width, directly above it, at
+  any window width. Needs a server with the menu routes (2.0.0-beta.11); an older one offers
+  the app's own commands only.
 - **Approval cards: Deny, and say why.** The four actions every LLeMbas app offers, under the
   same words: Allow once, Always allow, Deny, and Deny, and say why -- your words go to the model
   with the refusal, so it need not ask what you would rather.

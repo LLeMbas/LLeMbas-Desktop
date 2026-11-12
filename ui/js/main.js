@@ -297,6 +297,13 @@ async function boot() {
       localPane(chat)
       markCurrent()
     },
+    // Where the composer's commands lead (/new, /temp, /sidebar, /devices, /scheduled).
+    nav: {
+      startNew: (kind) => startNew(kind),
+      sidebar: () => sideOpen($("shell").dataset.side !== "true"),
+      settings: (section) => showSettings(true, section),
+      scheduled: () => (showPage("scheduled"), showScheduled()),
+    },
     // Archived or deleted: the list without it, and a new chat where it was open.
     gone: (chat) => {
       if (!openChatId() || openChatId() === chat.id) {

@@ -2564,6 +2564,397 @@ test("P2: the rest of the chat screen works: edit a message, regenerate, stop, a
   assert.deepEqual(p.errors, [])
 })
 
+// --- S3: the composer's `/` and `@` menus -----------------------------------------------------------
+//
+// CONTRACT (unpinned): the server's menu routes as the plan for server 2.0.0-beta.11 words them --
+// GET /devices/{id}/commands, GET /devices/{id}/files, GET /mentions, POST /attachments/from.
+// The answers below are written to that wording, not copied from a server fixture; replace them
+// with the fixtures (scripts/fetch-fixtures.sh) once the server has them.
+
+const MENTIONS = {
+  items: [
+    { kind: "file", path: "/notes/recipes/lembas recipe #2.md", name: "lembas recipe #2.md", detail: "/notes/recipes/lembas recipe #2.md" },
+    { kind: "attachment", id: "att7", name: "oven.png", detail: "48 kB" },
+  ],
+}
+const DEVICE_FILES = { files: [{ path: "src/app main.ts", kind: "file" }, { path: "src/tui", kind: "dir" }] }
+const DEVICE_COMMANDS = { commands: [{ name: "review", description: "Review the working tree", hint: "" }, { name: "commit", description: "Commit with a message", hint: "<message>" }, { name: "compact", description: "The device's own compact", hint: "" }] }
+
+function s3(over = {}) {
+  const cfg = i8()
+  Object.assign(cfg.routes, {
+    "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?"), reply({ id: "m6", steps: [{ index: 0, kind: "text", open: true, markdown: "With care." }] })], more: false, live: null },
+    "GET /chats/chat2": { chat: agentChat(), messages: [userMessage("m1", "What is in build?"), reply({ steps: [{ index: 0, kind: "text", open: true, markdown: "Files." }] })], more: false, live: null },
+    "GET /models?chat=chat1": models(),
+    "GET /models?chat=chat2": models(),
+    "GET /chats/chat2/tree": { tree: [], live: true },
+    "GET /mentions": MENTIONS,
+    "GET /devices/token1/files": DEVICE_FILES,
+    "GET /devices/token1/commands": DEVICE_COMMANDS,
+    "POST /attachments/from": { attachment: { id: "att9", name: "oven.png", size: 48000, image: false } },
+    "POST /chats/chat1/messages": { message: userMessage("m7", "sent"), reply: null },
+    "POST /chats/chat2/messages": { message: userMessage("m8", "sent"), reply: null },
+    "PATCH /chats/chat1": { chat: chatRow({ title: "Waybread, properly" }) },
+    "PATCH /chats/chat2": { chat: agentChat({ mode: "plan" }) },
+    "POST /chats/chat1/compact": { messages: [], more: false },
+    "POST /chats/chat1/continue": { message: userMessage("m9", "Continue."), reply: null },
+    ...over,
+  })
+  return cfg
+}
+
+const menuRows = (p) => p.$$eval("#composer-menu .cmenu__group, #composer-menu .cmenu__option .cmenu__name", (l) => l.map((x) => (x.classList.contains("cmenu__group") ? `# ${x.textContent}` : x.textContent)))
+const selected = (p) => p.$eval("#composer-menu .cmenu__option[aria-selected='true'] .cmenu__name", (x) => x.textContent)
+const typed = (p) => p.inputValue("#composer-text")
+const messagesTo = (p, chat) => p.evaluate((c) => window.__mock.api("POST", `/chats/${c}/messages`).filter((x) => x.args.path === `/chats/${c}/messages`).map((x) => x.args.body), chat)
+
+test("S3: / at the start lists the app's commands, filtered as it is typed; arrows, Tab completes, Enter runs, Esc closes", async () => {
+  const p = await page(s3())
+  await openChatRow(p, "chat1")
+  await p.click("#composer-text")
+  await p.keyboard.type("/")
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  const all = await menuRows(p)
+  assert.equal(all[0], "# Commands")
+  for (const name of ["/help", "/usage", "/compact", "/title the new title", "/theme moria | shire", "/image what to draw", "/new", "/temp", "/continue", "/stop", "/scheduled"]) assert.ok(all.includes(name), `${name} in ${all}`)
+  assert.ok(!all.some((x) => x.startsWith("/mode")), "no /mode in a chat on the server")
+  assert.ok(!all.some((x) => x.startsWith("/terminal")), "no /terminal where there is none")
+  assert.equal(await p.textContent("#composer-menu .cmenu__keys"), "↑↓ choose · Tab complete · Enter run · Esc dismiss")
+  await p.keyboard.type("t")
+  assert.deepEqual(await menuRows(p), ["# Commands", "/title the new title", "/theme moria | shire", "/temp"])
+  assert.equal(await selected(p), "/title the new title")
+  await p.keyboard.press("ArrowDown")
+  assert.equal(await selected(p), "/theme moria | shire")
+  await p.keyboard.press("ArrowUp")
+  await p.keyboard.press("ArrowUp")
+  assert.equal(await selected(p), "/temp", "the arrows wrap")
+  await p.keyboard.press("ArrowDown")
+  // Tab writes the name and leaves the caret after it; the menu goes while the argument is typed.
+  await p.keyboard.press("Tab")
+  assert.equal(await typed(p), "/title ")
+  assert.ok(await p.isHidden("#composer-menu"))
+  await p.keyboard.type("Waybread, properly")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat1").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat1")))[0].args.body, { title: "Waybread, properly" })
+  assert.equal(await typed(p), "", "a command is never left in the box")
+  assert.deepEqual(await messagesTo(p, "chat1"), [], "and never sent as a message")
+  await p.waitForFunction(() => /Renamed/.test(document.getElementById("thread-note").textContent))
+  // Esc closes the menu and leaves what was typed.
+  await p.keyboard.type("/he")
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  await p.keyboard.press("Escape")
+  assert.ok(await p.isHidden("#composer-menu"))
+  assert.equal(await typed(p), "/he")
+  // Enter on a row runs it: /help is a sheet of the commands and the keys.
+  await p.fill("#composer-text", "")
+  await p.keyboard.type("/help")
+  await p.keyboard.press("Enter")
+  await p.waitForSelector("dialog[open] .sheet")
+  assert.match(await p.textContent("dialog[open]"), /\/compact.*Keyboard.*Ctrl \+ K/s)
+  await shot(p, "s3-help")
+  await p.keyboard.press("Escape")
+  assert.equal(await p.locator("dialog[open]").count(), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("S3: a slash that is not a command is sent as written: //, an unknown name, a path; a command works from the Send button too", async () => {
+  const p = await page(s3())
+  await openChatRow(p, "chat1")
+  await p.click("#composer-text")
+  await p.keyboard.type("//not a command")
+  assert.ok(await p.isHidden("#composer-menu").catch(() => true), "// opens nothing")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages").length === 1)
+  await p.keyboard.type("/nosuch thing")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages").length === 2)
+  await p.keyboard.type("/nos")
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  assert.match(await p.textContent("#composer-menu"), /No command called “nos”\. It will be sent as a message\./)
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages").length === 3)
+  await p.keyboard.type("look in /usr/lib and a/b")
+  assert.ok(await p.isHidden("#composer-menu"), "a slash inside a sentence is a path")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages").length === 4)
+  assert.deepEqual((await messagesTo(p, "chat1")).map((b) => b.text), ["//not a command", "/nosuch thing", "/nos", "look in /usr/lib and a/b"])
+  // /mode is no command in a chat on the server: sent as the message it is.
+  await p.keyboard.type("/mode plan")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages").length === 5)
+  // The Send button with a command typed runs it.
+  await p.fill("#composer-text", "/continue")
+  await p.keyboard.press("Escape")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/continue").length === 1)
+  assert.equal((await messagesTo(p, "chat1")).length, 5)
+  assert.deepEqual(p.errors, [])
+})
+
+test("S3: the commands do what the app's own controls do: effort, mode, compact, image, temp, stop, theme, the panels", async () => {
+  const cfg = s3({ "PATCH /chats/chat1": { chat: chatRow({ effort: "high" }) } })
+  cfg.routes["GET /me"] = { ...meAs(), ...cfg.routes["GET /me"], themes: ME.themes }
+  cfg.routes["PATCH /me"] = { ...cfg.routes["GET /me"], theme: "shire" }
+  cfg.streams = { [STREAM2]: [["status", { text: "Writing…" }]] }
+  const p = await page(cfg)
+  await openChatRow(p, "chat1")
+  const run = async (text) => {
+    await p.fill("#composer-text", text)
+    await p.focus("#composer-text")
+    await p.keyboard.press("Enter")
+  }
+  const said = () => p.textContent("#thread-note")
+  // /effort: the model's levels; a wrong one is said; a right one is saved.
+  await run("/effort")
+  await p.waitForFunction(() => /Effort is/.test(document.getElementById("thread-note").textContent))
+  await run("/effort enormous")
+  await p.waitForFunction(() => /is not a level this model offers/.test(document.getElementById("thread-note").textContent))
+  await run("/effort high")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat1").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat1")))[0].args.body, { effort: "high" })
+  // /compact asks first.
+  await run("/compact")
+  await p.waitForSelector("dialog[open]")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/compact").length === 1)
+  // /image: the next reply is a picture.
+  await p.waitForSelector("#messages .msg")
+  await run("/image")
+  await p.waitForFunction(() => /Say what to draw/.test(document.getElementById("thread-note").textContent))
+  await run("/image a red bicycle in the rain")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/messages").length === 1)
+  assert.deepEqual((await messagesTo(p, "chat1"))[0], { text: "a red bicycle in the rain", force_tool: "image_generate" })
+  // /usage and /activity: the activity panel; /sidebar: the sidebar.
+  await run("/usage")
+  await p.waitForSelector("#activity:not([hidden])")
+  await run("/activity")
+  await p.waitForSelector("#activity", { state: "hidden" })
+  await run("/sidebar")
+  await p.waitForFunction(() => document.getElementById("shell").dataset.side === "false")
+  await run("/sidebar")
+  // /theme: the account's, through PATCH /me.
+  await run("/theme shire")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/me").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/me")))[0].args.body, { theme: "shire" })
+  // /stop with nothing written says so; /scheduled opens the page.
+  await run("/stop")
+  assert.match(await said(), /Nothing is being written/)
+  // An agent chat: /mode, /terminal, /stop.
+  await openChatRow(p, "chat2")
+  await run("/mode")
+  await p.waitForFunction(() => /Modes: manual, edit, auto, plan/.test(document.getElementById("thread-note").textContent))
+  await run("/mode sideways")
+  await p.waitForFunction(() => /is not a mode/.test(document.getElementById("thread-note").textContent))
+  await run("/mode plan")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat2").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat2")))[0].args.body, { mode: "plan" })
+  await run("/terminal")
+  await p.waitForSelector("#terminal:not([hidden])")
+  await run("/terminal")
+  await p.waitForSelector("#terminal", { state: "hidden" })
+  // /temp: a new chat on the server that keeps nothing; /new: a new one.
+  await run("/temp")
+  await p.waitForSelector("#new-chat:not([hidden])")
+  assert.equal(await p.textContent("#chat-title"), "Temporary chat")
+  await p.evaluate(() => window.__mock.answer("POST /chats", { chat: { id: "chatT", kind: "chat", title: "", model: "qwen", temporary: true }, message: null, reply: null }))
+  await p.fill("#composer-text", "Just between us")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").some((x) => x.args.path === "/chats"))
+  const made = (await p.evaluate(() => window.__mock.api("POST", "/chats").filter((x) => x.args.path === "/chats")))[0].args.body
+  assert.equal(made.temporary, true)
+  assert.equal(made.kind, undefined, "a temporary chat is a chat on the server")
+  await run("/scheduled")
+  await p.waitForSelector("#page-scheduled:not([hidden])")
+  assert.deepEqual(p.errors, [])
+})
+
+test("S3: on an agent chat the device's commands follow the app's, and one chosen is sent as the literal message", async () => {
+  const p = await page(s3())
+  await openChatRow(p, "chat2")
+  await p.click("#composer-text")
+  await p.keyboard.type("/")
+  await p.waitForFunction(() => /review/.test(document.getElementById("composer-menu")?.textContent || ""))
+  const rows = await menuRows(p)
+  const at = rows.indexOf("# workbench")
+  assert.ok(at > 0, `the device's group, named: ${rows}`)
+  assert.deepEqual(rows.slice(at), ["# workbench", "/review", "/commit <message>"], "a name the app has stays the app's: one /compact")
+  assert.ok(rows.includes("/mode manual | edit | auto | plan") && rows.includes("/terminal"))
+  const [asked] = await p.evaluate(() => window.__mock.api("GET", "/devices/token1/commands"))
+  assert.equal(asked.args.path, "/devices/token1/commands?chat=chat2&cwd=%2Fhome%2Fdev%2Fproject")
+  // Chosen with Enter: sent as `/review`, as the device's terminal would take it.
+  await p.keyboard.type("rev")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/messages").length === 1)
+  assert.deepEqual((await messagesTo(p, "chat2"))[0], { text: "/review" })
+  // One that takes something after its name is completed, never sent bare.
+  await p.keyboard.type("/comm")
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  await p.keyboard.press("Enter")
+  assert.equal(await typed(p), "/commit ")
+  await p.keyboard.type("Tidy the build")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/messages").length === 2)
+  assert.equal((await messagesTo(p, "chat2"))[1].text, "/commit Tidy the build")
+  // A new agent chat asks the device too, for the folder chosen.
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await p.click("#composer-text")
+  await p.keyboard.type("/")
+  await p.waitForFunction(() => window.__mock.api("GET", "/devices/token1/commands").some((x) => x.args.path.includes("chat=&cwd=%2Fhome%2Fdev%2Fproject")))
+  assert.deepEqual(p.errors, [])
+})
+
+test("S3: @ after white space lists what can be mentioned; a device's file goes in as its escaped path, an attachment as a chip", async () => {
+  const p = await page(s3(), { clock: true })
+  await openChatRow(p, "chat2")
+  await p.click("#composer-text")
+  await p.keyboard.type("mail ada@example.org")
+  await p.clock.fastForward(400)
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/mentions").length), 0, "an address is not a mention")
+  await p.keyboard.type(" see @a")
+  // Debounced: nothing is asked for a keystroke that another follows at once.
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/mentions").length), 0)
+  await p.keyboard.type("pp")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  const reads = await p.evaluate(() => [window.__mock.api("GET", "/mentions"), window.__mock.api("GET", "/devices/token1/files")].map((l) => l.map((x) => x.args.path)))
+  assert.deepEqual(reads, [["/mentions?q=app&chat=chat2"], ["/devices/token1/files?q=app&chat=chat2&cwd=%2Fhome%2Fdev%2Fproject"]], "one lookup, for what was typed last")
+  assert.deepEqual(await menuRows(p), ["# On the device · workbench", "app main.ts", "tui", "# Files", "lembas recipe #2.md", "# Already in this chat", "oven.png"], "the device's files first")
+  assert.equal(await p.textContent("#composer-menu .cmenu__keys"), "↑↓ choose · Enter mention · Esc dismiss")
+  await shot(p, "s3-mentions-agent")
+  // The device's file: its path, a space and # escaped as the CLI reads them; nothing attached.
+  await p.keyboard.press("Enter")
+  assert.equal(await typed(p), "mail ada@example.org see @src/app\\ main.ts ")
+  assert.equal(await p.evaluate(() => window.__mock.api("POST", "/attachments/from").length), 0)
+  // What is already in this chat: attached again, the usual chip.
+  await p.keyboard.type("@ov")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  await p.keyboard.press("ArrowUp")
+  assert.equal(await selected(p), "oven.png")
+  assert.equal(await p.textContent("#composer-menu .cmenu__keys"), "↑↓ choose · Enter attach · Esc dismiss")
+  await p.keyboard.press("Enter")
+  await p.waitForSelector("#composer-files .tile.is-ready")
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/attachments/from")))[0].args.body, { chat: "chat2", attachment: "att7" })
+  assert.match(await typed(p), /@oven\.png $/)
+  // A server file in an agent chat is attached: the device cannot read the server's tree.
+  await p.keyboard.type("@lem")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  await p.click("#composer-menu .cmenu__option:has-text('lembas recipe')")
+  await p.waitForFunction(() => window.__mock.api("POST", "/attachments/from").length === 2)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/attachments/from")))[1].args.body, { chat: "chat2", path: "/notes/recipes/lembas recipe #2.md" })
+  await p.keyboard.type("done")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/messages").length === 1)
+  assert.deepEqual((await messagesTo(p, "chat2"))[0].attachments, ["att9", "att9"], "the chips go with the message")
+  assert.deepEqual(p.errors, [])
+})
+
+test("S3: in a chat on the server a file is mentioned by its path or attached as a copy; an address is a page to read; an older server offers what it can", async () => {
+  const p = await page(s3(), { clock: true })
+  await openChatRow(p, "chat1")
+  await p.click("#composer-text")
+  await p.keyboard.type("@lem")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  assert.deepEqual(await menuRows(p), ["# Files", "lembas recipe #2.md", "# Already in this chat", "oven.png"])
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/devices/").length), 0, "no device is asked in a chat on the server")
+  assert.equal(await p.textContent("#composer-menu .cmenu__keys"), "↑↓ choose · Enter mention · Shift+Enter attach · Esc dismiss")
+  // Enter: the path, for the model to read under the chat's access.
+  await p.keyboard.press("Enter")
+  assert.equal(await typed(p), "@/notes/recipes/lembas\\ recipe\\ \\#2.md ")
+  assert.equal(await p.evaluate(() => window.__mock.api("POST", "/attachments/from").length), 0)
+  // Shift+Enter, or the row's own button: a copy attached.
+  await p.keyboard.type("@lem")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  await p.keyboard.press("Shift+Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/attachments/from").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/attachments/from")))[0].args.body, { chat: "chat1", path: "/notes/recipes/lembas recipe #2.md" })
+  await p.keyboard.type("@lem")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  await p.click("#composer-menu .cmenu__also[data-also]")
+  await p.waitForFunction(() => window.__mock.api("POST", "/attachments/from").length === 2)
+  // An address: a page to read, fetched by the server and attached.
+  await p.fill("#composer-text", "")
+  await p.keyboard.type("@https://example.org/lembas")
+  await p.clock.fastForward(400)
+  await p.waitForFunction(() => /Fetch this page/.test(document.getElementById("composer-menu")?.textContent || ""))
+  assert.equal((await menuRows(p))[0], "# A page to read")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/attachments/from").length === 3)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/attachments/from")))[2].args.body, { chat: "chat1", url: "https://example.org/lembas" })
+  // Every lookup stays on the app's door: no address or fragment in a path Rust would refuse.
+  const paths = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "api").map((c) => c.args.path))
+  assert.ok(paths.every((x) => x.startsWith("/") && !x.includes("://") && !x.includes("#") && !x.includes(" ")), "paths Rust's door takes")
+  // A refusal is said on the file's tile, not lost.
+  await p.evaluate(() => window.__mock.answer("POST /attachments/from", { __error: { status: 413, detail: "That file is too large to attach." } }))
+  await p.fill("#composer-text", "")
+  await p.keyboard.type("@ov")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden])")
+  await p.keyboard.press("ArrowUp")
+  await p.keyboard.press("Enter")
+  await p.waitForSelector("#composer-files .tile.is-failed")
+  assert.match(await p.getAttribute("#composer-files .tile.is-failed", "title"), /too large/)
+  await p.context().close()
+  // A server from before the routes: nothing to mention, said; the address is still offered.
+  const cfg = s3()
+  for (const k of ["GET /mentions", "GET /devices/token1/files", "GET /devices/token1/commands"]) delete cfg.routes[k]
+  const o = await page(cfg, { clock: true })
+  await openChatRow(o, "chat2")
+  await o.click("#composer-text")
+  await o.keyboard.type("@x")
+  await o.clock.fastForward(400)
+  await o.waitForSelector("#composer-menu:not([hidden])")
+  assert.match(await o.textContent("#composer-menu"), /Nothing matches “x”\./)
+  await o.keyboard.press("Escape")
+  await o.fill("#composer-text", "")
+  await o.keyboard.type("/")
+  await o.waitForSelector("#composer-menu:not([hidden])")
+  assert.ok((await menuRows(o)).includes("/help"), "the app's own commands need no route")
+  assert.deepEqual(o.errors, [])
+  assert.deepEqual(p.errors, [])
+})
+
+test("S3: the menu is the composer's own width, directly above it, at 1920, 1280, 1024, 800 and 390 px; long names give way", async () => {
+  const long = { items: [{ kind: "file", path: `/notes/${LONG}`, name: LONG, detail: `/notes/a/very/deep/folder/of/recipes/and/their/variants/${LONG}` }, ...MENTIONS.items] }
+  for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844]]) {
+    const p = await page(s3({ "GET /mentions": long }), { width, height })
+    await p.evaluate(() => document.querySelector('.chatrow[data-id="chat1"]').click())
+    await p.waitForSelector("#messages .msg")
+    for (const text of ["/", "@lem"]) {
+      await p.fill("#composer-text", "")
+      await p.click("#composer-text")
+      await p.keyboard.type(text)
+      await p.waitForSelector("#composer-menu:not([hidden]) .cmenu__option")
+      const [m, c] = await p.evaluate(() => ["composer-menu", "composer"].map((id) => { const r = document.getElementById(id).getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom } }))
+      assert.ok(Math.abs(m.left - c.left) < 2 && Math.abs(m.right - c.right) < 2, `${width} ${text}: the card's width`)
+      assert.ok(m.bottom <= c.top && c.top - m.bottom < 16, `${width} ${text}: directly above the card`)
+      assert.ok(m.top >= 0 && m.left >= 0 && m.right <= width, `${width} ${text}: inside the window`)
+      const cut = await p.$$eval("#composer-menu .cmenu__option > *", (l) => { const box = document.getElementById("composer-menu").getBoundingClientRect(); return l.filter((x) => { const r = x.getBoundingClientRect(); return r.right > box.right + 0.5 || r.left < box.left - 0.5 }).length })
+      assert.equal(cut, 0, `${width} ${text}: every row inside the menu`)
+      // The rows share their tracks: every name starts on one line.
+      const lefts = await p.$$eval("#composer-menu .cmenu__name", (l) => [...new Set(l.map((x) => Math.round(x.getBoundingClientRect().left)))])
+      assert.equal(lefts.length, 1, `${width} ${text}: names on one line (${lefts})`)
+      assert.ok(await noSideways(p, width), `${width} ${text}: nothing sideways`)
+      await shot(p, `s3-menu-${text === "/" ? "slash" : "at"}-${width}`)
+      await p.keyboard.press("Escape")
+    }
+    // The last row can be reached with the keys: it scrolls into the list's view.
+    await p.fill("#composer-text", "")
+    await p.keyboard.type("/")
+    await p.keyboard.press("ArrowUp")
+    const seen = await p.evaluate(() => { const o = document.querySelector("#composer-menu .cmenu__option[aria-selected='true']").getBoundingClientRect(); const l = document.querySelector("#composer-menu .cmenu__list").getBoundingClientRect(); return o.top >= l.top - 1 && o.bottom <= l.bottom + 1 })
+    assert.ok(seen, `${width}: the chosen row is in view`)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

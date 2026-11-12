@@ -1417,6 +1417,58 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .cchip.is-dim { color: var(--ink-faint); }
 .cchip.is-warn { color: var(--warning); border-color: var(--warning); }
 
+/* The composer's `/` and `@` menu: a box of the composer card's own width, directly above it --
+   placed by the card (which is `position: relative`), so it is where the card is at any width
+   and never needs measuring. It grows upward to a list's height and scrolls inside. Every row is
+   the same three tracks -- icon · name over note · a second action -- so names start on one line. */
+.cmenu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--sp-2));
+  z-index: var(--z-dropdown);
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  max-height: min(var(--h-list), 50vh);
+  background: var(--surface-raised);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.cmenu[hidden] { display: none; }
+.cmenu__list { min-height: 0; overflow-y: auto; padding: var(--sp-1) 0; }
+.cmenu__group { padding: var(--sp-2) var(--sp-3) var(--sp-1); font: 600 var(--text-xs) var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cmenu__option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) var(--control-h-sm);
+  gap: var(--sp-3);
+  align-items: center;
+  min-height: calc(2 * var(--text-sm) * var(--leading-tight) + 2 * var(--sp-2));
+  padding: var(--sp-1) var(--sp-3);
+  cursor: pointer;
+}
+.cmenu__option:hover { background: var(--surface-hover); }
+.cmenu__option[aria-selected="true"] { background: var(--surface-active); }
+.cmenu__icon { display: grid; color: var(--ink-muted); }
+.cmenu__body { display: grid; grid-template-rows: auto auto; min-width: 0; }
+.cmenu__name, .cmenu__note { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: var(--leading-tight); }
+.cmenu__name { font: var(--text-sm) / var(--leading-tight) var(--font-ui); color: var(--ink); }
+.cmenu__name.is-mono { font-family: var(--font-mono); }
+.cmenu__note { font: var(--text-xs) / var(--leading-tight) var(--font-mono); color: var(--ink-muted); }
+.cmenu__note.is-plain { font-family: var(--font-ui); }
+.cmenu__note:empty { display: none; }
+.cmenu__also { width: var(--control-h-sm); height: var(--control-h-sm); }
+.cmenu__empty { padding: var(--sp-3); font-size: var(--text-sm); color: var(--ink-muted); }
+.cmenu__keys { padding: var(--sp-2) var(--sp-3); font: var(--text-xs) / var(--leading-normal) var(--font-ui); color: var(--ink-faint); border-top: var(--border-w) solid var(--border); overflow-wrap: anywhere; }
+/* /help: commands and keys, two columns on shared tracks. */
+.sheet__scroll { max-height: 55vh; overflow: auto; display: grid; gap: var(--sp-3); }
+.sheet { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.sheet td { padding: var(--sp-1) var(--sp-3) var(--sp-1) 0; vertical-align: top; border-bottom: var(--border-w) solid var(--border); overflow-wrap: anywhere; }
+.sheet__key { width: 40%; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink); }
+.sheet__title { font: 600 var(--text-xs) var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); }
+.thread__note.is-info { background: var(--surface); color: var(--ink-muted); border: var(--border-w) solid var(--border); }
+
 /* Where a new agent chat works, above the composer: computer · folder · mode, three chips of the
    header's family on one line. The three share the line's width -- a track each, none wider than
    its words, a long name giving way with an ellipsis -- so none is ever cut off or scrolled out
