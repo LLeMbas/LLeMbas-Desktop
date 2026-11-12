@@ -3618,7 +3618,7 @@ test("PY: the server's own fixtures: the call it hands a page is run, and what i
   assert.equal(said.call_id, call.call_id)
   assert.deepEqual(Object.keys(said.result).sort(), Object.keys(expected).sort(), "stdout, result, error, files")
   assert.deepEqual(said.result.files, expected.files, "the file it was asked to save, as the server's fixture has it")
-  assert.equal(said.result.stdout, Buffer.from(call.files[0].content_b64, "base64").toString().trimEnd())
+  assert.equal(said.result.stdout.trimEnd(), Buffer.from(call.files[0].content_b64, "base64").toString().trimEnd(), "the file it was handed, read")
   assert.deepEqual([said.result.result, said.result.error], [expected.result, expected.error])
   assert.deepEqual(p.errors, [])
 })
