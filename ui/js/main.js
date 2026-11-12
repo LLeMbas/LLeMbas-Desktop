@@ -12,7 +12,7 @@ import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab, openServerFile } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer } from "./chat.js"
+import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
 import { applyTheme, noteMe } from "./look.js"
 import { initAttach, allowAttach } from "./attach.js"
@@ -129,6 +129,9 @@ async function loadModels({ keep = false } = {}) {
     if (!keep) models = []
   }
 }
+
+// How often the linked computers are read again while a chat waits for one to open terminals.
+const DEVICES_EVERY = 5000
 
 async function loadDevices() {
   try {
@@ -338,6 +341,7 @@ async function boot() {
       if (on && panelOpen()) showPanel(false)
     },
     composer: intoComposer,
+    deviceName: (id) => devices.find((d) => d.id === id)?.name || "",
   })
   initActivity({
     onLayout: (on) => {
@@ -431,6 +435,15 @@ async function boot() {
   applyTheme(status.theme)
   renderBar(status)
   route()
+  // An agent chat whose computer does not open a terminal now -- not linked, or switched off
+  // there: its devices are read again every few seconds, so the Terminal comes alive the moment
+  // the computer links or the switch is turned, without the chat being opened again.
+  setInterval(async () => {
+    if (view !== "app" || page !== "chat" || document.visibilityState !== "visible" || !terminalWaiting()) return
+    const before = JSON.stringify(devices.map((d) => [d.id, d.terminal, d.terminal_reason]))
+    await loadDevices()
+    if (JSON.stringify(devices.map((d) => [d.id, d.terminal, d.terminal_reason])) !== before) statusChanged()
+  }, DEVICES_EVERY)
   // The list keeps up with replies finished elsewhere (the web interface, the phone).
   setInterval(() => {
     if (view === "app" && document.visibilityState === "visible") refreshList()

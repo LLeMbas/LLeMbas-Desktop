@@ -15,7 +15,7 @@
 //   terminal [[kind, data], ...] -- what every terminal's socket sends as soon as it is opened
 //            (`control` frames as the server's JSON, `output` as text, sent base64 as Rust does).
 //            More with `__mock.shell(kind, data)`; `{ refuse: {status, detail} }` makes
-//            `terminal_open` fail.
+//            `terminal_open` fail; `terminalDelay` (ms) makes it slow to answer.
 //
 // Nothing here talks to a network: the page's policy allows it none, and this keeps it so.
 ;(function () {
@@ -92,6 +92,8 @@
       case "terminal_open": {
         const t = config.terminal || []
         if (t.refuse) return Promise.reject(t.refuse)
+        // A slow bridge (`terminalDelay` ms): what is typed meanwhile must not be lost.
+        if (config.terminalDelay) await new Promise((done) => setTimeout(done, config.terminalDelay))
         const id = ++nextTerminal
         terminals.set(id, { target: { chat: args.chat, device: args.device, directory: args.directory }, open: true })
         setTimeout(() => {

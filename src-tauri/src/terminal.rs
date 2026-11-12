@@ -17,14 +17,18 @@
 //! A page cannot open the socket itself: its content security policy allows it no connection
 //! but the bridge.
 //!
-//! One thread per terminal owns its socket: it reads with a short timeout and, between reads,
-//! sends what the page queued on its channel. Blocking sockets, no async runtime of its own.
+//! One thread per terminal owns its socket. Blocking sockets, no async runtime of its own: the
+//! thread reads what the server has (a read that waits about a millisecond), then waits on the
+//! page's queue -- so a keystroke wakes it at once and is on the wire without waiting for a read
+//! to time out -- and reads again. How long it waits on the queue before reading again is short
+//! while the shell is in use (an echo is seen within a few milliseconds) and long when nothing
+//! moves, so an idle terminal costs about what it did.
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -42,8 +46,13 @@ pub const CLOSE_UNAUTHORIZED: u16 = 4401;
 pub const MAX_INPUT: usize = 256 * 1024;
 /// The longest directory the server takes (`api/terminal.py` `MAX_DIR_CHARS`).
 const MAX_DIR: usize = 4096;
-/// How long a read waits before the thread looks at what the page queued.
-const POLL: Duration = Duration::from_millis(40);
+/// How long a read waits for the server before the thread turns to the page's queue.
+const READ: Duration = Duration::from_millis(1);
+/// How long the thread then waits on the page's queue (keys wake it at once) before it reads
+/// again: while the shell is in use, and when nothing has moved for `ACTIVE_FOR`.
+const WAIT_ACTIVE: Duration = Duration::from_millis(3);
+const WAIT_IDLE: Duration = Duration::from_millis(40);
+const ACTIVE_FOR: Duration = Duration::from_millis(1500);
 /// How long a close waits for the server's answer before the socket is simply dropped.
 const CLOSE_WAIT: Duration = Duration::from_secs(2);
 
@@ -278,6 +287,42 @@ fn connect(url: &str, token: &str) -> Result<Socket, End> {
     }
 }
 
+/// How long to wait on the page's queue before reading the socket again, given how long ago
+/// anything last went either way: short in use, long when idle.
+pub fn wait_for(since_traffic: Duration) -> Duration {
+    if since_traffic < ACTIVE_FOR {
+        WAIT_ACTIVE
+    } else {
+        WAIT_IDLE
+    }
+}
+
+/// What became of one thing the page asked for.
+enum Forward {
+    Sent,
+    Closing,
+    Broken(String),
+}
+
+/// Send the page's keys or size up the socket, or start closing it.
+fn forward(ws: &mut Socket, up: Up) -> Forward {
+    let sent = match up {
+        Up::Keys(bytes) if bytes.len() <= MAX_INPUT => ws.send(Message::binary(bytes)),
+        Up::Keys(_) => Ok(()),
+        Up::Resize(cols, rows) => ws.send(Message::text(
+            json!({ "t": "resize", "cols": cols, "rows": rows }).to_string(),
+        )),
+        Up::Close => {
+            let _ = ws.close(None);
+            return Forward::Closing;
+        }
+    };
+    match sent {
+        Err(e) if !idle(&e) => Forward::Broken(e.to_string()),
+        _ => Forward::Sent,
+    }
+}
+
 /// A read that only timed out: nothing came in this poll.
 fn idle(e: &WsError) -> bool {
     matches!(e, WsError::Io(io) if matches!(io.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut))
@@ -290,41 +335,37 @@ fn run(url: &str, token: &str, rx: &Receiver<Up>, send: &dyn Fn(&'static str, Va
     };
     match tcp(&ws) {
         Some(s) => {
-            let _ = s.set_read_timeout(Some(POLL));
+            let _ = s.set_read_timeout(Some(READ));
         }
         None => return End::failed("An unexpected kind of connection."),
     }
     let mut closed_by_server: Option<(u16, String)> = None;
     let mut closing: Option<Instant> = None;
+    // When anything last went up or came down: what `wait_for` reads.
+    let mut traffic = Instant::now();
     loop {
         // What the page queued, until the server has said goodbye.
-        if closing.is_none() && closed_by_server.is_none() {
-            loop {
-                let sent = match rx.try_recv() {
-                    Ok(Up::Keys(bytes)) if bytes.len() <= MAX_INPUT => {
-                        ws.send(Message::binary(bytes))
-                    }
-                    Ok(Up::Keys(_)) => Ok(()),
-                    Ok(Up::Resize(cols, rows)) => ws.send(Message::text(
-                        json!({ "t": "resize", "cols": cols, "rows": rows }).to_string(),
-                    )),
-                    Ok(Up::Close) | Err(TryRecvError::Disconnected) => {
-                        closing = Some(Instant::now());
-                        let _ = ws.close(None);
-                        break;
-                    }
-                    Err(TryRecvError::Empty) => break,
-                };
-                if let Err(e) = sent {
-                    if !idle(&e) {
-                        return End::failed(format!("The connection broke off: {e}"));
-                    }
-                }
+        while closing.is_none() && closed_by_server.is_none() {
+            let up = match rx.try_recv() {
+                Ok(up) => up,
+                Err(TryRecvError::Disconnected) => Up::Close,
+                Err(TryRecvError::Empty) => break,
+            };
+            traffic = Instant::now();
+            match forward(&mut ws, up) {
+                Forward::Sent => {}
+                Forward::Closing => closing = Some(Instant::now()),
+                Forward::Broken(e) => return End::failed(format!("The connection broke off: {e}")),
             }
         }
+        let mut came = false;
         match ws.read() {
-            Ok(Message::Binary(bytes)) => send("output", Value::String(base64(&bytes))),
+            Ok(Message::Binary(bytes)) => {
+                came = true;
+                send("output", Value::String(base64(&bytes)));
+            }
             Ok(Message::Text(text)) => {
+                came = true;
                 if let Ok(value) = serde_json::from_str::<Value>(text.as_str()) {
                     send("control", value);
                 }
@@ -348,6 +389,28 @@ fn run(url: &str, token: &str, rx: &Receiver<Up>, send: &dyn Fn(&'static str, Va
                 }
                 return End::failed(format!("The connection broke off: {e}"));
             }
+        }
+        if came {
+            // More may be waiting behind it: read again before waiting on anything.
+            traffic = Instant::now();
+            continue;
+        }
+        if closing.is_some() || closed_by_server.is_some() {
+            // Only the goodbye is left to read: no queue to wait on, and no spinning either.
+            std::thread::sleep(WAIT_ACTIVE);
+            continue;
+        }
+        // Nothing from the server: wait on the page's queue, which a keystroke ends at once.
+        let up = match rx.recv_timeout(wait_for(traffic.elapsed())) {
+            Ok(up) => up,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => Up::Close,
+        };
+        traffic = Instant::now();
+        match forward(&mut ws, up) {
+            Forward::Sent => {}
+            Forward::Closing => closing = Some(Instant::now()),
+            Forward::Broken(e) => return End::failed(format!("The connection broke off: {e}")),
         }
     }
     match closed_by_server {
@@ -432,6 +495,111 @@ mod tests {
             ..End::default()
         }
         .unauthorized());
+    }
+
+    #[test]
+    fn the_queue_is_waited_on_briefly_in_use_and_longer_when_idle() {
+        assert_eq!(wait_for(Duration::ZERO), WAIT_ACTIVE);
+        assert_eq!(wait_for(ACTIVE_FOR - Duration::from_millis(1)), WAIT_ACTIVE);
+        assert_eq!(wait_for(ACTIVE_FOR), WAIT_IDLE);
+        assert_eq!(wait_for(Duration::from_secs(3600)), WAIT_IDLE);
+        // A read never holds a keystroke back for longer than a blink.
+        assert!(READ + WAIT_ACTIVE <= Duration::from_millis(5));
+        assert!(WAIT_IDLE <= Duration::from_millis(50));
+    }
+
+    /// A server of one socket on this machine that sends back whatever it is sent, until closed.
+    fn echo() -> (u16, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            loop {
+                match ws.read() {
+                    Ok(m @ (Message::Binary(_) | Message::Text(_))) => {
+                        if ws.send(m).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Message::Close(_)) => {
+                        // The goodbye's answer is queued by the read: sent before letting go.
+                        let _ = ws.flush();
+                        break;
+                    }
+                    Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        });
+        (port, thread)
+    }
+
+    #[test]
+    fn keys_go_up_at_once_and_the_shells_output_comes_back_even_after_an_idle_spell() {
+        let (port, server) = echo();
+        let (tx, rx) = mpsc::channel();
+        let (seen_tx, seen_rx) = mpsc::channel::<(&'static str, Value)>();
+        let client = std::thread::spawn(move || {
+            run(
+                &format!("ws://127.0.0.1:{port}/terminal"),
+                "token",
+                &rx,
+                &move |kind, data| {
+                    let _ = seen_tx.send((kind, data));
+                },
+            )
+        });
+        let within = Duration::from_secs(5);
+        // In use: keys queued one after another all arrive, in order.
+        for key in ["l", "s", "\n"] {
+            tx.send(Up::Keys(key.as_bytes().to_vec())).unwrap();
+            let (kind, data) = seen_rx.recv_timeout(within).unwrap();
+            assert_eq!(kind, "output");
+            assert_eq!(data, Value::String(base64(key.as_bytes())));
+        }
+        // A size goes up as the server's JSON (the echo sends it back as a control frame).
+        tx.send(Up::Resize(100, 30)).unwrap();
+        let (kind, data) = seen_rx.recv_timeout(within).unwrap();
+        assert_eq!(kind, "control");
+        assert_eq!(data, json!({ "t": "resize", "cols": 100, "rows": 30 }));
+        // Idle for longer than ACTIVE_FOR: the thread waits on the queue, and a key still wakes
+        // it well inside the idle wait -- it does not sit out a read's timeout first.
+        std::thread::sleep(ACTIVE_FOR + Duration::from_millis(200));
+        let at = Instant::now();
+        tx.send(Up::Keys(b"x".to_vec())).unwrap();
+        let (kind, _) = seen_rx.recv_timeout(within).unwrap();
+        assert_eq!(kind, "output");
+        assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
+        // A key too large to be a paste is dropped, and the socket lives on.
+        tx.send(Up::Keys(vec![b'a'; MAX_INPUT + 1])).unwrap();
+        tx.send(Up::Keys(b"y".to_vec())).unwrap();
+        let (_, data) = seen_rx.recv_timeout(within).unwrap();
+        assert_eq!(data, Value::String(base64(b"y")));
+        // Closed from the page: the thread ends without an error.
+        tx.send(Up::Close).unwrap();
+        let end = client.join().unwrap();
+        assert_eq!(end.error, None);
+        assert_eq!(end.status, None);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_page_that_goes_away_closes_its_terminal() {
+        let (port, server) = echo();
+        let (tx, rx) = mpsc::channel::<Up>();
+        let client = std::thread::spawn(move || {
+            run(
+                &format!("ws://127.0.0.1:{port}/terminal"),
+                "token",
+                &rx,
+                &|_, _| {},
+            )
+        });
+        drop(tx);
+        let end = client.join().unwrap();
+        assert_eq!(end.error, None);
+        server.join().unwrap();
     }
 
     #[test]

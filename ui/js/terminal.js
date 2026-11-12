@@ -16,12 +16,24 @@
 // the computed tokens, and again when the theme changes).
 
 import { $, h, icon, ICONS } from "./dom.js"
-import { openTerminal, why } from "./bridge.js"
+import { openTerminal, why, get, del } from "./bridge.js"
+import { ask } from "./popup.js"
 
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"]
 const MAX_MARKED = 200
 
-let ctx = { layout: () => {}, composer: () => {} }
+// A connection that was lost is tried again by itself, after these many seconds in turn; then it
+// waits for Reconnect. A shell that ended on purpose (it exited, it was idle too long, it was
+// ended here) is not: a new one is offered, never quietly put in its place.
+const BACKOFF = [1, 2, 4, 8, 15, 30]
+// The most keys kept while the socket is being opened (typed ahead of it): then they are sent.
+const MAX_EARLY = 64 * 1024
+
+let ctx = { layout: () => {}, composer: () => {}, deviceName: () => "" }
+let tries = 0 // how many reconnects in a row have not reached a shell
+let countdown = 0 // the interval that counts a reconnect down
+let greeting = "" // what the next shell says first, when it stands in for a lost one
+let shellId = "" // the server's own id of the open shell, where its ready frame gives one
 let target = null // what the panel is for: { key, chat } | { key, device, directory }, with `name`
 let term = null
 let fit = null
@@ -116,7 +128,7 @@ function build() {
   term.open($("terminal-screen"))
   term.parser.registerOscHandler(133, onCommandMark)
   term.parser.registerOscHandler(7, onWhere)
-  term.onData((data) => session?.handle?.input(data))
+  term.onData(typeIn)
   // Ctrl+C is the shell's interrupt; copy and paste are the shifted pair, as in every terminal.
   term.attachCustomKeyEventHandler((e) => {
     if (!e.ctrlKey || !e.shiftKey || e.type !== "keydown") return true
@@ -133,14 +145,25 @@ function build() {
     if (key === "v") {
       navigator.clipboard
         .readText()
-        .then((text) => session?.handle?.input(text))
-        .catch(() => {})
+        .then(typeIn)
+        .catch(() => say(t("The clipboard could not be read."), true))
       return false
     }
     return true
   })
   observer = new ResizeObserver(() => refit())
   observer.observe($("terminal-screen"))
+}
+
+/**
+ * Keys for the shell. While its socket is still being opened they are kept, in order, and sent
+ * the moment it is: what is typed ahead of a shell is not lost.
+ */
+function typeIn(data) {
+  const s = session
+  if (!s || !data) return
+  if (s.handle) s.handle.input(data)
+  else if (s.early.reduce((n, x) => n + x.length, 0) + data.length <= MAX_EARLY) s.early.push(data)
 }
 
 function refit() {
@@ -166,8 +189,10 @@ async function connect() {
   if (!target || !term || session) return
   const t0 = target
   // The session exists before the socket answers, so frames that come first are this one's.
-  const mine = { handle: null, key: t0.key, draft: !t0.chat }
+  const mine = { handle: null, key: t0.key, draft: !t0.chat, early: [] }
   session = mine
+  offer("")
+  hideShells()
   say(t("Connecting…"))
   let handle
   try {
@@ -187,20 +212,29 @@ async function connect() {
   } catch (err) {
     if (session === mine) session = null
     say(why(err), true)
+    offer(t("Reconnect"))
     return
   }
   mine.handle = handle
   // Let go of meanwhile (another chat, the panel's target changed): closed at once.
-  if (session !== mine) handle.close()
+  if (session !== mine) return handle.close()
+  // What was typed while it opened, in the order it was typed; and the size the panel has now.
+  for (const data of mine.early) handle.input(data)
+  mine.early = []
+  refit()
 }
 
 function control(frame) {
   if (frame.t === "ready") {
-    say(frame.shared ? t("Connected. This shell is also open in another tab, and they share a size.") : t("Connected."))
+    tries = 0
+    shellId = typeof frame.id === "string" ? frame.id : ""
+    say(greeting || (frame.shared ? t("Connected. This shell is also open in another tab, and they share a size.") : t("Connected.")))
+    greeting = ""
     if (frame.dir) $("terminal-where").textContent = frame.dir
     osc = !!frame.osc
     showMarkControls()
     showLast("")
+    $("terminal-end").hidden = false
     refit()
     if (terminalOpen()) term.focus()
   } else if (frame.t === "behind") {
@@ -211,19 +245,176 @@ function control(frame) {
     term.reset()
     forgetMarks()
     connect()
-  } else if (frame.t === "closed" || frame.t === "error") {
-    // No reconnect of its own: a new shell has lost the folder, the environment and the
-    // half-typed command, and quietly putting one in its place is worse than saying it went.
-    say(frame.message || t("This terminal closed."), frame.t === "error")
+  } else if (frame.t === "closed") {
     drop()
+    // The server's reason (`api/terminal.py`): the link to the computer dropped ("error") or the
+    // server is stopping ("shutdown") -- the shell is gone through nobody's choice, and a new one
+    // is opened as soon as there is something to open it on. It exited, sat idle too long or was
+    // revoked: said, and a new one is the person's to ask for.
+    if (frame.reason === "error" || frame.reason === "shutdown") lost(frame.message || "", true)
+    else {
+      say(frame.message || t("This terminal closed."))
+      offer(t("New shell"))
+    }
+  } else if (frame.t === "error") {
+    // A refusal, in the server's words. Where it is the limit on open shells, the ones open are
+    // listed with a way to end each.
+    say(frame.message || t("This terminal closed."), true)
+    drop()
+    offer(t("Reconnect"))
+    // CONTRACT (unpinned): the server may mark the limit (`code: "limit"`); a refusal that says
+    // nothing of its kind is taken as one where the account has shells open.
+    if (frame.code ? frame.code === "limit" : true) listShells()
   }
 }
 
 function ended(end) {
+  $("terminal-end").hidden = true
   if (end.code === 4401 || end.status === 401) say(t("Sign in again: the server no longer accepts this app's sign-in."), true)
   else if (end.status === 404) say(t("The terminal needs a newer LLeMbas server. Ask its administrator to update it."), true)
-  else if (end.error) say(end.error, true)
-  else say(t("Disconnected. Close and reopen to reconnect."))
+  // The socket went with no word from the server (the network, or the server restarting).
+  else lost(end.error || "", false)
+}
+
+// --- Connecting again ----------------------------------------------------------------------------
+
+/** The footer's button: Reconnect, Reconnect now, New shell -- or none (""). */
+function offer(label) {
+  const b = $("terminal-again")
+  b.textContent = label
+  b.hidden = !label
+}
+
+function stopCountdown() {
+  clearInterval(countdown)
+  countdown = 0
+}
+
+/**
+ * The connection was lost: try again by itself, each time after longer, saying when; after the
+ * last try it waits for Reconnect. `fresh`: the server said the shell itself is gone, so what
+ * opens is a new one -- said in one plain line when it does.
+ */
+function lost(reason, fresh) {
+  stopCountdown()
+  $("terminal-end").hidden = true
+  greeting = fresh ? t("Connected again. This is a new shell: the one before ended with the connection.") : t("Connected again. If the server or the computer restarted meanwhile, this is a new shell.")
+  const said = reason || t("The connection was lost.")
+  if (!target || tries >= BACKOFF.length) {
+    say(`${said} ${t("It did not come back. Reconnect when it is there again.")}`, true)
+    offer(t("Reconnect"))
+    return
+  }
+  let left = BACKOFF[tries++]
+  const tell = () => say(`${said} ${t("Reconnecting in %(n)s s…", { n: left })}`)
+  tell()
+  offer(t("Reconnect now"))
+  countdown = setInterval(() => {
+    left -= 1
+    if (left > 0) return tell()
+    reconnect()
+  }, 1000)
+}
+
+/** Open a shell again where one was lost or ended. The screen keeps what the old one printed. */
+function reconnect() {
+  stopCountdown()
+  offer("")
+  if (!target || session || !term) return
+  // A line between the old shell's output and the new one's, in the terminal's own dim colour.
+  term.write(`\r\n\x1b[2m--- ${t("reconnected")} ---\x1b[0m\r\n`)
+  forgetMarks()
+  connect()
+}
+
+// --- Ending a shell, and the ones open -------------------------------------------------------------
+
+const enc = encodeURIComponent
+
+/**
+ * The account's open shells.
+ * CONTRACT (unpinned): GET /terminals -> { terminals: [{ id, device, directory, opened }] } and
+ * DELETE /terminals/{id}, as the plan for server 2.0.0-beta.11 words them; a server without
+ * them answers 404, which is said.
+ */
+async function openShells() {
+  const r = await get("/terminals")
+  return Array.isArray(r?.terminals) ? r.terminals.filter((x) => x && typeof x.id === "string") : []
+}
+
+/** End the shell this panel shows: asked first, since what runs in it stops. */
+async function endShell() {
+  if (!target) return
+  const yes = await ask({ title: t("End this shell?"), text: t("What is running in it stops and its scrollback goes. The chat is not affected."), ok: t("End shell"), cancel: t("Cancel"), danger: true })
+  if (!yes) return
+  try {
+    let id = shellId
+    if (!id) {
+      const mine = (await openShells()).find((x) => (target.chat && x.chat === target.chat) || (x.device === target.device && x.directory === target.directory))
+      id = mine?.id || ""
+    }
+    if (!id) return say(t("No open shell was found for this panel."), true)
+    await del(`/terminals/${enc(id)}`)
+    stopCountdown()
+    drop()
+    shellId = ""
+    $("terminal-end").hidden = true
+    say(t("The shell was ended."))
+    offer(t("New shell"))
+  } catch (err) {
+    say(err?.status === 404 ? t("Ending a shell needs a newer LLeMbas server.") : why(err), true)
+  }
+}
+
+function hideShells() {
+  $("terminal-shells").hidden = true
+  $("terminal-shells").replaceChildren()
+}
+
+/** The open shells, each with End: shown where the server refused one more. */
+async function listShells() {
+  const box = $("terminal-shells")
+  let list
+  try {
+    list = await openShells()
+  } catch {
+    return hideShells()
+  }
+  if (!list.length || session) return hideShells()
+  const when = (x) => {
+    const at = new Date(typeof x.opened === "number" ? x.opened * 1000 : x.opened)
+    return Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString(document.documentElement.lang || undefined, { hour: "2-digit", minute: "2-digit" })
+  }
+  box.replaceChildren(
+    h("p", { class: "termpanel__shells-title", text: t("Your open shells") }),
+    h(
+      "ul",
+      { class: "termpanel__shells-list" },
+      list.map((x) => {
+        const end = h("button", { type: "button", class: "btn btn--sm", text: t("End"), "aria-label": `${t("End shell")}: ${x.directory || x.id}` })
+        end.addEventListener("click", async () => {
+          end.disabled = true
+          try {
+            await del(`/terminals/${enc(x.id)}`)
+            say(t("The shell was ended."))
+            await listShells()
+          } catch (err) {
+            end.disabled = false
+            say(why(err), true)
+          }
+        })
+        return h(
+          "li",
+          { class: "termpanel__shell", dataset: { id: x.id } },
+          h("span", { class: "termpanel__shell-name", text: ctx.deviceName(x.device) || x.device || "" }),
+          h("span", { class: "termpanel__shell-dir", title: x.directory || "", text: x.directory || "" }),
+          h("span", { class: "termpanel__shell-when", text: when(x) }),
+          end,
+        )
+      }),
+    ),
+  )
+  box.hidden = false
 }
 
 /** Let go of the socket (the shell on the device lives on, as the server keeps it). */
@@ -258,12 +449,18 @@ export function aimTerminal(next) {
     session.draft = false
     return
   }
-  if (session) {
-    drop()
-    if (term) term.reset()
-    forgetMarks()
-    say("")
-  }
+  // Another shell's place now: nothing of the old one's reconnecting or list is left.
+  stopCountdown()
+  tries = 0
+  greeting = ""
+  shellId = ""
+  offer("")
+  hideShells()
+  $("terminal-end").hidden = true
+  if (session) drop()
+  if (term) term.reset()
+  forgetMarks()
+  say("")
   if (!target) {
     if (terminalOpen()) showTerminal(false)
     return
@@ -282,7 +479,7 @@ export async function showTerminal(on) {
   if (!on) return
   // Whether this showing is to open a shell: none was open as it began. One that ends meanwhile
   // (before the frame below) is said, not quietly replaced.
-  const wanted = !session
+  const wanted = !session && !countdown && $("terminal-again").hidden
   try {
     await load()
   } catch {
@@ -478,8 +675,15 @@ function copyOut() {
   )
 }
 
-export function initTerminal({ onLayout, composer }) {
-  ctx = { layout: onLayout || (() => {}), composer: composer || (() => {}) }
+export function initTerminal({ onLayout, composer, deviceName }) {
+  ctx = { layout: onLayout || (() => {}), composer: composer || (() => {}), deviceName: deviceName || (() => "") }
+  $("terminal-end").replaceChildren(icon(ICONS.stop))
+  $("terminal-end").hidden = true
+  $("terminal-end").addEventListener("click", endShell)
+  $("terminal-again").addEventListener("click", () => {
+    tries = 0
+    reconnect()
+  })
   $("terminal-icon").replaceChildren(icon(ICONS.terminal))
   $("terminal-prev").replaceChildren(icon(ICONS.chevronUp))
   $("terminal-next").replaceChildren(icon(ICONS.chevronDown))

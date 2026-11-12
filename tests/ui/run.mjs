@@ -2975,6 +2975,280 @@ test("S3: the menu is the composer's own width, directly above it, at 1920, 1280
   }
 })
 
+// --- T3: the terminal -- typed ahead, ended, reconnected, switched off ------------------------------
+//
+// CONTRACT (unpinned): `GET /terminals` -> { terminals: [{ id, device, directory, opened }] } and
+// `DELETE /terminals/{id}`, as the plan for server 2.0.0-beta.11 words them; the answers below are
+// written to that wording, not copied from a server fixture. The `closed` frame's `reason` is the
+// server's own (`api/terminal.py`): exited, idle, shutdown, revoked, error.
+
+const SHELLS = { terminals: [{ id: "sh1", device: "token1", directory: "/home/dev/project", opened: "2026-01-02T03:04:05+00:00" }, { id: "sh2", device: "token1", directory: "/home/dev/other", opened: "2026-01-02T02:00:00+00:00" }] }
+/** Under a fake clock: move it on in steps (every timer runs) until the page says `fn` holds. */
+async function runUntil(p, fn, step = 100, most = 100) {
+  for (let i = 0; i < most; i++) {
+    if (await p.evaluate(fn)) return
+    await p.clock.runFor(step)
+    await p.waitForTimeout(10)
+  }
+  assert.fail(`not within ${step * most} ms of the page's clock: ${fn}`)
+}
+const termSays = (p) => p.textContent("#terminal-message")
+const openPanel = async (p) => {
+  await openChatRow(p, "chat2")
+  await p.click("#chat-tools [data-terminal-toggle]")
+}
+
+test("T3: what is typed while the shell is still being opened is kept and sent in order, not dropped", async () => {
+  const cfg = b3()
+  cfg.terminalDelay = 2500
+  const p = await page(cfg)
+  await openPanel(p)
+  // The panel is up and connecting; the bridge has not answered yet.
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connecting…")
+  await p.waitForSelector("#terminal .xterm-helper-textarea", { state: "attached" })
+  await p.focus("#terminal .xterm-helper-textarea")
+  await p.keyboard.type("ls -la")
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 0, "still opening")
+  assert.equal(await p.evaluate(() => window.__mock.typed()), "", "nothing can be sent yet")
+  await p.waitForFunction(() => window.__mock.terminals().length === 1)
+  await p.waitForFunction(() => window.__mock.typed() === "ls -la")
+  await p.keyboard.type("\n")
+  await p.waitForFunction(() => window.__mock.typed() === "ls -la\r")
+  // The size the panel has is told once the socket is there.
+  assert.ok(await p.evaluate(() => window.__mock.calls.some((c) => c.cmd === "terminal_resize")), "its size too")
+  assert.deepEqual(p.errors, [])
+})
+
+test("T3: End shell asks, then ends this panel's shell on the server and offers a new one", async () => {
+  const p = await page(b3({ "GET /terminals": SHELLS, "DELETE /terminals/sh1": null }))
+  await openPanel(p)
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+  assert.ok(await p.isVisible("#terminal-end"), "End shell, once there is a shell")
+  assert.ok(await p.isHidden("#terminal-again"))
+  await p.click("#terminal-end")
+  await p.waitForSelector("dialog[open]")
+  assert.match(await p.textContent("dialog[open]"), /What is running in it stops/)
+  // Cancel: nothing ended.
+  await p.click("dialog[open] .btn >> text=Cancel")
+  assert.equal(await p.evaluate(() => window.__mock.api("DELETE", "/terminals/").length), 0)
+  await p.click("#terminal-end")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("DELETE", "/terminals/sh1").length === 1)
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "The shell was ended.")
+  assert.ok(await p.isHidden("#terminal-end"))
+  assert.equal(await p.textContent("#terminal-again"), "New shell")
+  await p.click("#terminal-again")
+  await p.waitForFunction(() => window.__mock.terminals().length === 2)
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+  // Where the shell's ready frame names it, that id is the one ended.
+  await p.evaluate(() => window.__mock.shell("control", { t: "ready", id: "sh9", label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false }))
+  await p.evaluate(() => window.__mock.answer("DELETE /terminals/sh9", null))
+  await p.click("#terminal-end")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("DELETE", "/terminals/sh9").length === 1)
+  await p.context().close()
+  // A server without the routes: said, and the shell stays.
+  const o = await page(b3())
+  await openPanel(o)
+  await o.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+  await o.click("#terminal-end")
+  await o.click("dialog[open] .btn--danger")
+  await o.waitForFunction(() => /needs a newer LLeMbas server/.test(document.querySelector("#terminal-message").textContent))
+  assert.ok(await o.evaluate(() => window.__mock.terminals()[0].open), "the shell is still open")
+  assert.deepEqual(o.errors, [])
+  assert.deepEqual(p.errors, [])
+})
+
+test("T3: at the limit of open shells the ones open are listed, each with End; ended, a new one can be opened", async () => {
+  const refusal = [["control", { t: "error", message: "You already have 3 terminals open. Close one first." }], ["end", { code: 1000, reason: "", status: null, error: null }]]
+  const p = await page(b3({ "GET /terminals": SHELLS, "DELETE /terminals/sh2": null }, refusal))
+  await openPanel(p)
+  await p.waitForSelector("#terminal-shells:not([hidden]) .termpanel__shell")
+  assert.equal(await termSays(p), "You already have 3 terminals open. Close one first.")
+  const rows = await p.$$eval("#terminal-shells .termpanel__shell", (l) => l.map((x) => [x.dataset.id, x.querySelector(".termpanel__shell-name").textContent, x.querySelector(".termpanel__shell-dir").textContent]))
+  assert.deepEqual(rows, [["sh1", "workbench", "/home/dev/project"], ["sh2", "workbench", "/home/dev/other"]])
+  assert.equal(await p.textContent("#terminal-again"), "Reconnect")
+  await shot(p, "t3-limit")
+  // End one: the list is read again and is shorter.
+  await p.evaluate(() => window.__mock.answer("GET /terminals", { terminals: [{ id: "sh1", device: "token1", directory: "/home/dev/project", opened: "2026-01-02T03:04:05+00:00" }] }))
+  await p.click("#terminal-shells .termpanel__shell[data-id='sh2'] .btn")
+  await p.waitForFunction(() => window.__mock.api("DELETE", "/terminals/sh2").length === 1)
+  await p.waitForFunction(() => document.querySelectorAll("#terminal-shells .termpanel__shell").length === 1)
+  // Reconnect, now that there is room: a shell, and the list goes.
+  await p.evaluate(() => (window.__mockConfig.terminal = [["control", { t: "ready", label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false }]]))
+  await p.click("#terminal-again")
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+  assert.ok(await p.isHidden("#terminal-shells"))
+  assert.ok(await p.isHidden("#terminal-again"))
+  assert.deepEqual(p.errors, [])
+})
+
+test("T3: a lost connection is tried again by itself, each time after longer, and says the shell is new; one that exited is not", async () => {
+  const p = await page(b3(), { clock: true })
+  await openPanel(p)
+  await runUntil(p, () => document.querySelector("#terminal-message").textContent === "Connected.")
+  // The socket goes without a word (the server restarting): counted down, then opened again.
+  await p.evaluate(() => window.__mock.shell("end", { code: null, reason: "", status: null, error: "The connection broke off: reset" }))
+  await p.waitForFunction(() => /Reconnecting in 1 s…/.test(document.querySelector("#terminal-message").textContent))
+  assert.match(await termSays(p), /^The connection broke off: reset /)
+  assert.equal(await p.textContent("#terminal-again"), "Reconnect now")
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 1)
+  // It fails again (the server is still down): the next wait is longer.
+  await p.evaluate(() => (window.__mockConfig.terminal = [["end", { code: null, reason: "", status: null, error: "Could not reach the server: refused" }]]))
+  await p.clock.runFor(1100)
+  await p.waitForFunction(() => window.__mock.terminals().length === 2)
+  await p.waitForFunction(() => /Reconnecting in 2 s…/.test(document.querySelector("#terminal-message").textContent))
+  await p.clock.runFor(1000)
+  assert.match(await termSays(p), /Reconnecting in 1 s…/, "counted down")
+  // The server is back: a shell, said as possibly new, the old output still on the screen.
+  await p.evaluate(() => (window.__mockConfig.terminal = [["control", { t: "ready", label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false }], ["output", "dev@workbench:~/project$ "]]))
+  await p.clock.runFor(1100)
+  await p.waitForFunction(() => window.__mock.terminals().length === 3)
+  await p.waitForFunction(() => /^Connected again\. If the server or the computer restarted meanwhile, this is a new shell\.$/.test(document.querySelector("#terminal-message").textContent))
+  assert.ok(await p.isHidden("#terminal-again"))
+  assert.match(await screenText(p), /reconnected/)
+  // The link to the computer drops (the server says so): reconnected, and the shell is new.
+  await p.evaluate(() => window.__mock.shell("control", { t: "closed", reason: "error", message: "The connection to the computer was lost." }))
+  await p.waitForFunction(() => /The connection to the computer was lost\. Reconnecting in 1 s…/.test(document.querySelector("#terminal-message").textContent))
+  // Reconnect now does not wait.
+  await p.click("#terminal-again")
+  await p.waitForFunction(() => window.__mock.terminals().length === 4)
+  await p.waitForFunction(() => /This is a new shell: the one before ended with the connection\./.test(document.querySelector("#terminal-message").textContent))
+  // The shell exited: said, and nothing is opened by itself -- New shell is the person's to press.
+  await p.evaluate(() => window.__mock.shell("control", { t: "closed", reason: "exited", message: "The shell exited." }))
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "The shell exited.")
+  await p.clock.runFor(60000)
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 4, "no shell opened by itself")
+  assert.equal(await p.textContent("#terminal-again"), "New shell")
+  // After every try has failed it stops, and waits for Reconnect.
+  await p.click("#terminal-again")
+  await p.waitForFunction(() => window.__mock.terminals().length === 5)
+  await p.evaluate(() => (window.__mockConfig.terminal = [["end", { code: null, reason: "", status: null, error: "Could not reach the server: refused" }]]))
+  await p.evaluate(() => window.__mock.shell("end", { code: null, reason: "", status: null, error: "The connection broke off: reset" }))
+  await runUntil(p, () => /It did not come back/.test(document.querySelector("#terminal-message").textContent), 1000, 120)
+  await p.waitForFunction(() => /It did not come back\. Reconnect when it is there again\./.test(document.querySelector("#terminal-message").textContent))
+  assert.equal(await p.textContent("#terminal-again"), "Reconnect")
+  const tried = await p.evaluate(() => window.__mock.terminals().length)
+  assert.equal(tried, 5 + 6, "six tries, 1 2 4 8 15 30 s apart, and no more")
+  await p.clock.runFor(120000)
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), tried)
+  // Another chat: the old shell's reconnecting is not carried over.
+  assert.deepEqual(p.errors, [])
+})
+
+test("T3: where the computer opens no terminal the button is there, dimmed, and says why and how; it comes alive when the computer links", async () => {
+  const off = { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: false }] }
+  const p = await page(b3({ "GET /devices": off }), { clock: true })
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#chat-tools [data-terminal-off]")
+  assert.equal(await p.locator("#chat-tools [data-terminal-toggle]").count(), 0)
+  assert.match(await p.getAttribute("#chat-tools [data-terminal-off]", "class"), /is-off/)
+  assert.match(await p.getAttribute("#chat-tools [data-terminal-off]", "title"), /switched off for this computer/)
+  await p.click("#chat-tools [data-terminal-off]")
+  await p.waitForSelector(".pop")
+  assert.match(await p.textContent(".pop"), /The terminal is switched off for this computer\..*Switch it on in Settings, under Agent: Let the server open a terminal here\./s)
+  assert.ok(await p.isHidden("#terminal"), "nothing is opened")
+  await shot(p, "t3-terminal-off")
+  // Open Settings leads to the switch.
+  await p.click(".pop .btn--primary")
+  await p.waitForSelector("#settings:not([hidden]) #set-agent")
+  await p.click("#settings-close")
+  // Switched on meanwhile: read again within a few seconds, and the button opens a shell.
+  await p.evaluate(() => window.__mock.answer("GET /devices", { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true }] }))
+  await p.clock.runFor(5200)
+  await p.waitForSelector("#chat-tools [data-terminal-toggle]")
+  assert.equal(await p.locator("#chat-tools [data-terminal-off]").count(), 0)
+  await p.click("#chat-tools [data-terminal-toggle]")
+  // (Settings has been open: its own switch must not stand in the panel's way -- it once had the panel's id.)
+  await runUntil(p, () => window.__mock.terminals().length === 1)
+  assert.ok(await p.isVisible("#terminal.termpanel"), "the panel, not Settings' switch")
+  await p.context().close()
+  // Another computer, not linked right now; then linked, with the server's own reason for no terminal.
+  const elsewhere = agentChat({ id: "chat9", title: "The site", device: { token_id: "token9", directory: "/srv/site" } })
+  const o = await page(b3({ "GET /chats": { chats: [chatRow(), elsewhere], more: false }, "GET /chats/chat9": { chat: elsewhere, messages: [userMessage("m1", "Hello")], more: false, live: null }, "GET /models?chat=chat9": models(), "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?")], more: false, live: null }, "GET /models?chat=chat1": models() }), { clock: true })
+  await openChatRow(o, "chat9")
+  await o.waitForSelector("#chat-tools [data-terminal-off]")
+  assert.match(await o.getAttribute("#chat-tools [data-terminal-off]", "title"), /That computer is not linked to the server right now\./)
+  await o.evaluate(() => window.__mock.answer("GET /devices", { devices: [{ id: "token9", name: "studio", host: "studio", platform: "linux", terminal: false, terminal_reason: "Terminals are switched off on this instance." }] }))
+  await o.clock.runFor(5200)
+  await o.waitForFunction(() => /Terminals are switched off on this instance\./.test(document.querySelector("#chat-tools [data-terminal-off]")?.title || ""))
+  await o.click("#chat-tools [data-terminal-off]")
+  await o.waitForSelector(".pop")
+  assert.equal(await o.locator(".pop .btn--primary").count(), 0, "not this computer's to switch")
+  // A chat on the server has no Terminal at all, and nothing is polled for it.
+  await openChatRow(o, "chat1")
+  const asked = await o.evaluate(() => window.__mock.api("GET", "/devices").length)
+  await o.clock.runFor(20000)
+  assert.equal(await o.evaluate(() => window.__mock.api("GET", "/devices").length), asked)
+  assert.equal(await o.locator("#chat-tools [data-terminal-off], #chat-tools [data-terminal-toggle]").count(), 0)
+  assert.deepEqual(o.errors, [])
+  assert.deepEqual(p.errors, [])
+})
+
+test("T3: the panel fits at 1920, 1280, 1024, 800, 390 px and the window's smallest (360 x 480): every control reachable, the screen inside its box, the shell told its size", async () => {
+  for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844], [360, 480]]) {
+    const refusal = [["control", { t: "ready", label: "workbench", dir: LONG_DIR, cols: 80, rows: 24, shared: false, osc: true }], ["output", "dev@workbench:~/project$ "]]
+    const p = await page(b3({ "GET /terminals": SHELLS }, refusal), { width, height })
+    await p.evaluate(() => document.querySelector('.chatrow[data-id="chat2"]').click())
+    await p.waitForSelector("#chat-tools [data-terminal-toggle]")
+    await p.click("#chat-tools [data-terminal-toggle]")
+    await p.waitForFunction(() => document.querySelector("#terminal .xterm-rows")?.textContent.includes("dev@workbench"))
+    // Every state's controls at once: the marks' arrows, End, the lost line with Reconnect now, the list.
+    await p.evaluate(() => window.__mock.shell("control", { t: "error", message: "You already have 3 terminals open. Close one first." }))
+    await p.waitForSelector("#terminal-shells:not([hidden]) .termpanel__shell")
+    // xterm fits itself to its box a frame after the box changes (a ResizeObserver).
+    await p.waitForTimeout(250)
+    const panel = await p.locator("#terminal").boundingBox()
+    assert.ok(panel.x >= 0 && panel.x + panel.width <= width + 0.5 && panel.y + panel.height <= height + 0.5, `${width}: the panel inside the window ${JSON.stringify(panel)}`)
+    const out = await p.$$eval("#terminal button, #terminal .termpanel__message, #terminal .termpanel__shell > *", (l) => {
+      const box = document.getElementById("terminal").getBoundingClientRect()
+      return l.filter((b) => b.offsetParent !== null).filter((b) => { const r = b.getBoundingClientRect(); return r.left < box.left - 0.5 || r.right > box.right + 0.5 || r.bottom > box.bottom + 0.5 || r.width < 8 }).map((b) => b.id || b.className)
+    })
+    assert.deepEqual(out, [], `${width}: every control inside the panel`)
+    // The open shells' rows are whole inside their list (two rows need no scrolling), End on each.
+    const rowsCut = await p.evaluate(() => { const box = document.getElementById("terminal-shells").getBoundingClientRect(); return [...document.querySelectorAll("#terminal-shells .termpanel__shell .btn")].filter((b) => { const r = b.getBoundingClientRect(); return r.top < box.top - 0.5 || r.bottom > box.bottom + 0.5 }).length })
+    assert.equal(rowsCut, 0, `${width}: the list shows its rows whole`)
+    // Inside the box's padding, to the last row and column: nothing of the shell is cut off.
+    const screen = await p.evaluate(() => {
+      const el = document.getElementById("terminal-screen")
+      const s = el.getBoundingClientRect()
+      const pad = parseFloat(getComputedStyle(el).paddingLeft)
+      const x = document.querySelector("#terminal .xterm-screen").getBoundingClientRect()
+      return { fits: x.left >= s.left + pad - 0.5 && x.right <= s.right - pad + 0.5 && x.bottom <= s.bottom - pad + 0.5, rows: s.height, box: [s.right - pad, s.bottom - pad, x.right, x.bottom] }
+    })
+    assert.ok(screen.fits, `${width}: xterm's screen inside its box ${JSON.stringify(screen.box)}`)
+    assert.ok(screen.rows > 100, `${width}: the shell keeps room to read (${screen.rows}px)`)
+    const sizes = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "terminal_resize").map((c) => [c.args.cols, c.args.rows]))
+    assert.ok(sizes.length && sizes.every(([c, r]) => c >= 10 && r >= 4), `${width}: a size was sent (${JSON.stringify(sizes.at(-1))})`)
+    assert.ok(await noSideways(p, width), `${width}: nothing sideways`)
+    await shot(p, `t3-panel-${width}`)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+// --- V4: the visual pass -- what was found wrong, held where it was put right -----------------------
+
+test("V4: the title bar keeps every item on its own track at every width, down to the window's smallest (360 px)", async () => {
+  for (const width of [1920, 1280, 1024, 800, 768, 600, 480, 390, 360]) {
+    const p = await page(b3(), { width, height: 600 })
+    const bar = await p.evaluate(() => {
+      const box = (id) => { const r = document.getElementById(id).getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width } }
+      return { min: box("minimize"), max: box("maximize"), close: box("close"), menu: box("menu"), agent: box("agent"), side: box("side-toggle"), bar: document.querySelector(".bar").getBoundingClientRect().right, scroll: document.documentElement.scrollWidth }
+    })
+    assert.ok(bar.scroll <= width, `${width}: the window does not scroll sideways (${bar.scroll})`)
+    assert.ok(Math.abs(bar.close.right - width) < 1, `${width}: Close at the window's edge (${bar.close.right})`)
+    // The three window buttons: one size, side by side, in their order.
+    assert.ok(Math.abs(bar.min.width - bar.max.width) < 0.5 && Math.abs(bar.max.width - bar.close.width) < 0.5 && bar.min.width >= 32, `${width}: one size (${bar.min.width}, ${bar.max.width}, ${bar.close.width})`)
+    assert.ok(Math.abs(bar.min.right - bar.max.left) < 0.5 && Math.abs(bar.max.right - bar.close.left) < 0.5, `${width}: side by side`)
+    assert.ok(bar.menu.right <= bar.min.left + 0.5 && bar.agent.right <= bar.menu.left + 0.5 && bar.menu.width >= 32, `${width}: the agent, the menu, then the window's buttons`)
+    assert.ok(bar.side.left >= 0 && bar.side.width >= 32)
+    await shot(p, `v4-bar-${width}`)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

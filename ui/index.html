@@ -186,12 +186,15 @@
         <button type="button" class="tool" id="terminal-prev" hidden aria-label="The previous command" title="The previous command (Ctrl+Shift+↑)" data-i18n-aria-label data-i18n-title></button>
         <button type="button" class="tool" id="terminal-next" hidden aria-label="The next command" title="The next command (Ctrl+Shift+↓)" data-i18n-aria-label data-i18n-title></button>
         <button type="button" class="tool" id="terminal-copy" aria-label="Copy the last command and its output" title="Copy the last command and its output" data-i18n-aria-label data-i18n-title></button>
+        <button type="button" class="tool" id="terminal-end" aria-label="End shell" title="End this shell: what runs in it stops" data-i18n-aria-label data-i18n-title></button>
         <button type="button" class="tool" id="terminal-close" aria-label="Close terminal" title="Close terminal" data-i18n-aria-label data-i18n-title></button>
       </header>
       <div class="termpanel__screen" id="terminal-screen"></div>
+      <div class="termpanel__shells" id="terminal-shells" hidden></div>
       <footer class="termpanel__foot">
         <p class="termpanel__message" id="terminal-message" aria-live="polite"></p>
         <span class="termpanel__last" id="terminal-last"></span>
+        <button type="button" class="btn btn--sm termpanel__again" id="terminal-again" hidden></button>
         <button type="button" class="btn btn--sm termpanel__send" id="terminal-send" title="Put the last command and its output into the message box" data-i18n-title><span data-i18n>Send to chat</span></button>
       </footer>
     </aside>

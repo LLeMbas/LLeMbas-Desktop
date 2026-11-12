@@ -55,6 +55,19 @@ All notable changes to LLeMbas Desktop. The format follows
   unknown name) is sent as written. The menu is the composer's own width, directly above it, at
   any window width. Needs a server with the menu routes (2.0.0-beta.11); an older one offers
   the app's own commands only.
+- **The terminal: End shell, the open shells, and connecting again.** The panel has End shell
+  (asked first: what runs in it stops). Where the server refuses one more shell, the ones you
+  have open are listed -- computer, folder, since when -- each with End. A connection that is
+  lost (the network, the server restarting, the link to the computer dropping) is tried again
+  by itself after 1, 2, 4, 8, 15 and 30 seconds, counted down, with Reconnect now; when a shell
+  opens again it says in one line that it is a new one. A shell that exited or sat idle is not
+  replaced by itself: New shell is yours to press. Ending and listing shells need a server with
+  those routes (2.0.0-beta.11).
+- **The Terminal button says why it cannot open.** On an agent chat whose computer is not linked
+  right now, or does not open terminals, the button is there, dimmed, and says why and how to
+  switch it on (for this computer, with a way straight to the setting). The computers are read
+  again every few seconds while it waits, so the button comes alive the moment the computer
+  links -- the chat need not be opened again.
 - **Approval cards: Deny, and say why.** The four actions every LLeMbas app offers, under the
   same words: Allow once, Always allow, Deny, and Deny, and say why -- your words go to the model
   with the refusal, so it need not ask what you would rather.
@@ -72,6 +85,21 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ### Fixed
 
+- **The Terminal panel did not open once Settings had been visited.** The switch "Let the server
+  open a terminal here" in Settings had the panel's own id, so after Settings was drawn every
+  later attempt to show the panel showed or hid that switch instead, and no shell was opened
+  until the app was started again.
+- **Keys typed while a shell was still being opened were dropped.** They are kept, in order, and
+  sent the moment it is open.
+- **Typing in the terminal waited on a timer.** The socket's thread looked at what was typed only
+  between reads that each waited up to 40 ms; a keystroke wakes it at once now, and its echo is
+  read within a few milliseconds while the shell is in use.
+- **The terminal's last row and column could be cut off.** Its fit counted the box's padding as
+  room; it measures the room inside it now.
+- **The title bar at narrow widths**: with the server's address hidden, every item after it moved
+  one column to the left -- the window's buttons onto the separator's and the menu's tracks,
+  unequal and off the edge -- and at the window's smallest size (360 px) the bar was wider than
+  the window, so the whole app scrolled sideways. Every item keeps its track, and the bar fits.
 - A question's typed answer was ignored when an option was also picked.
 - A menu opened at the window's right edge could reach half a pixel past it.
 

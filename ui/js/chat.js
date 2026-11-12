@@ -89,6 +89,86 @@ function knownFolders(device) {
 }
 
 /**
+ * Why the Terminal cannot be opened for the agent chat the page shows, or null where it can (or
+ * where there is no agent chat with a folder to open one for): `{ words, how, here }` -- what
+ * stands in the way, how to switch it on, and whether it is this computer's to switch.
+ * The computer is not linked right now (it is not in `GET /devices`), or it is and does not open
+ * terminals for this account (`terminal: false`).
+ */
+function terminalBlock() {
+  let id = ""
+  if (draft) {
+    if (draft.kind !== "agent" || !draft.dir) return null
+    id = draftDevice()
+  } else {
+    const chat = open?.chat
+    if (chat?.kind !== "agent" || !chat.device) return null
+    id = chat.device.token_id
+  }
+  const device = deviceOf(id)
+  if (device?.terminal) return null
+  const here = !id || ctx.thisDevices().includes(id)
+  if (!device) {
+    return {
+      here,
+      words: here ? t("This computer's agent is not linked to the server right now.") : t("That computer is not linked to the server right now."),
+      how: t("The Terminal can be opened as soon as it is linked again."),
+    }
+  }
+  // CONTRACT (unpinned): the server's own reason for this device, where `GET /devices` gives one.
+  const said = typeof device.terminal_reason === "string" ? device.terminal_reason.trim() : ""
+  return {
+    here,
+    off: here,
+    words: said || (here ? t("The terminal is switched off for this computer.") : t("That computer does not open terminals for you.")),
+    how: here
+      ? t("Switch it on in Settings, under Agent: %(setting)s.", { setting: t("Let the server open a terminal here") })
+      : t("Switch it on there: in LLeMbas Desktop under Settings, Agent; or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator."),
+  }
+}
+
+/** Whether the page waits for a computer to open terminals: its devices are then read again. */
+export function terminalWaiting() {
+  return !!terminalBlock()
+}
+
+/**
+ * The header's Terminal control: the button; or, where the computer does not open one now, the
+ * same button dimmed, which says why and how to switch it on instead of opening anything.
+ */
+function terminalControl() {
+  if (terminalTarget()) return terminalButton()
+  const block = terminalBlock()
+  if (!block) return null
+  const label = `${t("Terminal")}: ${block.words}`
+  return h(
+    "button",
+    {
+      type: "button",
+      class: "tool is-off",
+      "aria-label": label,
+      title: label,
+      "aria-haspopup": "dialog",
+      "data-terminal-off": "",
+      onclick: (e) =>
+        popover(
+          e.currentTarget,
+          h(
+            "div",
+            { class: "pop__body" },
+            h("p", { class: "pop__title", text: t("Terminal") }),
+            h("p", { text: block.words }),
+            h("p", { class: "hint", text: block.how }),
+            block.off && ctx.nav?.settings ? h("div", { class: "pop__actions" }, h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Open Settings"), onclick: () => (closePopover(), ctx.nav.settings("agent")) })) : null,
+          ),
+          { align: "end", label: t("Terminal") },
+        ),
+    },
+    icon(ICONS.terminal),
+  )
+}
+
+/**
  * What the Terminal panel is for, as the page stands: a new agent chat whose device and folder
  * are chosen (the shell before the first message), an open agent chat on a device that opens
  * terminals, or nothing.
@@ -913,7 +993,8 @@ function renderHead(chat) {
     )
     // The Terminal panel where the chat's device opens one (`GET /devices` says so per device);
     // "Continue in a terminal" stays in the chat's menu.
-    if (deviceOf(chat.device.token_id)?.terminal) tools.append(terminalButton())
+    const terminal = terminalControl()
+    if (terminal) tools.append(terminal)
   }
   // An archived chat says so where it is read, with the way back into the sidebar.
   if (chat.archived) tools.append(h("button", { type: "button", class: "btn btn--sm head__unarchive", text: t("Restore chat"), title: t("Archived"), onclick: () => unarchiveChat(open?.chat || chat) }))
@@ -1294,7 +1375,8 @@ async function renderChips() {
       })
     }
     // The Terminal, as an open chat has it: in the header's tools.
-    $("chat-tools").replaceChildren(...(shell ? [terminalButton()] : []))
+    const terminal = terminalControl()
+    $("chat-tools").replaceChildren(...(terminal ? [terminal] : []))
     box.replaceChildren(...parts.filter(Boolean))
     fitHead()
     return

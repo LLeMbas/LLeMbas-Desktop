@@ -1920,7 +1920,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   border-left: var(--border-w) solid var(--border);
   background: var(--bg-sunken);
 }
@@ -1931,8 +1931,26 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .termpanel__icon { display: grid; place-items: center; color: var(--ink-muted); }
 .termpanel__where { font-family: var(--font-mono); }
-/* xterm measures this box: it has a size of its own, and the terminal scrolls inside it. */
-.termpanel__screen { min-height: 0; min-width: 0; overflow: hidden; padding: var(--sp-2); background: var(--code-bg); }
+/* The Terminal's button where the computer does not open one now: there, dimmed, and it says why. */
+.tool.is-off { color: var(--ink-faint); opacity: var(--opacity-dim); }
+.tool.is-off:hover { opacity: 1; }
+/* The account's open shells, where the server refused one more: computer · folder · since · End,
+   every row on the same four tracks. The box is as tall as its rows up to a cap of its own (a
+   length, not a share of its row: a percentage of an `auto` row cut the rows off), then scrolls. */
+.termpanel__shells { min-width: 0; max-height: min(12rem, 35vh); overflow: auto; padding: var(--sp-2) var(--sp-3); border-top: var(--border-w) solid var(--border); font-size: var(--text-xs); }
+.termpanel__shells[hidden] { display: none; }
+.termpanel__shells-title { margin: 0 0 var(--sp-1); font: 600 var(--text-xs) var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); }
+.termpanel__shells-list { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto auto; gap: var(--sp-1) var(--sp-3); align-items: center; }
+.termpanel__shell { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
+.termpanel__shell-name, .termpanel__shell-dir { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.termpanel__shell-name { color: var(--ink); }
+.termpanel__shell-dir { font-family: var(--font-mono); color: var(--ink-muted); }
+.termpanel__shell-when { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.termpanel__again[hidden] { display: none; }
+/* xterm measures this box: it has a size of its own, and the terminal scrolls inside it. Its
+   fit reads the box's computed width and height, so those must be the room inside the padding
+   (`content-box`): counted with the padding, the last row and column were cut off. */
+.termpanel__screen { box-sizing: content-box; min-height: 0; min-width: 0; overflow: hidden; padding: var(--sp-2); background: var(--code-bg); }
 .termpanel__screen .xterm { height: 100%; }
 /* What happened, the last command, and Send: the words take what is left and wrap; the last
    command is one clipped line; the button keeps its size. */
@@ -1949,6 +1967,16 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   color: var(--ink-faint);
 }
 .termpanel__message { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.termpanel { container: term / inline-size; }
+/* A narrow panel: the words on a line of their own, the buttons under them, each at its size. */
+@container term (max-width: 26rem) {
+  /* The head keeps every tool: the panel's own icon goes and the gaps close, the title gives. */
+  .termpanel__head { grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); padding: 0 var(--sp-2); }
+  .termpanel__icon { display: none; }
+  .termpanel__foot { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr) auto auto; }
+  .termpanel__message { grid-column: 1 / -1; }
+  .termpanel__last { max-width: 100%; }
+}
 .termpanel__message.is-error { color: var(--danger); }
 .termpanel__last {
   max-width: var(--w-chip);
@@ -2076,7 +2104,10 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 /* 48rem (--bp-narrow): the sidebar is a drawer over the page, opened from the title bar. */
 @media (max-width: 48rem) {
   .shell, .shell[data-side="false"] { --side-col: 0px; }
-  .bar__host { display: none; }
+  /* The server's address gives way, but its track stays: every item of the title bar keeps its
+     own column (taken out of the grid, the items after it each moved one track to the left --
+     the window's buttons onto the separator's and the menu's). It is still the bar's drag area. */
+  .bar__host { visibility: hidden; }
   .side {
     position: absolute;
     inset: 0 auto 0 0;
@@ -2112,6 +2143,8 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 
 /* Very narrow: the agent's words go, its dot stays; the row's button goes under its field. */
 @media (max-width: 30rem) {
+  /* The window's three buttons at the title bar's own height, so the bar fits the smallest window. */
+  .bar { grid-template-columns: var(--titlebar-h) var(--titlebar-h) auto minmax(0, 1fr) auto auto var(--titlebar-h) var(--border-w) repeat(3, var(--titlebar-h)); }
   .bar__agent-text { display: none; }
   .bar > .bar__agent { grid-template-columns: var(--dot-size); }
   .setup .row { grid-template-columns: minmax(0, 1fr); }

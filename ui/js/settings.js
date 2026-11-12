@@ -107,7 +107,7 @@ export function renderSettings(s) {
         ["plan", t("Plan — changes nothing")],
       ].map(([v, label]) => h("option", { value: v, text: label, selected: r.max_mode === v })),
     )
-    const terminal = h("input", { type: "checkbox", role: "switch", id: "terminal", checked: r.terminal, "aria-label": t("Let the server open a terminal here"), onchange: (e) => invoke("remote_terminal", { on: e.target.checked }) })
+    const terminal = h("input", { type: "checkbox", role: "switch", id: "set-terminal", checked: r.terminal, "aria-label": t("Let the server open a terminal here"), onchange: (e) => invoke("remote_terminal", { on: e.target.checked }) })
     box.append(
       section(
         "folders",
