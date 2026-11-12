@@ -103,8 +103,43 @@ All notable changes to LLeMbas Desktop. The format follows
   as under its last line. The test suite now walks every screen at those sizes in both looks and
   refuses a sideways scroll or a control outside the window or cut off.
 
+### Security
+
+- **One chat's Python never meets another's.** The `python` tool's worker kept its globals and
+  the files a call was handed for as long as the app ran, so code run for one chat could read
+  what another chat's call had been given. The runner's frame is now thrown away, behind any call
+  still running, whenever the window becomes another chat's page or leaves a chat; the next call
+  gets a new one, and the frame's own storage is cleared when it starts. Signing out, another
+  server or another Pyodide release on the server drop it too, and the app stops serving the
+  release it had made ready. A call's value, error and saved files are held to the call's limits
+  as its output already was. The window's own page can no longer be taken to the runner's address.
+- **What is typed while the terminal reconnects is not sent to a new shell.** Keys typed while a
+  lost connection was coming back went to whichever shell answered -- also a new one, where the
+  end of a half-typed line would have run alone. They are held until the server says which shell
+  it is: the one that was running gets them; for a new one they are dropped, and the panel says
+  that what was typed during the reconnect was not sent. Typing ahead of a shell that is being
+  opened for the first time works as before.
+- **A device's command is sent to the device, never run as one of the app's own**, and a name
+  that is not a command's (a space, punctuation) is not offered. Another computer's commands are
+  not offered while this one's are being read.
+
 ### Fixed
 
+- **The window says it runs a chat's Python only once it can.** It announced itself to the
+  server before the runner's files were there, and kept doing so when they could not be fetched:
+  calls went to it and timed out, also where a browser tab of the same chat could have run them.
+  It is announced when the runner is ready; until then, and where it cannot be made, nothing is
+  announced, nothing alarming is shown, and it is tried again more slowly each time.
+- **A long reply is not declared lost for being followed again.** Only a stream that gives
+  nothing -- closed as it opens -- counts towards "the connection to the reply was lost".
+- **The terminal: a shell that answers and drops at once** is tried again after longer each time
+  (it was every second, for ever); a window let go for not keeping up waits before it connects
+  again; a connection that failed late no longer writes over a newer one's line; End shell ends
+  the shell the panel showed when it was asked, found by its computer as well as its folder.
+- **The `@` menu: nothing of an earlier lookup can be chosen while a newer one is on its way**;
+  Enter then neither picks from the old list nor sends half a mention.
+- **Settings marks the last group** when the page is scrolled to its end; the `/` menu's line of
+  keys is not shown at a phone's width, where it wrapped and took the list's room.
 - **Nothing asks the server again as fast as it answers.** A `python` poll answered with nothing
   at once waits before the next (1 s, doubling to 30 s); an activity stream that closes as soon as
   it opens is opened again more slowly each time; a reply whose stream keeps ending without its

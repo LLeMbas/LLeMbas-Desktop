@@ -8,14 +8,15 @@
 //            /api/v2 as the page reaches it through `api`. A path is looked up with its query,
 //            then without it. A value `{ __error: { status, detail } }` is a refusal. Anything
 //            not in the table is a 404, as an older server would answer.
-//   hold     ["GET /files?path=%2F", ...] -- answers that wait (a slow server) until the test
+//   hold     ["GET /files?path=%2F", ...] (a path with its query, or without for any query) -- answers that wait (a slow server) until the test
 //            lets them go with `__mock.release(key)`; the table is read when they are let go.
 //   streams  { "/chats/c1/messages/m1/stream": [[event, data], ...] } -- the frames a followed
 //            reply sends as soon as it is opened. More can be sent later with `__mock.frame()`.
 //   terminal [[kind, data], ...] -- what every terminal's socket sends as soon as it is opened
 //            (`control` frames as the server's JSON, `output` as text, sent base64 as Rust does).
 //            More with `__mock.shell(kind, data)`; `{ refuse: {status, detail} }` makes
-//            `terminal_open` fail; `terminalDelay` (ms) makes it slow to answer.
+//            `terminal_open` fail; `terminalDelay` (ms) is how long the socket takes to open
+//            (the id comes at once, as from Rust; the frames after that long).
 //   python   { url, version } -- where `python_prepare` says the `python` tool's runner frame is.
 //   takes    { "/chats/c1/page/take": [call, …] } -- what a runner's long poll is handed, one
 //            call a poll, each answered after `takeDelay` ms; with none left the poll is held
@@ -40,8 +41,9 @@
   const polls = new Set() // long polls held with nothing to hand over: { bare, go }
 
   function route(method, path) {
-    if ((config.hold || []).includes(`${method} ${path}`)) {
-      return new Promise((resolve) => held.push({ key: `${method} ${path}`, go: resolve })).then(() => answer(method, path))
+    const key = (config.hold || []).find((k) => k === `${method} ${path}` || k === `${method} ${path.split("?")[0]}`)
+    if (key) {
+      return new Promise((resolve) => held.push({ key, go: resolve })).then(() => answer(method, path))
     }
     return answer(method, path)
   }
@@ -119,13 +121,14 @@
       case "terminal_open": {
         const t = config.terminal || []
         if (t.refuse) return Promise.reject(t.refuse)
-        // A slow bridge (`terminalDelay` ms): what is typed meanwhile must not be lost.
-        if (config.terminalDelay) await new Promise((done) => setTimeout(done, config.terminalDelay))
+        // As the real bridge: the id comes at once, before the socket is open (Rust keeps what
+        // is typed meanwhile and sends it when it is); the socket's first frames come after
+        // `terminalDelay` ms (a slow server), at once without one.
         const id = ++nextTerminal
         terminals.set(id, { target: { chat: args.chat, device: args.device, directory: args.directory }, open: true })
         setTimeout(() => {
-          for (const [kind, data] of t) shell(kind, data, id)
-        }, 0)
+          for (const [kind, data] of config.terminal || []) if (terminals.get(id).open) shell(kind, data, id)
+        }, config.terminalDelay || 0)
         return id
       }
       case "terminal_input":
@@ -140,6 +143,8 @@
         // The runner's frame, as Rust would serve it: `python: { url, version }` in the config
         // (tests/ui serves the frame's files at that address), `{ __error }` for a refusal, and
         // nothing for a server with Python off.
+        // `pythonDelay` (ms): the files are still being fetched.
+        if (config.pythonDelay) await new Promise((done) => setTimeout(done, config.pythonDelay))
         const py = config.python
         if (py && py.__error) return Promise.reject(py.__error)
         return py ? { enabled: true, version: py.version, url: py.url } : { enabled: false, version: "", url: "" }

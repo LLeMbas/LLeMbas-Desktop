@@ -2773,6 +2773,23 @@ test("P2: a reply whose stream keeps ending without `done` is not read and follo
   assert.deepEqual(p.errors, [])
 })
 
+test("P2: a long reply whose stream is closed cleanly now and then (a proxy's time limit) is followed again every time, never declared lost", async () => {
+  const p = await page(agentChatOpen([["status", { text: "Writing…" }]]), { clock: true })
+  await p.click('.chatrow[data-id="chat2"]')
+  const opens = () => p.evaluate((path) => window.__mock.calls.filter((c) => c.cmd === "stream_open" && c.args.path === path).length, STREAM2)
+  await runUntil(p, () => !!document.querySelector(".msg.is-live"))
+  for (let round = 1; round <= 5; round++) {
+    // Frames came, time passed, then the stream was closed without `done`.
+    await p.clock.runFor(6000)
+    await p.evaluate((path) => window.__mock.frame(path, "end", null), STREAM2)
+    await runUntil(p, () => !!document.querySelector(".msg.is-live") && !document.querySelector(".msg.is-live .btn"), 50, 40)
+    for (let i = 0; i < 20 && (await opens()) < round + 1; i++) await p.clock.runFor(50)
+    assert.equal(await opens(), round + 1, `followed again after close ${round}`)
+  }
+  assert.ok(!/connection to the reply was lost/.test(await p.textContent("#messages")), "still being followed")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- S3: the composer's `/` and `@` menus -----------------------------------------------------------
 //
 // The server's menu routes, by its own fixtures (tests/ui/fixtures, pinned by
@@ -3157,6 +3174,66 @@ test("S3: the server's own fixtures are drawn as they are: its device's commands
   assert.deepEqual(p.errors, [])
 })
 
+test("S3: another computer's commands are never offered while this one's are being read; a name that is not a command's is dropped; a device's command is sent, never run as the app's", async () => {
+  const there = agentChat({ id: "chat9", title: "On the laptop", device: { token_id: "token9", directory: "/home/dev/site" } })
+  const cfg = s3({
+    "GET /chats": { chats: [chatRow(), agentChat(), there], more: false },
+    "GET /chats/chat9": { chat: there, messages: [userMessage("m1", "Hello")], more: false, live: null },
+    "GET /models?chat=chat9": models(),
+    "GET /devices": { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true }, { id: "token9", name: "laptop", host: "laptop", platform: "linux", terminal: true }] },
+    "GET /devices/token9/commands": { commands: [{ name: "deploy", description: "Ship it", hint: "", kind: "custom" }, { name: "deploy now; rm", description: "", hint: "", kind: "custom" }, { name: "/usage", description: "the device's own", hint: "", kind: "builtin" }], device: "laptop" },
+    "POST /chats/chat9/messages": { message: userMessage("m9", "sent"), reply: null },
+  })
+  cfg.hold = ["GET /devices/token9/commands"]
+  const p = await page(cfg)
+  await openChatRow(p, "chat2")
+  await p.click("#composer-text")
+  await p.keyboard.type("/")
+  await p.waitForFunction(() => /review/.test(document.getElementById("composer-menu")?.textContent || ""))
+  await p.keyboard.press("Escape")
+  await p.fill("#composer-text", "")
+  // The other computer's chat: its commands are still on their way.
+  await openChatRow(p, "chat9")
+  await p.click("#composer-text")
+  await p.keyboard.type("/")
+  await p.waitForSelector("#composer-menu:not([hidden]) .cmenu__option")
+  assert.ok(!(await menuRows(p)).some((r) => /review|commit|workbench/.test(r)), `nothing of the computer before: ${await menuRows(p)}`)
+  await p.evaluate(() => window.__mock.release("GET /devices/token9/commands"))
+  await p.waitForFunction(() => /deploy/.test(document.getElementById("composer-menu")?.textContent || ""))
+  const rows = await menuRows(p)
+  assert.deepEqual(rows.slice(rows.indexOf("# laptop")), ["# laptop", "/deploy"], "a name with a space is not a command; /usage is the app's own")
+  // Chosen, it is sent to the chat as the message it is.
+  await p.locator("#composer-menu .cmenu__option", { hasText: "/deploy" }).click()
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat9/messages").length === 1)
+  assert.deepEqual(await messagesTo(p, "chat9"), [{ text: "/deploy" }])
+  assert.deepEqual(p.errors, [])
+})
+
+test("S3: while a newer @ lookup is on its way nothing of the list before can be chosen, and Enter does not send half a mention", async () => {
+  const p = await page(s3(), { clock: true })
+  await openChatRow(p, "chat1")
+  await p.click("#composer-text")
+  await p.keyboard.type("@lem")
+  await p.clock.fastForward(400)
+  await p.waitForSelector("#composer-menu:not([hidden]) .cmenu__option")
+  // One more letter: the answer for it is held back (a slow server).
+  await p.evaluate(() => (window.__mockConfig.hold = ["GET /mentions"]))
+  await p.keyboard.type("b")
+  assert.equal(await p.getAttribute("#composer-menu .cmenu__list", "aria-busy"), "true")
+  await p.keyboard.press("Enter")
+  await p.keyboard.press("Tab")
+  await p.clock.fastForward(400)
+  assert.equal(await typed(p), "@lemb", "nothing was put in from the list before")
+  assert.deepEqual(await messagesTo(p, "chat1"), [], "and nothing was sent")
+  assert.equal(await p.locator("#composer-files .tile").count(), 0)
+  // The answer comes: the list is its own, and can be chosen from again.
+  await p.evaluate(() => window.__mock.release("GET /mentions"))
+  await p.waitForFunction(() => !document.querySelector("#composer-menu .cmenu__list").hasAttribute("aria-busy"))
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => document.getElementById("composer-text").value !== "@lemb")
+  assert.deepEqual(p.errors, [])
+})
+
 test("S3: the menu is the composer's own width, directly above it, at 1920, 1280, 1024, 800 and 390 px; long names give way", async () => {
   const long = { items: [{ kind: "file", path: `/notes/${LONG}`, name: LONG, detail: `/notes/a/very/deep/folder/of/recipes/and/their/variants/${LONG}` }, ...MENTIONS.items] }
   for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844]]) {
@@ -3217,23 +3294,66 @@ const openPanel = async (p) => {
 }
 
 test("T3: what is typed while the shell is still being opened is kept and sent in order, not dropped", async () => {
+  // The bridge answers with the shell's id at once and opens the socket behind it (2.5 s here):
+  // keys typed meanwhile go to the bridge in order, which holds them for the socket.
   const cfg = b3()
   cfg.terminalDelay = 2500
   const p = await page(cfg)
   await openPanel(p)
-  // The panel is up and connecting; the bridge has not answered yet.
   await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connecting…")
   await p.waitForSelector("#terminal .xterm-helper-textarea", { state: "attached" })
   await p.focus("#terminal .xterm-helper-textarea")
   await p.keyboard.type("ls -la")
-  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 0, "still opening")
-  assert.equal(await p.evaluate(() => window.__mock.typed()), "", "nothing can be sent yet")
-  await p.waitForFunction(() => window.__mock.terminals().length === 1)
   await p.waitForFunction(() => window.__mock.typed() === "ls -la")
+  assert.equal(await termSays(p), "Connecting…", "typed ahead of the shell")
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
   await p.keyboard.type("\n")
   await p.waitForFunction(() => window.__mock.typed() === "ls -la\r")
   // The size the panel has is told once the socket is there.
   assert.ok(await p.evaluate(() => window.__mock.calls.some((c) => c.cmd === "terminal_resize")), "its size too")
+  assert.deepEqual(p.errors, [])
+})
+
+test("T3: what is typed while a lost connection comes back goes to the shell that was running, never to a new one; a shell that answers and drops is not asked every second", async () => {
+  const ready = (over) => [["control", { t: "ready", label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false, ...over }]]
+  const lose = () => p.evaluate(() => window.__mock.shell("end", { code: null, reason: "", status: null, error: "The connection broke off: reset" }))
+  const type = async (text) => {
+    await p.focus("#terminal .xterm-helper-textarea")
+    await p.keyboard.type(text)
+    await p.clock.runFor(50)
+  }
+  const p = await page(b3(), { clock: true })
+  await openPanel(p)
+  await runUntil(p, () => document.querySelector("#terminal-message").textContent === "Connected.")
+  await type("rm -rf build/ol")
+  assert.equal(await p.evaluate(() => window.__mock.typed()), "rm -rf build/ol")
+  // The connection goes; while the next one is opening (3 s) the rest of the line is typed.
+  await p.evaluate((frames) => Object.assign(window.__mockConfig, { terminal: frames, terminalDelay: 3000 }), ready({ id: "sh2", resumed: false }))
+  await lose()
+  await runUntil(p, () => window.__mock.terminals().length === 2)
+  await runUntil(p, () => document.querySelector("#terminal-message").textContent === "Connecting…")
+  await type("d\n")
+  await runUntil(p, () => /^Connected again\. This is a new shell/.test(document.querySelector("#terminal-message").textContent), 500, 20)
+  assert.match(await termSays(p), /What was typed while it was reconnecting was not sent\.$/)
+  assert.equal(await p.evaluate(() => window.__mock.typed()), "rm -rf build/ol", "the end of the line did not reach the new shell")
+  // Typed now, it is the new shell's.
+  await type("ls\n")
+  assert.equal(await p.evaluate(() => window.__mock.typed()), "rm -rf build/ol" + "ls\r")
+  // Lost again at once: it answered but did not stay, so the wait is the next longer one, not 1 s again.
+  await p.evaluate((frames) => Object.assign(window.__mockConfig, { terminal: frames }), ready({ id: "sh2", resumed: true }))
+  await lose()
+  await p.waitForFunction(() => /Reconnecting in 2 s…/.test(document.querySelector("#terminal-message").textContent))
+  await runUntil(p, () => window.__mock.terminals().length === 3)
+  await runUntil(p, () => document.querySelector("#terminal-message").textContent === "Connecting…")
+  await type("pwd\n")
+  assert.equal(await p.evaluate(() => window.__mock.typed()), "rm -rf build/ol" + "ls\r", "held until the server says which shell")
+  // The same shell answers: what was typed meanwhile is its own.
+  await runUntil(p, () => document.querySelector("#terminal-message").textContent === "Connected again, to the same shell.", 500, 20)
+  assert.equal(await p.evaluate(() => window.__mock.typed()), "rm -rf build/ol" + "ls\r" + "pwd\r")
+  // It stayed (10 s): the next loss starts from 1 s again.
+  await p.clock.runFor(10500)
+  await lose()
+  await p.waitForFunction(() => /Reconnecting in 1 s…/.test(document.querySelector("#terminal-message").textContent))
   assert.deepEqual(p.errors, [])
 })
 
@@ -3639,19 +3759,66 @@ test("PY: a poll answered with nothing at once is not asked again at once: the p
   assert.deepEqual(p.errors, [])
 })
 
-test("PY: files that could not be fetched or did not verify are said in the call's answer, and tried afresh for the next", async () => {
-  const p = await page(py({ python: { __error: { status: 0, detail: "pyodide.asm.wasm is not the file the server's list names: it was not kept." } }, calls: [pyCall()] }))
+test("PY: the window is announced as the chat's page only once its runner is there: not while the files are fetched, not when they could not be -- tried again later, and nothing alarming shown", async () => {
+  // The files could not be fetched or did not verify (Rust's words): nothing is announced, so
+  // the server asks another page of the chat meanwhile; nothing is taken either.
+  const cfg = py({ python: { __error: { status: 0, detail: "pyodide.asm.wasm is not the file the server's list names: it was not kept." } }, calls: [pyCall()] })
+  const p = await page(cfg, { clock: true })
   await openChatRow(p, "chat1")
-  const [said] = await answered(p)
-  assert.deepEqual(said.result, { stdout: "", result: null, error: "Python could not start: pyodide.asm.wasm is not the file the server's list names: it was not kept.", files: [] })
+  await runUntil(p, () => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length === 1)
+  await p.clock.runFor(1500)
+  assert.deepEqual(await pagePosts(p, "announce"), [])
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/chats/chat1/page/take").length), 0)
   assert.equal(await p.locator("#python-runner").count(), 0, "no frame without verified files")
-  // Put right (Rust fetched them again): the next call runs.
-  await p.evaluate((url) => {
-    window.__mockConfig.python = { url, version: "0.0.0-test" }
-    window.__mock.call("/chats/chat1/page/take", { call_id: "call2", code: "print now it runs", files: [], save: [], limits: { seconds: 30, memory: 256, output_chars: 20000 } })
-  }, `${RUNNER}/runner.html?v=0.0.0-test`)
-  const both = await answered(p, 2)
-  assert.equal(both[1].result.stdout, "now it runs")
+  assert.equal(await p.locator(".is-error:visible, .notice:visible").count(), 0, "nothing alarming")
+  // Tried again after a pause that grows (2 s, 4 s): still failing, still silent.
+  await p.clock.runFor(7000)
+  const tried = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length)
+  assert.ok(tried >= 2 && tried <= 4, `tried again, not in a loop (${tried})`)
+  assert.deepEqual(await pagePosts(p, "announce"), [])
+  // Put right, but slow (the first download): announced only when the runner says it is there.
+  await p.evaluate((url) => Object.assign(window.__mockConfig, { python: { url, version: "0.0.0-test" }, pythonDelay: 3000 }), `${RUNNER}/runner.html?v=0.0.0-test`)
+  await runUntil(p, () => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length > 0 && !!document.getElementById("python-runner"), 500, 40)
+  await runUntil(p, () => window.__mock.api("POST", "/chats/chat1/page/announce").length === 1, 200, 60)
+  // The call that waited is run.
+  await runUntil(p, () => window.__mock.api("POST", "/chats/chat1/page/answer").length === 1, 200, 60)
+  assert.equal((await pagePosts(p, "answer"))[0].result.stdout, "hello")
+  assert.deepEqual(p.errors, [])
+})
+
+test("PY: one chat's Python never meets another's: the frame that ran a call is thrown away when the window becomes another chat's page, and an answer is held to the call's limits", async () => {
+  const other = chatRow({ id: "chat3", title: "Another chat" })
+  const cfg = py({
+    calls: [pyCall({ call_id: "a1", files: [{ path: "/data/secret.txt", content_b64: Buffer.from("alpha").toString("base64") }], code: "read /data/secret.txt\nwrite /data/left.txt behind\nwrite /out.txt " + "x".repeat(50) + "\n= " + "v".repeat(50), save: ["/out.txt"], limits: { seconds: 30, memory: 256, output_chars: 20 } })],
+    routes: {
+      "GET /chats": { chats: [chatRow(), other], more: false },
+      "GET /chats/chat3": { chat: other, messages: [userMessage("m1", "Hello")], more: false, live: null },
+      "GET /models?chat=chat3": models(),
+      "POST /chats/chat3/page/announce": null,
+      "POST /chats/chat3/page/withdraw": null,
+      "POST /chats/chat3/page/answer": null,
+    },
+  })
+  cfg.takes["/chats/chat3/page/take"] = [pyCall({ call_id: "b1", code: "read /data/secret.txt\nread /data/left.txt\nprint end" })]
+  const p = await page(cfg)
+  await openChatRow(p, "chat1")
+  const [first] = await answered(p)
+  // Chat 1's call read its own file; what it printed and its value are cut to its limit; only the file it asked to save comes back.
+  assert.equal(first.result.stdout, "alpha")
+  assert.equal(first.result.result, "v".repeat(20))
+  assert.deepEqual(first.result.files.map((f) => f.path), ["/out.txt"])
+  const frameOf = () => p.evaluate(() => document.getElementById("python-runner")?.src || "")
+  assert.ok(await frameOf())
+  await p.evaluate(() => (document.getElementById("python-runner").dataset.was = "chat1"))
+  // The window becomes chat 3's page: a new frame, a new worker -- nothing of chat 1's is there.
+  await openChatRow(p, "chat3")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat3/page/answer").length === 1)
+  const second = (await p.evaluate(() => window.__mock.api("POST", "/chats/chat3/page/answer")))[0].args.body
+  assert.equal(second.call_id, "b1")
+  assert.ok(!/alpha|behind/.test(second.result.stdout), `chat 1's file and what it wrote are not chat 3's to read: ${JSON.stringify(second.result.stdout)}`)
+  assert.match(second.result.stdout, /end$/)
+  assert.equal(await p.evaluate(() => document.getElementById("python-runner")?.dataset.was || ""), "", "a frame of its own")
+  assert.equal(await p.locator("iframe.pyrunner").count(), 1, "the one before is gone")
   assert.deepEqual(p.errors, [])
 })
 
