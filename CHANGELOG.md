@@ -66,6 +66,10 @@ All notable changes to LLeMbas Desktop. The format follows
   text is drawn as Markdown.
 - **Something to do on the phone** is said on a card (confirm it there), and can be declined.
 
+- **A reply ends when it is saved; the chat's name follows.** With server 2.0.0-beta.11 a new
+  chat is named by a model after the reply is done: the name arrives on the same stream and the
+  header and the sidebar take it, without waiting for the next refresh.
+
 ### Fixed
 
 - A question's typed answer was ignored when an option was also picked.

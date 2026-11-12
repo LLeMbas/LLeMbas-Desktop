@@ -537,6 +537,9 @@ class Live {
   }
 
   frame(event, data) {
+    // The chat's name from a model, which follows `done` on the same stream (server
+    // 2.0.0-beta.11: the reply ends when it is saved, the naming a moment later).
+    if (event === "title") return this.named(data?.chat)
     if (this.done) return
     // Any frame that carries `progress` (the status frame does, from server 2.0.0-beta.8 on):
     // the object, or null for nothing running -- then the status text again.
@@ -592,6 +595,15 @@ class Live {
         break
     }
     toBottom(false)
+  }
+
+  named(chat) {
+    if (!chat?.title || chat.id !== this.chat.id) return
+    if (open?.chat?.id === chat.id) {
+      open.chat = { ...open.chat, title: chat.title }
+      setTitle(chat.title)
+    }
+    ctx.changed(this.chat)
   }
 
   tailed(tail) {

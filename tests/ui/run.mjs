@@ -2564,6 +2564,26 @@ test("P2: the rest of the chat screen works: edit a message, regenerate, stop, a
   assert.deepEqual(p.errors, [])
 })
 
+test("P2: a reply is finished at `done`; the name a model gives the chat afterwards arrives on the same stream and is drawn", async () => {
+  // The frames as server 2.0.0-beta.11 sends them (its fixtures event_done_title_pending.json and
+  // event_title.json, not pinned here yet): `done` with the name made from the prompt, then `title`.
+  const p = await page(agentChatOpen([["status", { text: "Writing…" }]]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live")
+  await p.evaluate(([path, m]) => window.__mock.frame(path, "done", { message: m, chat: { id: "chat2", title: "What is in build?", title_pending: true }, next: null }), [STREAM2, reply({ steps: [{ index: 0, kind: "text", open: true, markdown: "Files." }] })])
+  await p.waitForSelector(".msg--assistant:not(.is-live)")
+  assert.equal(await p.textContent("#chat-title"), "What is in build?")
+  assert.ok(await p.isHidden("#stop"), "finished: nothing waits for the name")
+  const lists = await p.evaluate(() => window.__mock.api("GET", "/chats").filter((x) => x.args.path.startsWith("/chats?") || x.args.path === "/chats").length)
+  await p.evaluate((path) => {
+    window.__mock.frame(path, "title", { chat: { id: "chat2", title: "The build directory" } })
+    window.__mock.frame(path, "close", {})
+  }, STREAM2)
+  await p.waitForFunction(() => document.getElementById("chat-title").textContent === "The build directory")
+  await p.waitForFunction((n) => window.__mock.api("GET", "/chats").filter((x) => x.args.path.startsWith("/chats?") || x.args.path === "/chats").length > n, lists)
+  assert.deepEqual(p.errors, [])
+})
+
 // --- S3: the composer's `/` and `@` menus -----------------------------------------------------------
 //
 // CONTRACT (unpinned): the server's menu routes as the plan for server 2.0.0-beta.11 words them --
