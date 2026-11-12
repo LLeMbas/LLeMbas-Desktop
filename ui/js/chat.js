@@ -15,7 +15,7 @@ import { readLocal } from "./explorer.js"
 import { menu, ask, showLine, popover, closePopover } from "./popup.js"
 import { avatar, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
-import { watchActivity, activityChanged, planList, activityButton, treeChanged, showPanel, panelOpen } from "./activity.js"
+import { watchActivity, activityChanged, planList, activityButton, treeChanged, showPanel, panelOpen, stateWord } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
 import { folderName, listed, folderTree, newFolder } from "./list.js"
 import { unarchive } from "./archived.js"
@@ -672,7 +672,7 @@ class Live {
         append(
           clear(this.jobs),
           (data.jobs || []).map((j) =>
-            h("li", { class: `job job--${j.state}` }, h("span", { class: "chip", text: j.state }), h("span", { text: j.description || j.command || j.agent || "" })),
+            h("li", { class: `job job--${j.state}` }, h("span", { class: "chip", text: stateWord(j.state) }), h("span", { text: j.description || j.command || j.agent || "" })),
           ),
         )
         break

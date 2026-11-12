@@ -1101,6 +1101,33 @@ test("D4: the computer menu's rows say a name and, apart from it, what the name 
   }
 })
 
+test("D4: a menu by the keyboard: arrows, Home and End move, Tab and Escape close it with the focus back on its button, a window that changes size closes it", async () => {
+  const p = await page(d4())
+  await p.evaluate(() => document.getElementById("new-chat-btn").click())
+  await targetChips(p)
+  const open = async () => { await p.focus("#target-chips .cchip--mode"); await p.keyboard.press("Enter"); await p.waitForSelector(".menu .menu__item") }
+  const focused = () => p.evaluate(() => document.activeElement?.textContent.replace("✓", "").trim() || "")
+  await open()
+  const words = await p.$$eval(".menu .menu__item", (l) => l.map((x) => x.textContent.replace("✓", "").trim()))
+  assert.equal(await focused(), words[0])
+  await p.keyboard.press("End")
+  assert.equal(await focused(), words[words.length - 1])
+  await p.keyboard.press("ArrowDown")
+  assert.equal(await focused(), words[0], "round again")
+  await p.keyboard.press("Home")
+  await p.keyboard.press("Tab")
+  assert.equal(await p.locator(".menu").count(), 0, "Tab closes it")
+  assert.ok(await p.evaluate(() => document.activeElement?.classList.contains("cchip--mode")), "the focus is back on the chip")
+  await open()
+  await p.evaluate(() => document.activeElement.blur())
+  await p.keyboard.press("Escape")
+  assert.equal(await p.locator(".menu").count(), 0, "Escape closes it wherever the focus is")
+  await open()
+  await p.setViewportSize({ width: 1000, height: 700 })
+  await p.waitForSelector(".menu", { state: "detached" })
+  assert.deepEqual(p.errors, [])
+})
+
 test("D4: with no other computer linked the bar still says the computer, its menu only this one; at 390 px the bar is one chip that opens the three", async () => {
   let p = await page(b3())
   await p.click("#new-chat-btn")

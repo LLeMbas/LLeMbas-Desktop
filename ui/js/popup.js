@@ -13,11 +13,21 @@ export function closeMenu() {
   openMenu = null
   el.remove()
   document.removeEventListener("pointerdown", outside, true)
+  document.removeEventListener("keydown", escMenu, true)
+  window.removeEventListener("resize", closeMenu)
   back?.focus?.()
 }
 
 function outside(e) {
   if (openMenu && !openMenu.el.contains(e.target)) closeMenu()
+}
+
+/** Escape closes the menu wherever the focus is (a menu whose items are all disabled holds none). */
+function escMenu(e) {
+  if (e.key !== "Escape" || !openMenu || openMenu.el.contains(e.target)) return
+  e.preventDefault()
+  e.stopPropagation()
+  closeMenu()
 }
 
 /**
@@ -64,6 +74,14 @@ export function menu(anchor, items) {
     if (e.key === "Escape") {
       e.preventDefault()
       closeMenu()
+    } else if (e.key === "Tab") {
+      // Tab leaves the menu: it closes, and the focus is back on what opened it -- not somewhere
+      // in the page with the menu still hanging open.
+      e.preventDefault()
+      closeMenu()
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault()
+      all[e.key === "Home" ? 0 : all.length - 1]?.focus()
     } else if (e.key === "ArrowDown") {
       e.preventDefault()
       all[(i + 1) % all.length]?.focus()
@@ -88,6 +106,9 @@ export function menu(anchor, items) {
   el.style.top = above ? `${at.top - r.height}px` : `${Math.max(0, Math.min(at.bottom, window.innerHeight - r.height))}px`
   openMenu = { el, back: anchor instanceof Element ? anchor : document.activeElement }
   document.addEventListener("pointerdown", outside, true)
+  document.addEventListener("keydown", escMenu, true)
+  // Where it was placed is where its anchor was: a window that changes size closes it.
+  window.addEventListener("resize", closeMenu)
   el.querySelector(".menu__item:not(:disabled)")?.focus()
 }
 

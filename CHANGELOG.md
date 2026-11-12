@@ -14,6 +14,12 @@ All notable changes to LLeMbas Desktop. The format follows
   on tracks of the row now -- the label left, the hint right, smaller and quieter, each cut
   with an ellipsis where it is too long -- and a computer named after its host says the host
   once. The test suite looks at every menu it opens for this.
+- **Menus by the keyboard.** Tab closes a menu and puts the focus back on its button (it used to
+  leave the menu hanging open with the focus somewhere in the page); Escape closes it wherever
+  the focus is; Home and End go to the first and the last item; a window that changes size
+  closes it.
+- **A background job's state under a reply being written** is said in the app's language, not
+  as the server's raw word.
 
 ## [1.0.0-beta.9] — 2026-11-12
 

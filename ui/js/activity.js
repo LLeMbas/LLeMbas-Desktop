@@ -103,8 +103,9 @@ export function summaryText(counts) {
   return parts.join(" · ")
 }
 
-function stateWord(state) {
-  return { queued: t("queued"), working: t("working"), waiting: t("waiting"), done: t("done"), stopped: t("stopped"), error: t("failed") }[state] || String(state || "")
+/** A background worker's state in the page's language (a job's `running` and `failed` too). */
+export function stateWord(state) {
+  return { queued: t("queued"), working: t("working"), running: t("working"), waiting: t("waiting"), done: t("done"), stopped: t("stopped"), error: t("failed"), failed: t("failed") }[state] || String(state || "")
 }
 
 function contextWord(key) {
