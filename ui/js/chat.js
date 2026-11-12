@@ -24,6 +24,7 @@ import { ACTIONS, callDuration, callFacts, callTitle, changeText, count, diffCou
 import { DISPLAY } from "./spec.js"
 import { initSlash, commandIn, commandTable, closeComposerMenu } from "./slash.js"
 import { accountThemes, accountTheme, chooseTheme } from "./look.js"
+import { pythonFor } from "./python.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 import { scopePopover } from "./scope.js"
 import { readAloudButton } from "./voice.js"
@@ -1596,6 +1597,7 @@ const note = (text) => alertIn(text, true)
 export async function openChat(id) {
   if (open?.chat?.id !== id) discard()
   if (open?.live) open.live.stop()
+  if (open?.chat?.id !== id) pythonFor(null)
   open = { chat: { id }, live: null, more: false }
   draft = null
   closePopover()
@@ -1621,6 +1623,8 @@ export async function openChat(id) {
   if (open?.chat?.id !== id) return
   open.chat = r.chat
   open.more = r.more
+  // This window is the chat's page for the `python` tool (a chat on the server, Python on there).
+  pythonFor(r.chat)
   watchActivity(r.chat)
   renderHead(r.chat)
   renderChips()
@@ -1671,6 +1675,7 @@ function reload() {
 export function closeChat() {
   if (open?.live) open.live.stop()
   open = null
+  pythonFor(null)
   watchActivity(null)
   invoke("set_open_chat", { chat: null })
 }
@@ -1805,6 +1810,7 @@ async function createChat(text, attachments) {
   $("main").dataset.new = "false"
   open = { chat: r.chat, live: null, more: false }
   invoke("set_open_chat", { chat: r.chat.id })
+  pythonFor(r.chat)
   watchActivity(r.chat)
   renderHead(r.chat)
   renderChips()

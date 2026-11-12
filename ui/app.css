@@ -1417,6 +1417,9 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .cchip.is-dim { color: var(--ink-faint); }
 .cchip.is-warn { color: var(--warning); border-color: var(--warning); }
 
+/* The `python` tool's runner: a frame nobody sees or reaches -- it draws nothing. */
+.pyrunner { position: absolute; width: 0; height: 0; border: 0; visibility: hidden; }
+
 /* The composer's `/` and `@` menu: a box of the composer card's own width, directly above it --
    placed by the card (which is `position: relative`), so it is where the card is at any width
    and never needs measuring. It grows upward to a list's height and scrolls inside. Every row is

@@ -24,6 +24,11 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const UI = join(HERE, "..", "..", "ui")
 const ORIGIN = "http://app.test"
 const require = createRequire(join(process.cwd(), "noop.js"))
+const RUNNER = "http://runner.test"
+// The policy the runner's files are served under: Rust's own (src-tauri/src/python.rs `POLICY`),
+// read out of the source, so the frame is tested under exactly what the app sends.
+const RUNNER_POLICY = /pub const POLICY: &str = "([^"]+)";/.exec(readFileSync(join(HERE, "..", "..", "src-tauri", "src", "python.rs"), "utf8"))[1]
+const RUNNER_TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".wasm": "application/wasm", ".zip": "application/zip", ".json": "application/json" }
 
 function playwright() {
   for (const name of ["playwright", "playwright-core"]) {
@@ -196,6 +201,20 @@ async function page(config, { width = 1280, height = 860, clock = false } = {}) 
   if (clock) await p.clock.install()
   const errors = []
   p.on("pageerror", (e) => errors.push(String(e)))
+  // The `python` tool's runner, on an origin of its own as in the app: the frame's three files
+  // from src-tauri/python/ under the policy Rust serves them with, and Pyodide -- the stand-in
+  // (tests/ui/pyodide-stub.mjs), or a real verified release from $PYODIDE_DIR.
+  await context.route(`${RUNNER}/**`, (route) => {
+    const path = new URL(route.request().url()).pathname
+    const headers = { "Content-Security-Policy": RUNNER_POLICY, "X-Content-Type-Options": "nosniff" }
+    const own = ["/runner.html", "/runner.js", "/worker.js"].includes(path) ? join(HERE, "..", "..", "src-tauri", "python", path.slice(1)) : null
+    const m = /^\/pyodide\/([^/]+)\/([A-Za-z0-9._-]+)$/.exec(path)
+    const real = m && process.env.PYODIDE_DIR && m[1] === "real" ? join(process.env.PYODIDE_DIR, m[2]) : null
+    const stub = m && m[1] === "0.0.0-test" && m[2] === "pyodide.mjs" ? join(HERE, "pyodide-stub.mjs") : null
+    const file = own || real || stub
+    if (!file || !existsSync(file)) return route.fulfill({ status: 404, headers, body: "" })
+    return route.fulfill({ status: 200, headers, contentType: RUNNER_TYPES[extname(file)] || "application/octet-stream", body: readFileSync(file) })
+  })
   await context.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname
     const file = join(UI, path === "/" ? "index.html" : decodeURIComponent(path))
@@ -3247,6 +3266,186 @@ test("T3: the panel fits at 1920, 1280, 1024, 800, 390 px and the window's small
     assert.deepEqual(p.errors, [])
     await p.context().close()
   }
+})
+
+// --- PY: the `python` tool, run in this window for the chat it shows ----------------------------------
+//
+// The server's protocol is its draft's (`api/v2/python.py`, read in the server's working tree
+// before it was committed, and `services/pages.py`): announce / withdraw / take / answer under
+// /chats/{chat}/page/, `python` in `GET /me`. The frame, its worker and the policy they are
+// served under are the app's real ones (src-tauri/python/, python.rs `POLICY`); Pyodide is the
+// stand-in unless $PYODIDE_DIR names a real, verified release (see the last test).
+
+const PY_ME = { enabled: true, version: "0.0.0-test", files: [{ name: "pyodide.mjs", sha256: "0".repeat(64), size: 1 }] }
+const TAKE1 = "/chats/chat1/page/take"
+const pyCall = (over = {}) => ({ call_id: "call1", code: 'print hello', files: [], save: [], limits: { seconds: 30, memory: 256, output_chars: 20000 }, ...over })
+
+function py({ me = PY_ME, python = { url: `${RUNNER}/runner.html?v=0.0.0-test`, version: "0.0.0-test" }, calls = [], routes = {} } = {}) {
+  const cfg = i8()
+  cfg.routes["GET /me"] = { ...cfg.routes["GET /me"], python: me }
+  Object.assign(cfg.routes, {
+    "GET /models?chat=chat1": models(),
+    "GET /models?chat=chat2": models(),
+    "GET /chats/chat2": { chat: agentChat(), messages: [userMessage("m1", "What is in build?")], more: false, live: null },
+    "POST /chats/chat1/page/announce": null,
+    "POST /chats/chat1/page/withdraw": null,
+    "POST /chats/chat1/page/answer": null,
+    ...routes,
+  })
+  cfg.python = python
+  cfg.takes = { [TAKE1]: calls }
+  cfg.takeDelay = 40
+  return cfg
+}
+
+const pagePosts = (p, what) => p.evaluate((w) => window.__mock.api("POST", `/chats/chat1/page/${w}`).map((x) => x.args.body), what)
+const answered = async (p, n = 1) => {
+  await p.waitForFunction((k) => window.__mock.api("POST", "/chats/chat1/page/answer").length >= k, n)
+  return pagePosts(p, "answer")
+}
+
+test("PY: a chat on the server shown in the window is announced as its page, a call is run in the runner's frame, and its result answered", async () => {
+  const p = await page(py({ calls: [pyCall({ code: "print hello\nprint from python\n= 42" })] }))
+  await openChatRow(p, "chat1")
+  const [said] = await answered(p)
+  const [announced] = await pagePosts(p, "announce")
+  assert.match(announced.page_id, /^[0-9a-f]{24}$/, "a page id of the server's shape")
+  assert.deepEqual(said, { page_id: announced.page_id, call_id: "call1", result: { stdout: "hello\nfrom python", result: "42", error: "", files: [] } })
+  // The poll named this page, and carries on after the call.
+  const takes = await p.evaluate(() => window.__mock.api("GET", "/chats/chat1/page/take").map((x) => x.args.path))
+  assert.ok(takes.length >= 2 && takes.every((x) => x === `/chats/chat1/page/take?page=${announced.page_id}`), `${takes[0]}`)
+  // The runner is a frame of another origin, hidden: nothing of the app is within its reach.
+  const frame = p.frames().find((f) => f.url().startsWith(RUNNER))
+  assert.ok(frame, "the runner's frame")
+  assert.equal(await frame.evaluate(() => { try { return typeof window.parent.__TAURI__ } catch { return "blocked" } }), "blocked", "the frame cannot read the app's page")
+  // (That the frame has no bridge of its own is Tauri's doing -- the capability names only the
+  // app's page -- and cannot be shown here: this harness puts its stand-in bridge in every frame.)
+  // Its policy refuses every request but to its own files (asked without CORS, so that a refusal
+  // is the policy's and nothing else's): the app's page answers such a request from anywhere else.
+  const ask = () => fetch("http://app.test/index.html", { mode: "no-cors" }).then(() => "reached", () => "refused")
+  assert.equal(await p.evaluate(ask), "reached")
+  assert.equal(await frame.evaluate(ask), "refused", "no request but to its own files")
+  assert.equal(await frame.evaluate(() => fetch("worker.js").then((r) => r.status, () => "refused")), 200)
+  assert.ok(await p.isHidden("#python-runner"))
+  assert.equal(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length), 1)
+  // Leaving the chat withdraws the page; an agent chat's code runs on its computer: not announced.
+  await openChatRow(p, "chat2")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/page/withdraw").length === 1)
+  assert.deepEqual(await pagePosts(p, "withdraw"), [{ page_id: announced.page_id }])
+  await p.waitForTimeout(200)
+  assert.equal(await p.evaluate(() => window.__mock.api("POST", "/chats/chat2/page/").length), 0)
+  // Back: a page of its own again, with a new id, and the frame is the one already there.
+  await openChatRow(p, "chat1")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/page/announce").length === 2)
+  const again = await pagePosts(p, "announce")
+  assert.notEqual(again[1].page_id, again[0].page_id)
+  assert.equal(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length), 1)
+  assert.deepEqual(p.errors, [])
+})
+
+test("PY: a call's files go in and the ones it saves come back; an error, a long output and a call past its time are answered as the web's runner answers them", async () => {
+  const b64 = (text) => Buffer.from(text).toString("base64")
+  const calls = [
+    pyCall({ call_id: "files", code: "read /data/in.txt\nwrite /out/result.txt baked\nwrite /out/unasked.txt x", files: [{ path: "/data/in.txt", content_b64: b64("flour and water") }], save: ["/out/result.txt", "/out/never.txt"] }),
+    pyCall({ call_id: "error", code: "print before\nraise NameError: name 'lembas' is not defined" }),
+    pyCall({ call_id: "long", code: `print ${"x".repeat(500)}`, limits: { seconds: 30, memory: 256, output_chars: 100 } }),
+    pyCall({ call_id: "slow", code: "forever", limits: { seconds: 1, memory: 256, output_chars: 20000 } }),
+    pyCall({ call_id: "after", code: "print still here" }),
+  ]
+  const p = await page(py({ calls }))
+  await openChatRow(p, "chat1")
+  const said = await answered(p, 5)
+  const by = Object.fromEntries(said.map((x) => [x.call_id, x.result]))
+  assert.deepEqual(by.files, { stdout: "flour and water", result: null, error: "", files: [{ path: "/out/result.txt", content_b64: b64("baked") }] }, "only what it was asked to save, and only what was written")
+  assert.deepEqual(by.error, { stdout: "before", result: null, error: "NameError: name 'lembas' is not defined", files: [] })
+  assert.equal(by.long.stdout.length, 100, "cut to the call's output limit")
+  assert.deepEqual(by.slow, { stdout: "", result: null, error: "Stopped after 1 seconds.", files: [] }, "ended with its worker")
+  assert.deepEqual(by.after, { stdout: "still here", result: null, error: "", files: [] }, "the next call has a worker of its own")
+  assert.deepEqual(said.map((x) => x.call_id), ["files", "error", "long", "slow", "after"], "one at a time, in order")
+  assert.deepEqual(p.errors, [])
+})
+
+test("PY: announced again every 20 s; a page the server forgot announces itself again and waits; Python off, or switched off meanwhile, announces nothing", async () => {
+  const p = await page(py(), { clock: true })
+  await openChatRow(p, "chat1")
+  await runUntil(p, () => window.__mock.api("POST", "/chats/chat1/page/announce").length === 1)
+  await p.clock.runFor(20500)
+  await runUntil(p, () => window.__mock.api("POST", "/chats/chat1/page/announce").length === 2)
+  // The server restarted: it answers 410 to a page it does not know.
+  await p.evaluate(() => window.__mock.answer("GET /chats/chat1/page/take", { __error: { status: 410, detail: "" } }))
+  await runUntil(p, () => window.__mock.api("POST", "/chats/chat1/page/announce").length === 3, 100, 60)
+  const before = await p.evaluate(() => window.__mock.api("GET", "/chats/chat1/page/take").length)
+  await p.clock.runFor(1500)
+  const during = await p.evaluate(() => window.__mock.api("GET", "/chats/chat1/page/take").length)
+  assert.ok(during - before <= 1, `it waits before asking again, not a loop as fast as the bridge (${during - before})`)
+  // Switched off on the server meanwhile: 409, and the page stops asking and announcing.
+  await p.evaluate(() => {
+    window.__mock.answer("GET /chats/chat1/page/take", { __error: { status: 409, detail: "Python is not switched on here." } })
+    window.__mock.answer("POST /chats/chat1/page/announce", { __error: { status: 409, detail: "Python is not switched on here." } })
+  })
+  await p.clock.runFor(5000)
+  const stopped = await p.evaluate(() => [window.__mock.api("GET", "/chats/chat1/page/take").length, window.__mock.api("POST", "/chats/chat1/page/announce").length])
+  await p.clock.runFor(60000)
+  assert.deepEqual(await p.evaluate(() => [window.__mock.api("GET", "/chats/chat1/page/take").length, window.__mock.api("POST", "/chats/chat1/page/announce").length]), stopped)
+  await p.context().close()
+  // Off on the server (`/me`), and a server from before the routes (no `python` at all).
+  for (const me of [{ enabled: false, version: "", files: [] }, null]) {
+    const o = await page(py({ me }))
+    await openChatRow(o, "chat1")
+    await o.waitForTimeout(300)
+    assert.equal(await o.evaluate(() => window.__mock.api("POST", "/chats/chat1/page/").length + window.__mock.api("GET", "/chats/chat1/page/").length), 0)
+    assert.equal(await o.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length), 0, "nothing is fetched")
+    assert.equal(await o.locator("#python-runner").count(), 0)
+    assert.deepEqual(o.errors, [])
+    await o.context().close()
+  }
+  assert.deepEqual(p.errors, [])
+})
+
+test("PY: files that could not be fetched or did not verify are said in the call's answer, and tried afresh for the next", async () => {
+  const p = await page(py({ python: { __error: { status: 0, detail: "pyodide.asm.wasm is not the file the server's list names: it was not kept." } }, calls: [pyCall()] }))
+  await openChatRow(p, "chat1")
+  const [said] = await answered(p)
+  assert.deepEqual(said.result, { stdout: "", result: null, error: "Python could not start: pyodide.asm.wasm is not the file the server's list names: it was not kept.", files: [] })
+  assert.equal(await p.locator("#python-runner").count(), 0, "no frame without verified files")
+  // Put right (Rust fetched them again): the next call runs.
+  await p.evaluate((url) => {
+    window.__mockConfig.python = { url, version: "0.0.0-test" }
+    window.__mock.call("/chats/chat1/page/take", { call_id: "call2", code: "print now it runs", files: [], save: [], limits: { seconds: 30, memory: 256, output_chars: 20000 } })
+  }, `${RUNNER}/runner.html?v=0.0.0-test`)
+  const both = await answered(p, 2)
+  assert.equal(both[1].result.stdout, "now it runs")
+  assert.deepEqual(p.errors, [])
+})
+
+test("PY: with a real Pyodide release ($PYODIDE_DIR) Python itself runs in the frame under the app's policy -- its output, its value, files, an error, the time limit, and no network", async () => {
+  if (!process.env.PYODIDE_DIR) {
+    console.log("     (skipped: set PYODIDE_DIR to a directory holding the server's pinned Pyodide files)")
+    return
+  }
+  const b64 = (text) => Buffer.from(text).toString("base64")
+  const calls = [
+    pyCall({ call_id: "sum", code: "import sys\nprint('hello from', sys.version_info.major)\nsum(range(10))" }),
+    pyCall({ call_id: "files", code: "text = open('/data/in.txt').read()\nimport os\nos.makedirs('/out', exist_ok=True)\nopen('/out/result.txt', 'w').write(text.upper())\nlen(text)", files: [{ path: "/data/in.txt", content_b64: b64("flour and water") }], save: ["/out/result.txt"] }),
+    pyCall({ call_id: "error", code: "print('before')\nlembas" }),
+    // Asked without CORS, of a page that answers anyone: only the frame's policy can refuse it.
+    pyCall({ call_id: "net", code: "import js\nfrom pyodide.ffi import to_js\nasync def ask(url):\n    try:\n        await js.fetch(url, to_js({'mode': 'no-cors'}, dict_converter=js.Object.fromEntries))\n        return 'reached'\n    except Exception:\n        return 'refused'\nprint(await ask('http://app.test/index.html'), await ask('worker.js'))" }),
+    pyCall({ call_id: "slow", code: "while True:\n    pass", limits: { seconds: 2, memory: 256, output_chars: 20000 } }),
+    pyCall({ call_id: "after", code: "import json\njson.dumps({'still': 'here'})" }),
+  ]
+  const p = await page(py({ python: { url: `${RUNNER}/runner.html?v=real`, version: "real" }, calls }))
+  await openChatRow(p, "chat1")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/page/answer").length >= 6, null, { timeout: 120000 })
+  const by = Object.fromEntries((await pagePosts(p, "answer")).map((x) => [x.call_id, x.result]))
+  assert.deepEqual(by.sum, { stdout: "hello from 3", result: "45", error: "", files: [] })
+  assert.deepEqual(by.files, { stdout: "", result: "15", error: "", files: [{ path: "/out/result.txt", content_b64: b64("FLOUR AND WATER") }] })
+  assert.equal(by.error.stdout, "before")
+  assert.match(by.error.error, /NameError: name 'lembas' is not defined/)
+  assert.equal(by.net.stdout, "refused reached", "the code reaches the runner's own files and nothing else")
+  assert.deepEqual(by.slow, { stdout: "", result: null, error: "Stopped after 2 seconds.", files: [] })
+  assert.equal(by.after.result, '{"still": "here"}')
+  // (Pyodide itself loaded and ran under that policy: it needs nothing the policy refuses.)
+  assert.deepEqual(p.errors, [])
 })
 
 // --- V4: the visual pass -- what was found wrong, held where it was put right -----------------------

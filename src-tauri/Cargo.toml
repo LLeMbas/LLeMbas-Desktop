@@ -25,6 +25,9 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# SHA-256 of the Pyodide files the python tool's runner is served from (python.rs). Already in
+# the tree (tauri's own dependencies use it): no new crate is built.
+sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls", "native-certs", "json"] }
 # The terminal panel's socket (`terminal.rs`): a blocking WebSocket on the TLS ureq already brings.
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }

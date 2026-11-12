@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The app's own page (ui/), the only content with the bridge. It names the main window and no remote URL: no server page is ever loaded, and HTML the viewer shows is a sealed frame on its own scheme, which no capability names. The window permissions are the title bar's: moving, resizing, minimising, maximising and closing (which hides).",
+  "description": "The app's own page (ui/), the only content with the bridge. It names the main window and no remote URL: no server page is ever loaded, and HTML the viewer shows is a sealed frame on its own scheme, which no capability names; nor does any name the scheme of the python tool's runner frame, where code a model wrote runs. The window permissions are the title bar's: moving, resizing, minimising, maximising and closing (which hides).",
   "windows": [
     "main"
   ],

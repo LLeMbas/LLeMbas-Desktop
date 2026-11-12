@@ -6,12 +6,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 bad=0
-for f in ui/js/*.js ui/vendor/*.mjs; do
+# (and the `python` tool's runner, which Rust serves to a frame of its own: src-tauri/python/)
+for f in ui/js/*.js ui/vendor/*.mjs src-tauri/python/*.js; do
   node --input-type=module --check < "$f" || { echo "check-ui: $f does not parse" >&2; bad=1; }
 done
 node --check ui/i18n.js || { echo "check-ui: ui/i18n.js does not parse" >&2; bad=1; }
 # Nothing the page draws is set as HTML: text goes in as text (ui/js/dom.js).
-if grep -nE '\.(innerHTML|outerHTML)\s*=|insertAdjacentHTML|document\.write' ui/js/*.js; then
+if grep -nE '\.(innerHTML|outerHTML)\s*=|insertAdjacentHTML|document\.write' ui/js/*.js src-tauri/python/*.js; then
   echo "check-ui: the lines above set HTML from a string" >&2
   bad=1
 fi

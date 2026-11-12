@@ -13,6 +13,7 @@ import { initViewer, onViewer, closeViewer } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab, openServerFile } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
 import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
+import { initPython } from "./python.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
 import { applyTheme, noteMe } from "./look.js"
 import { initAttach, allowAttach } from "./attach.js"
@@ -288,6 +289,7 @@ async function boot() {
     },
   })
   initVoice()
+  initPython({ me: () => me })
   initChat({
     status: () => status,
     thisDevices,

@@ -125,6 +125,25 @@ cards' actions), with its conformance cases under `tests/ui/conformance/`:
 `scripts/fetch-spec.sh <cli ref>` from a checkout of the CLI beside this repository
 (`../LLeMbas-CLI`, or `LEMBAS_CLI`). `scripts/gen-i18n.py` reads its sentences from that file.
 
+### The `python` tool
+
+On the server a chat's `python` call runs in a page of that chat, in Pyodide (CPython in
+WebAssembly), never on the server. The app's window is such a page for the chat on the server
+it shows (`ui/js/python.js`): it announces itself on the app's door, takes the chat's calls,
+and answers them. The code itself runs in a hidden frame on a scheme of its own
+(`llembas-python://`, `src-tauri/src/python.rs`, the runner in `src-tauri/python/`):
+
+- Rust reads which Pyodide release the server pins (`GET /api/v2/me`, `python`), downloads its
+  files through the app's door into the app's data directory, and keeps each only when its size
+  and SHA-256 are the ones the server names; the webview never fetches them from the network.
+- The frame is not the app's origin, so it has no bridge: nothing in it can call the app.
+- It is served under a policy of its own -- scripts, workers and requests from its own scheme
+  only, plus `'wasm-unsafe-eval'` so WebAssembly may compile -- so the code has the files a call
+  handed it and no network. The app's own policy gains only that scheme under `frame-src`.
+
+`tests/ui` runs the real frame and worker against a stand-in for Pyodide; with `PYODIDE_DIR`
+set to a directory holding the pinned release it runs Python itself, under the same policy.
+
 `scripts/check-ui.sh` parses the page's scripts and refuses any that sets HTML from a string;
 `scripts/hygiene.sh` keeps private names out of this public repository. CI runs both, and starts
 the built app under X11 and under Wayland (`scripts/ci-start.sh`).

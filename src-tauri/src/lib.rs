@@ -18,6 +18,7 @@
 mod agent;
 mod cli;
 mod files;
+mod python;
 mod remote;
 mod sealed;
 mod server;
@@ -120,6 +121,8 @@ struct App {
     /// The terminal panel's sockets (`terminal.rs`), by the page's id for each.
     terminals: terminal::Sessions,
     sealed: sealed::Pages,
+    /// The Pyodide release the `python` tool's runner is served from, once verified (`python.rs`).
+    python: python::Runtime,
     watch: watch::Watch,
     /// The files last dropped on the window: what `attach_dropped` may send, and nothing else.
     dropped: Mutex<Vec<PathBuf>>,
@@ -929,6 +932,65 @@ async fn local_read(
         .map_err(|e| e.to_string())?
 }
 
+/// What the page needs to run the `python` tool for the chat it shows: whether the server has
+/// Python switched on, and where the runner's frame is.
+#[derive(Clone, Serialize)]
+struct PythonRunner {
+    enabled: bool,
+    version: String,
+    url: String,
+}
+
+/// Make the `python` tool's runner ready: read what the server says of Python (`GET /me`), fetch
+/// the files of its pinned Pyodide release that are not already here and intact, check each one's
+/// size and SHA-256 against the server's list, and serve them on the runner's own scheme. The
+/// page then loads the frame at `url`. Off on the server: nothing is fetched, and none is served.
+#[tauri::command]
+async fn python_prepare(handle: AppHandle) -> Result<PythonRunner, ApiError> {
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let root = handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| ApiError::new(0, e.to_string()))?
+        .join("pyodide");
+    let h = handle.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let me = server::request(&app_url, &token, "GET", "/me", None)?;
+        let app = h.state::<App>();
+        let said = python::specs(me.get("python").unwrap_or(&Value::Null))
+            .map_err(|e| ApiError::new(0, e))?;
+        let Some((version, specs)) = said else {
+            app.python.clear();
+            return Ok(PythonRunner {
+                enabled: false,
+                version: String::new(),
+                url: String::new(),
+            });
+        };
+        let fetch = |name: &str| {
+            let path = format!("/pyodide/{version}/{name}");
+            server::request_bytes(&app_url, &token, &path, python::MAX_FILE).map_err(|e| e.detail)
+        };
+        let dir =
+            python::prepare(&root, &version, &specs, &fetch).map_err(|e| ApiError::new(0, e))?;
+        let names = specs.into_iter().map(|s| s.name).collect();
+        app.python.set(&version, dir, names);
+        Ok(PythonRunner {
+            enabled: true,
+            url: python::url(&version),
+            version,
+        })
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(&handle);
+    }
+    result
+}
+
 /// Hold HTML for the viewer's sealed frame; the address the frame loads.
 #[tauri::command]
 fn sealed_open(app: tauri::State<'_, App>, html: String) -> String {
@@ -1366,7 +1428,8 @@ fn media_stream(window: &WebviewWindow) {
     let _ = window;
 }
 
-/// The window shows the app's own page, and the sealed frames inside it; nothing else, ever.
+/// The window shows the app's own page, and the frames it holds on schemes of their own -- the
+/// viewer's sealed pages and the `python` tool's runner; nothing else, ever.
 /// A link the page wants followed goes to the system's browser through `open_external`; a
 /// navigation it did not ask for -- a link or a script in a sealed frame -- simply goes nowhere.
 fn allowed(url: &Url) -> bool {
@@ -1377,7 +1440,13 @@ fn allowed(url: &Url) -> bool {
             && url
                 .host_str()
                 .is_some_and(|h| h == format!("{}.localhost", sealed::SCHEME)));
-    local_app || sealed || url.as_str() == "about:blank"
+    // The `python` tool's runner: a frame on its own scheme too, with no bridge (`python.rs`).
+    let runner = url.scheme() == python::SCHEME
+        || (url.scheme() == "http"
+            && url
+                .host_str()
+                .is_some_and(|h| h == format!("{}.localhost", python::SCHEME)));
+    local_app || sealed || runner || url.as_str() == "about:blank"
 }
 
 fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
@@ -1884,6 +1953,12 @@ pub fn run() {
                 request.uri().path(),
             )
         })
+        .register_uri_scheme_protocol(python::SCHEME, |ctx, request| {
+            python::respond(
+                &ctx.app_handle().state::<App>().python,
+                request.uri().path(),
+            )
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             recheck_server,
@@ -1905,6 +1980,7 @@ pub fn run() {
             local_read,
             sealed_open,
             sealed_close,
+            python_prepare,
             attach_pick,
             library_upload,
             voice_arm,
@@ -1969,6 +2045,7 @@ pub fn run() {
                 next_stream: AtomicU64::new(0),
                 terminals: terminal::Sessions::default(),
                 sealed: sealed::Pages::default(),
+                python: python::Runtime::default(),
                 watch: watch::Watch::default(),
                 dropped: Mutex::new(Vec::new()),
                 mic_until: Mutex::new(None),
@@ -2074,12 +2151,14 @@ mod tests {
     }
 
     #[test]
-    fn the_window_shows_the_app_and_its_sealed_frames_only() {
+    fn the_window_shows_the_app_and_its_own_frames_only() {
         for ok in [
             "tauri://localhost/index.html",
             "http://tauri.localhost/index.html",
             "llembas-sealed://localhost/p1",
             "http://llembas-sealed.localhost/p1",
+            "llembas-python://localhost/runner.html?v=314.0.7",
+            "http://llembas-python.localhost/runner.html?v=314.0.7",
             "about:blank",
         ] {
             assert!(allowed(&Url::parse(ok).unwrap()), "{ok}");
@@ -2088,6 +2167,8 @@ mod tests {
             "https://ai.example/",
             "http://localhost:8080/",
             "http://tauri.localhost.evil.example/",
+            "http://llembas-python.localhost.evil.example/runner.html",
+            "https://llembas-python.localhost/runner.html",
             "file:///etc/passwd",
             "data:text/html,<p>x</p>",
             "javascript:alert(1)",

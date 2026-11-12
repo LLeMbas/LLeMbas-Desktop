@@ -537,6 +537,26 @@ pub fn request_text(app: &str, token: &str, path: &str) -> Result<String, ApiErr
     Ok(text)
 }
 
+/// One `GET` on `/api/v2` that answers a file's bytes: a file of the pinned Pyodide release
+/// (`/pyodide/{version}/{name}`), which `python.rs` checks against the server's list before it
+/// keeps it. Not read past `limit`: an answer longer than that is refused, not cut.
+pub fn request_bytes(app: &str, token: &str, path: &str, limit: u64) -> Result<Vec<u8>, ApiError> {
+    let path = checked_path(path)?;
+    let res = agent(Duration::from_secs(120))
+        .get(&format!("{app}{path}"))
+        .set("authorization", &format!("Bearer {token}"))
+        .call()?;
+    let mut bytes = Vec::new();
+    res.into_reader()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| ApiError::new(0, format!("The server's answer could not be read: {e}")))?;
+    if bytes.len() as u64 > limit {
+        return Err(ApiError::new(413, "The file is too large."));
+    }
+    Ok(bytes)
+}
+
 /// The most a model's picture may be: the server's own limit for one (2 MB), and a little room.
 pub const IMAGE_LIMIT: u64 = 2 * 1024 * 1024 + 4096;
 /// The most an attached picture shown as a thumbnail may be: a screenshot fits; a larger one

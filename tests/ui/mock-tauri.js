@@ -16,6 +16,10 @@
 //            (`control` frames as the server's JSON, `output` as text, sent base64 as Rust does).
 //            More with `__mock.shell(kind, data)`; `{ refuse: {status, detail} }` makes
 //            `terminal_open` fail; `terminalDelay` (ms) makes it slow to answer.
+//   python   { url, version } -- where `python_prepare` says the `python` tool's runner frame is.
+//   takes    { "/chats/c1/page/take": [call, …] } -- what a runner's long poll is handed, one
+//            call a poll, each poll answered after `takeDelay` ms (the server holds one 25 s);
+//            with none left it answers nothing (204). `__mock.call(path, call)` queues another.
 //
 // Nothing here talks to a network: the page's policy allows it none, and this keeps it so.
 ;(function () {
@@ -43,6 +47,11 @@
   function answer(method, path) {
     const routes = config.routes || {}
     const bare = path.split("?")[0]
+    // A runner's long poll: the next queued call, or nothing, after a moment (never at once: a
+    // poll answered instantly with nothing is a loop as fast as the bridge).
+    if (method === "GET" && config.takes && Object.prototype.hasOwnProperty.call(config.takes, bare) && !Object.prototype.hasOwnProperty.call(routes, `GET ${bare}`)) {
+      return new Promise((resolve) => setTimeout(() => resolve(JSON.parse(JSON.stringify(config.takes[bare].shift() ?? null))), config.takeDelay ?? 50))
+    }
     for (const key of [`${method} ${path}`, `${method} ${bare}`]) {
       if (Object.prototype.hasOwnProperty.call(routes, key)) {
         const value = routes[key]
@@ -109,6 +118,14 @@
         if (t?.open) setTimeout(() => shell("end", { code: 1000, reason: "", status: null, error: null }, args.id), 0)
         return null
       }
+      case "python_prepare": {
+        // The runner's frame, as Rust would serve it: `python: { url, version }` in the config
+        // (tests/ui serves the frame's files at that address), `{ __error }` for a refusal, and
+        // nothing for a server with Python off.
+        const py = config.python
+        if (py && py.__error) return Promise.reject(py.__error)
+        return py ? { enabled: true, version: py.version, url: py.url } : { enabled: false, version: "", url: "" }
+      }
       case "model_image":
         return ""
       case "terminal_word":
@@ -149,6 +166,11 @@
       const going = held.filter((x) => x.key === key)
       for (const x of going) held.splice(held.indexOf(x), 1)
       for (const x of going) x.go()
+    },
+    /** Queue a call for a runner's long poll on `path`. */
+    call(path, request) {
+      config.takes = config.takes || {}
+      ;(config.takes[path] = config.takes[path] || []).push(request)
     },
     /** Change the server's answer for a route from now on. */
     answer(key, value) {

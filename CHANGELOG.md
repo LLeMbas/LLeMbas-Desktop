@@ -55,6 +55,16 @@ All notable changes to LLeMbas Desktop. The format follows
   unknown name) is sent as written. The menu is the composer's own width, directly above it, at
   any window width. Needs a server with the menu routes (2.0.0-beta.11); an older one offers
   the app's own commands only.
+- **The `python` tool runs in Desktop.** A chat on the server open only in Desktop had no page
+  to run Python in, so every `python` call in it failed ("no open browser page is attached to
+  this chat"). The window is the chat's page now: while such a chat is shown it says so to the
+  server, takes the chat's calls and answers them -- output, last value, errors, and the files a
+  call asks to save -- with the same limits as the web page's runner. The code runs in Pyodide
+  in a hidden frame of its own, with no way to call the app and no network: the app downloads
+  the server's pinned Pyodide files once, checks each one's size and SHA-256 against the
+  server's list, and serves them to that frame itself. Needs a server with Python switched on
+  and the app's runner routes (2.0.0-beta.11). An agent chat's code runs on its computer, as
+  before.
 - **The terminal: End shell, the open shells, and connecting again.** The panel has End shell
   (asked first: what runs in it stops). Where the server refuses one more shell, the ones you
   have open are listed -- computer, folder, since when -- each with End. A connection that is
