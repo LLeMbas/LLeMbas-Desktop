@@ -1280,8 +1280,8 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .strip__text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 /* The composer: a card with the files it carries, the text, and under them one row -- attach,
-   the chat's chips (the one track that gives, wrapping onto a second line if it must), then Stop
-   and Send at their own size. */
+   the message's chips (the one track that gives, wrapping onto a second line if it must), then
+   Dictate, Stop and Send at their own size. */
 .composer {
   position: relative;
   display: grid;
@@ -1321,10 +1321,10 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .composer__mic.is-busy, .msg__speak.is-busy { opacity: 0.6; cursor: progress; }
 .msg__speak[aria-pressed="true"] { color: var(--accent); }
 .composer__attach { width: var(--chip-h); height: var(--chip-h); border: var(--border-w) solid var(--border); border-radius: var(--radius-full); }
-/* The chips stay on one line; where they do not fit, the line scrolls by itself. */
-.composer__chips { display: flex; flex-wrap: nowrap; gap: var(--sp-1); min-width: 0; align-items: center; overflow-x: auto; scrollbar-width: none; }
-.composer__chips::-webkit-scrollbar { display: none; }
-.composer__chips > * { flex: none; }
+/* The message's own chips: they wrap onto another line where one does not hold them, and a chip
+   wider than the line gives way with an ellipsis. Nothing here scrolls, so nothing is hidden. */
+.composer__chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); min-width: 0; align-items: center; }
+.composer__chips > * { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 /* Send and Stop: round, one size, side by side when both show (a message typed while a reply runs). */
 .round {
   display: grid;
@@ -1373,6 +1373,20 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .cchip .avatar { width: 1rem; height: 1rem; font-size: 0.625rem; }
 .cchip.is-dim { color: var(--ink-faint); }
 .cchip.is-warn { color: var(--warning); border-color: var(--warning); }
+
+/* Where a new agent chat works, above the composer: computer · folder · mode, three chips of the
+   header's family on one line. The three share the line's width -- a track each, none wider than
+   its words, a long name giving way with an ellipsis -- so none is ever cut off or scrolled out
+   of reach. Where the chat's column is narrow (the `chat` container, below) they fold into the
+   one summary chip, which opens them stacked above it. */
+.target { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); justify-items: start; padding: 0 var(--sp-2); }
+.target[hidden] { display: none; }
+.target__chips { display: grid; grid-template-columns: repeat(3, minmax(0, max-content)); gap: var(--sp-1); max-width: 100%; }
+.target .cchip { min-width: 0; max-width: 100%; }
+.target .cchip.target__sum { display: none; }
+.target__word { overflow: hidden; text-overflow: ellipsis; }
+.target__word.is-warn { color: var(--warning); }
+.target__dot { color: var(--ink-faint); }
 
 /* Files dragged over the window: where they will go, over the whole composer. */
 .composer__drop { display: none; }
@@ -1952,6 +1966,14 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   .cchip { max-width: var(--w-field-xs); }
   .head.chathead { grid-template-columns: minmax(min(6rem, 30%), 1fr) minmax(0, max-content) auto auto; grid-template-areas: "title set fold tools" "place place place place"; }
   .head.chathead[data-fold="true"][data-unfold="true"] { grid-template-areas: "title set fold tools" "place place place place" "row row row row"; }
+}
+
+/* A phone's width of chat: the bar above the composer is its one summary chip, the three chips
+   stacked above it once it is opened. */
+@container chat (max-width: 30rem) {
+  .target .cchip.target__sum { display: inline-grid; }
+  .target__chips { display: none; }
+  .target[data-open="true"] .target__chips { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start; order: -1; }
 }
 
 /* 48rem (--bp-narrow): the sidebar is a drawer over the page, opened from the title bar. */

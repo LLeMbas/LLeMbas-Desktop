@@ -77,8 +77,9 @@ export function menu(anchor, items) {
   const at = anchor instanceof Element ? anchor.getBoundingClientRect() : { left: anchor.x, bottom: anchor.y }
   const r = el.getBoundingClientRect()
   // Its width as measured at the left edge, kept: moved right, it would shrink to fit instead.
-  el.style.width = `${Math.ceil(r.width)}px`
-  el.style.left = `${Math.max(0, Math.min(at.left, window.innerWidth - r.width))}px`
+  const width = Math.ceil(r.width)
+  el.style.width = `${width}px`
+  el.style.left = `${Math.max(0, Math.min(at.left, window.innerWidth - width))}px`
   // Below the anchor where it fits, else above it (a chip under the message box opens upwards).
   const above = at.top !== undefined && at.bottom + r.height > window.innerHeight && at.top - r.height >= 0
   el.style.top = above ? `${at.top - r.height}px` : `${Math.max(0, Math.min(at.bottom, window.innerHeight - r.height))}px`

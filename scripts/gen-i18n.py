@@ -566,6 +566,8 @@ KEYS = (
     "Details",
     # chat.js: the chat's settings in its header, folded behind one button where they do not fit
     "Chat settings",
+    # chat.js: where a new agent chat works, the bar above the composer
+    "Where the agent works",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -850,6 +852,7 @@ OWN: dict[str, dict[str, str]] = {
         "The server's answer could not be read.": "Odpověď serveru nešlo přečíst.",
         "Choose a file to see it here.": "Vyberte soubor a uvidíte ho tady.",
         "Details": "Podrobnosti",
+        "Where the agent works": "Kde agent pracuje",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -1129,6 +1132,7 @@ OWN: dict[str, dict[str, str]] = {
         "The server's answer could not be read.": "Die Antwort des Servers konnte nicht gelesen werden.",
         "Choose a file to see it here.": "Wählen Sie eine Datei, um sie hier zu sehen.",
         "Details": "Details",
+        "Where the agent works": "Wo der Agent arbeitet",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1408,6 +1412,7 @@ OWN: dict[str, dict[str, str]] = {
         "The server's answer could not be read.": "No se pudo leer la respuesta del servidor.",
         "Choose a file to see it here.": "Elige un archivo para verlo aquí.",
         "Details": "Detalles",
+        "Where the agent works": "Dónde trabaja el agente",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1687,6 +1692,7 @@ OWN: dict[str, dict[str, str]] = {
         "The server's answer could not be read.": "La réponse du serveur n’a pas pu être lue.",
         "Choose a file to see it here.": "Choisissez un fichier pour le voir ici.",
         "Details": "Détails",
+        "Where the agent works": "Où travaille l’agent",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -1966,6 +1972,7 @@ OWN: dict[str, dict[str, str]] = {
         "The server's answer could not be read.": "A szerver válasza nem olvasható.",
         "Choose a file to see it here.": "Válasszon egy fájlt, hogy itt lássa.",
         "Details": "Részletek",
+        "Where the agent works": "Hol dolgozik az ügynök",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -2245,6 +2252,7 @@ OWN: dict[str, dict[str, str]] = {
         "The server's answer could not be read.": "Non è stato possibile leggere la risposta del server.",
         "Choose a file to see it here.": "Scegli un file per vederlo qui.",
         "Details": "Dettagli",
+        "Where the agent works": "Dove lavora l’agente",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2524,6 +2532,7 @@ OWN: dict[str, dict[str, str]] = {
         "The server's answer could not be read.": "Nie udało się odczytać odpowiedzi serwera.",
         "Choose a file to see it here.": "Wybierz plik, aby zobaczyć go tutaj.",
         "Details": "Szczegóły",
+        "Where the agent works": "Gdzie pracuje agent",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -2803,6 +2812,7 @@ OWN: dict[str, dict[str, str]] = {
         "The server's answer could not be read.": "Odpoveď servera sa nedala prečítať.",
         "Choose a file to see it here.": "Vyberte súbor a uvidíte ho tu.",
         "Details": "Podrobnosti",
+        "Where the agent works": "Kde agent pracuje",
     },
 }
 

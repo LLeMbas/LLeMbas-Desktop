@@ -876,6 +876,7 @@ function modeChip(value, onChange, disabled) {
     ico: ICONS.shield,
     label: modeName(value),
     title: `${t("Mode")}: ${MODE_WORDS[value]?.() || value}`,
+    cls: "cchip--mode",
     disabled,
     onclick: (e) => menu(e.currentTarget, MODES.map((m) => ({ label: MODE_WORDS[m](), checked: m === value, run: () => m !== value && onChange(m) }))),
   })
@@ -944,11 +945,12 @@ function agentsChip(value, onChange, { cap, own } = {}) {
 
 /** The folder of a new agent chat: one of the agent's folders, or Add folder… where there is none. */
 function folderChip(roots, value, onChange) {
-  if (!roots.length) return chip({ ico: ICONS.folder, label: t("Add folder…"), menuish: false, cls: "is-warn", onclick: () => invoke("remote_add") })
+  if (!roots.length) return chip({ ico: ICONS.folder, label: t("Add folder…"), menuish: false, cls: "cchip--folder is-warn", onclick: () => invoke("remote_add") })
   return chip({
     ico: ICONS.folder,
     label: folderName(value),
     title: `${t("Folder")}: ${value}`,
+    cls: "cchip--folder",
     onclick: (e) =>
       menu(e.currentTarget, [
         ...roots.map((r) => ({ label: folderName(r), hint: r, checked: r === value, run: () => r !== value && onChange(r) })),
@@ -976,9 +978,56 @@ function deviceChip(others) {
   }
   const items = [{ label: t("This computer"), hint: ctx.status()?.host || "", checked: here, run: () => choose(hereDevice() || "") }]
   for (const d of others) items.push({ label: d.name || d.host || d.id, hint: [d.host, d.platform].filter(Boolean).join(" · "), checked: !here && current?.id === d.id, run: () => choose(d.id) })
-  const label = here ? t("This computer") : current?.name || current?.host || t("Another device")
-  const b = chip({ ico: ICONS.terminal, label, title: `${t("Computer")}: ${label}`, cls: "cchip--device", onclick: (e) => menu(e.currentTarget, items) })
-  return b
+  const label = deviceWord()
+  return chip({ ico: ICONS.terminal, label, title: `${t("Computer")}: ${label}`, cls: "cchip--device", onclick: (e) => menu(e.currentTarget, items) })
+}
+
+/** The computer a new agent chat works on, in a word: this one, or the other's name. */
+function deviceWord() {
+  const current = deviceOf(draftDevice())
+  return draftHere() ? t("This computer") : current?.name || current?.host || t("Another device")
+}
+
+// --- Where a new agent chat works: one slim bar above the composer --------------------------------
+//
+// Computer · folder · mode, three chips of one family on one line, each opening its menu. The
+// line never scrolls and never cuts a chip off: the chips share its width (a long name gives way
+// with an ellipsis, its whole text in the title), and where the chat's column is narrow the three
+// fold into one summary chip -- "studio · project · Edit" -- which opens them, stacked, above it.
+// The fold is the column's width (a container query in app.css), not a measurement.
+
+function renderTarget(chips, words) {
+  const bar = $("chat-target")
+  if (!chips) {
+    bar.hidden = true
+    bar.dataset.open = "false"
+    bar.replaceChildren()
+    return
+  }
+  const open = bar.dataset.open === "true"
+  const part = (text, cls = "") => h("span", { class: `target__word ${cls}`, text })
+  const dot = () => h("span", { class: "target__dot", "aria-hidden": "true", text: "·" })
+  const sum = h(
+    "button",
+    {
+      type: "button",
+      class: "cchip target__sum",
+      id: "target-sum",
+      "aria-expanded": String(open),
+      "aria-controls": "target-chips",
+      title: words.map((w) => w.text).join(" · "),
+      onclick: () => {
+        bar.dataset.open = String(bar.dataset.open !== "true")
+        sum.setAttribute("aria-expanded", bar.dataset.open)
+        if (bar.dataset.open === "true") bar.querySelector(".target__chips button")?.focus()
+      },
+    },
+    icon(ICONS.terminal),
+    words.flatMap((w, i) => (i ? [dot(), part(w.text, w.cls)] : [part(w.text, w.cls)])),
+    h("span", { class: "cchip__chev" }, icon(ICONS.chevronDown)),
+  )
+  bar.replaceChildren(sum, h("div", { class: "target__chips", id: "target-chips", role: "group", "aria-label": t("Where the agent works") }, chips))
+  bar.hidden = false
 }
 
 /** The folder of a new agent chat on another device: one it has worked in, or one typed. */
@@ -988,12 +1037,12 @@ function elsewhereFolderChip(device, value, onChange) {
     if (dir) onChange(dir)
   }
   const known = knownFolders(device)
-  if (!value && !known.length) return chip({ ico: ICONS.folder, label: t("Choose a folder…"), menuish: false, cls: "is-warn", onclick: type })
+  if (!value && !known.length) return chip({ ico: ICONS.folder, label: t("Choose a folder…"), menuish: false, cls: "cchip--folder is-warn", onclick: type })
   return chip({
     ico: ICONS.folder,
     label: value ? folderName(value) : t("Choose a folder…"),
     title: value ? `${t("Folder")}: ${value}` : "",
-    cls: value ? "" : "is-warn",
+    cls: `cchip--folder${value ? "" : " is-warn"}`,
     onclick: (e) =>
       menu(e.currentTarget, [
         ...known.map((r) => ({ label: folderName(r), hint: r, checked: r === value, run: () => r !== value && onChange(r) })),
@@ -1016,10 +1065,9 @@ async function renderChips() {
     const models = ctx.models()
     const model = models.find((m) => m.id === draft.model)
     const parts = []
-    const where = [] // an agent chat's computer and folder: where it works, beside the title
     if (draft.kind === "agent") {
-      const others = otherDevices()
-      if (others.length) where.push(deviceChip(others))
+      // Computer, folder and mode: where and how the agent works, in the bar above the composer.
+      const where = [deviceChip(otherDevices())]
       if (draftHere()) {
         const roots = s?.remote?.enabled ? s.remote.roots : []
         if (!roots.includes(draft.dir)) draft.dir = roots[0] || ""
@@ -1027,9 +1075,14 @@ async function renderChips() {
       } else {
         where.push(elsewhereFolderChip(draftDevice(), draft.dir, (d) => ((draft.dir = d), renderChips())))
       }
-      parts.push(modeChip(draft.mode, (m) => ((draft.mode = m), renderChips())))
-    }
-    $("chat-place").replaceChildren(...where)
+      where.push(modeChip(draft.mode, (m) => ((draft.mode = m), renderChips())))
+      renderTarget(where, [
+        { text: deviceWord() },
+        { text: draft.dir ? folderName(draft.dir) : draftHere() ? t("Add folder…") : t("Choose a folder…"), cls: draft.dir ? "" : "is-warn" },
+        { text: modeName(draft.mode) },
+      ])
+    } else renderTarget(null)
+    $("chat-place").replaceChildren()
     const shell = terminalTarget()
     aimTerminal(shell)
     parts.push(modelChip(models, draft.model, (id) => {
@@ -1061,6 +1114,7 @@ async function renderChips() {
     return
   }
   const chat = open?.chat
+  renderTarget(null)
   aimTerminal(terminalTarget())
   if (!chat?.kind) {
     box.replaceChildren()

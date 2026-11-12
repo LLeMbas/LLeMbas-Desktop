@@ -4,6 +4,26 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Where a new agent chat works is one slim bar above the composer.** Computer, folder and mode
+  are three chips of the header's family on one line directly above the message box, each opening
+  its menu -- no longer split between the header's title (computer, folder) and its settings
+  (mode). The three share the line: a long computer name or path gives way with an ellipsis (the
+  whole of it in the tooltip) and the mode is never pushed out. On a phone's width of chat the
+  bar is one summary chip -- "studio · project · Edit" -- that opens the three above it. The
+  computer is always said, also where it is the only one linked. An open agent chat is unchanged:
+  its folder and computer beside the title, its mode with the settings.
+- **The composer's chips wrap; nothing in it scrolls out of sight.** The chips' line was a
+  sideways scroller with its scrollbar hidden. It wraps onto another line now, and a chip wider
+  than the line shortens with an ellipsis (checked at 1920, 1280, 1024, 800 and 390 px).
+
+### Fixed
+
+- A menu opened at the window's right edge could reach half a pixel past it.
+
 ## [1.0.0-beta.8] — 2026-11-10
 
 LLeMbas CLI 2.0.0-beta.8 inside, the look and words of LLeMbas 2.0.0-beta.10.

@@ -927,8 +927,15 @@ function d4(over = {}) {
   }
 }
 
+/** The bar's three chips, opened from the summary chip where the bar is folded (narrow). */
+async function targetChips(p) {
+  if ((await p.isVisible("#target-sum")) && (await p.getAttribute("#target-sum", "aria-expanded")) !== "true") await p.click("#target-sum")
+  await p.waitForSelector("#target-chips .cchip--device", { state: "visible" })
+}
+
 async function pickDevice(p, name) {
-  await p.click("#chat-place .cchip--device")
+  await targetChips(p)
+  await p.click("#target-chips .cchip--device")
   await p.locator(".menu .menu__item", { hasText: name }).first().click()
 }
 
@@ -936,12 +943,12 @@ test("D4: a new agent chat defaults to this computer and can be sent to another 
   const p = await page(d4())
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
-  await p.waitForSelector("#chat-place .cchip--device")
-  assert.match(await p.textContent("#chat-place .cchip--device"), /This computer/)
+  await p.waitForSelector("#target-chips .cchip--device")
+  assert.match(await p.textContent("#target-chips .cchip--device"), /This computer/)
   await pickDevice(p, "studio")
-  await p.waitForFunction(() => /studio/.test(document.querySelector("#chat-place .cchip--device")?.textContent || ""))
+  await p.waitForFunction(() => /studio/.test(document.querySelector("#target-chips .cchip--device")?.textContent || ""))
   assert.match(await p.textContent("#new-chat .hello__sub"), /studio/, "the greeting names the computer")
-  assert.match(await p.textContent("#chat-place"), /site/, "the folder its agent chats work in")
+  assert.match(await p.textContent("#target-chips"), /site/, "the folder its agent chats work in")
   assert.ok(await p.isHidden("#link-notice"), "this computer's agent is not in the way")
   await shot(p, "d4-device-1280")
   // The Terminal opens on that computer, in that folder, before the first message.
@@ -964,33 +971,39 @@ test("D4: on a computer with no known folder the path is typed; back to this com
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
   await pickDevice(p, "studio")
-  await p.waitForSelector("#chat-place .cchip.is-warn")
+  await p.waitForSelector("#target-chips .cchip.is-warn")
   await p.fill("#composer-text", "Hello")
   await p.click("#send")
   await p.waitForSelector("#thread-note:not([hidden])")
   assert.equal(await p.evaluate(() => window.__mock.api("POST", "/chats").length), 0, "nothing sent without a folder")
-  await p.click("#chat-place .cchip.is-warn")
+  await p.click("#target-chips .cchip.is-warn")
   await p.waitForSelector("dialog[open] .dialog__input")
   await p.fill("dialog[open] .dialog__input", "/home/dev/other")
   await p.click("dialog[open] .btn--primary")
-  await p.waitForFunction(() => /other/.test(document.querySelector("#chat-place").textContent))
+  await p.waitForFunction(() => /other/.test(document.querySelector("#target-chips").textContent))
   await pickDevice(p, "This computer")
-  await p.waitForFunction(() => /project/.test(document.querySelector("#chat-place").textContent))
+  await p.waitForFunction(() => /project/.test(document.querySelector("#target-chips").textContent))
   assert.deepEqual(p.errors, [])
 })
 
-test("D4: with no other computer linked there is no choice to make; at 390 px the chips stay inside", async () => {
+test("D4: with no other computer linked the bar still says the computer, its menu only this one; at 390 px the bar is one chip that opens the three", async () => {
   let p = await page(b3())
   await p.click("#new-chat-btn")
   await p.click(".kind__tab >> text=Agent")
-  await p.waitForSelector("#chat-settings .cchip")
-  assert.equal(await p.locator("#chat-place .cchip--device").count(), 0)
+  await p.waitForSelector("#target-chips .cchip--device")
+  assert.match(await p.textContent("#target-chips .cchip--device"), /This computer/)
+  await p.click("#target-chips .cchip--device")
+  assert.equal(await p.locator(".menu .menu__item").count(), 1, "nothing else to choose")
   await p.context().close()
   p = await page(d4(), { width: 390, height: 844 })
   await p.evaluate(() => document.getElementById("new-chat-btn").click())
   await p.click(".kind__tab >> text=Agent")
+  await p.waitForSelector("#target-sum", { state: "visible" })
+  assert.ok(await p.isHidden("#target-chips"), "folded: the three are behind the summary")
   await pickDevice(p, "studio")
-  await p.waitForFunction(() => /studio/.test(document.querySelector("#chat-place .cchip--device")?.textContent || ""))
+  await p.waitForFunction(() => /studio/.test(document.querySelector("#target-chips .cchip--device")?.textContent || ""))
+  assert.match(await p.textContent("#target-sum"), /studio.*site.*Edit/, "the summary says all three")
+  assert.equal(await p.getAttribute("#target-sum", "aria-expanded"), "true", "a choice keeps the three open")
   assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
   await shot(p, "d4-device-390")
   assert.deepEqual(p.errors, [])
@@ -1988,7 +2001,7 @@ function ci2(kind) {
 /** Every visible button of the header and the composer inside the window, none of zero width. */
 async function reachable(p, width) {
   return p.$$eval(
-    "#chat-head button, #composer button",
+    "#chat-head button, #chat-target button, #composer button",
     (l, w) =>
       l
         .filter((b) => b.offsetParent !== null && getComputedStyle(b).visibility !== "hidden")
@@ -2076,13 +2089,14 @@ test("CI2: at 1920, 1280, 1024, 800 and 390 px every control is reachable, with 
   }
 })
 
-test("CI2: a new agent chat says where it works beside the title and its settings at the right; the composer only the message", async () => {
+test("CI2: a new agent chat's settings are in the header; where it works is the bar above the composer, which holds only the message", async () => {
   for (const width of [1280, 390]) {
     const p = await page(ci2(), { width, height: 844 })
     await p.waitForSelector("#chat-settings .cchip--model", { state: "attached" })
     await p.click(".kind__tab >> text=Agent")
-    await p.waitForSelector("#chat-place .cchip")
+    await p.waitForSelector("#target-chips .cchip", { state: "attached" })
     assert.equal(await p.locator("#composer .cchip").count(), 0, "nothing but the message in an agent chat's composer")
+    assert.equal(await p.locator("#chat-place .cchip, #chat-settings .cchip--mode").count(), 0, "computer, folder and mode are not in the header")
     assert.ok(await noSideways(p, width))
     assert.deepEqual(await reachable(p, width), [], `${width}: every control inside`)
     assert.deepEqual(await overlapping(p), [], `${width}: nothing drawn over another`)
@@ -2090,6 +2104,108 @@ test("CI2: a new agent chat says where it works beside the title and its setting
     assert.deepEqual(await overlapping(p), [], `${width}: unfolded, nothing drawn over another`)
     assert.deepEqual(await reachable(p, width), [], `${width}: unfolded, every control inside`)
     await shot(p, `ci2-new-agent-${width}`)
+    // A chat on the server has no such bar.
+    await p.click(".kind__tab >> text=Chat")
+    await p.waitForSelector("#chat-target", { state: "hidden" })
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+// --- T1: the agent target bar and the composer, by construction ---------------------------------
+
+const LONG_HOST = "a-workstation-with-a-remarkably-long-name-in-the-far-wing"
+const LONG_DIR = "/srv/projects/the-lembas-recipe-and-all-of-its-variants-through-the-ages"
+
+function t1() {
+  const cfg = ci2()
+  cfg.terminal = [READY]
+  Object.assign(cfg.routes, {
+    "GET /devices": { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true }, { id: "token9", name: LONG_HOST, host: LONG_HOST, platform: "linux", terminal: true }] },
+    "GET /chats": { chats: [chatRow(), agentChat(), agentChat({ id: "chat9", title: "The site", device: { token_id: "token9", directory: LONG_DIR } })], more: false },
+    "GET /models?kind=agent&device=token9": { ...models(), agent_subagents: { offered: true, device_runs: true }, subagents_cap: 8 },
+  })
+  return cfg
+}
+
+/** Whether every one of `selector` is whole inside the window and inside whatever clips it. */
+const inside = (p, selector, width) =>
+  p.$$eval(
+    selector,
+    (l, w) =>
+      l.filter((b) => b.offsetParent !== null).every((b) => {
+        const r = b.getBoundingClientRect()
+        return r.width >= 8 && r.left >= -1 && r.right <= w + 1
+      }),
+    width,
+  )
+
+test("T1: at 1920, 1280, 1024, 800 and 390 px the bar's computer, folder and mode are reachable with a long name and a long path, and each opens its menu", async () => {
+  for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844]]) {
+    const p = await page(t1(), { width, height })
+    await p.evaluate(() => document.getElementById("new-chat-btn").click())
+    await p.click(".kind__tab >> text=Agent")
+    await pickDevice(p, LONG_HOST)
+    await p.waitForFunction(() => /remarkably/.test(document.querySelector("#target-chips .cchip--device")?.textContent || ""))
+    await p.waitForSelector("#chat-settings .cchip--subagents", { state: "attached" })
+    const folded = await p.isVisible("#target-sum")
+    assert.equal(folded, width === 390, `${width}: folded only where the column is narrow`)
+    if (folded) {
+      // One chip that says all three, the mode never pushed out by a long name.
+      const words = await p.$$eval("#target-sum .target__word", (l) => l.map((x) => [x.textContent, x.getBoundingClientRect().width > 8]))
+      assert.equal(words.length, 3)
+      assert.ok(words.every(([, seen]) => seen), `${width}: ${JSON.stringify(words)}`)
+      assert.equal(words[2][0], "Edit")
+    }
+    await targetChips(p)
+    // One family: the same height, on one line where they are side by side.
+    const boxes = await p.$$eval("#target-chips .cchip", (l) => l.map((x) => { const r = x.getBoundingClientRect(); return { h: r.height, top: r.top, cls: x.className } }))
+    assert.equal(boxes.length, 3, `${width}: computer, folder, mode`)
+    assert.equal(new Set(boxes.map((b) => b.h)).size, 1, `${width}: one height`)
+    if (!folded) assert.equal(new Set(boxes.map((b) => b.top)).size, 1, `${width}: one line`)
+    assert.ok(await noSideways(p, width), `${width}: nothing sideways`)
+    assert.deepEqual(await reachable(p, width), [], `${width}: every control inside`)
+    assert.ok(await inside(p, "#chat-target button", width), `${width}: the bar inside the window`)
+    // The bar sits directly above the composer card, within its column.
+    const [bar, card] = await p.evaluate(() => ["chat-target", "composer"].map((id) => { const r = document.getElementById(id).getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom } }))
+    assert.ok(bar.bottom <= card.top && card.top - bar.bottom < 16, `${width}: directly above`)
+    assert.ok(bar.left >= card.left - 1 && bar.right <= card.right + 1, `${width}: within the composer's column`)
+    for (const [cls, word] of [["device", /This computer/], ["folder", /Type a folder/], ["mode", /Plan/]]) {
+      await p.click(`#target-chips .cchip--${cls}`)
+      await p.waitForSelector(".menu")
+      assert.match(await p.textContent(".menu"), word, `${width}: the ${cls} menu`)
+      const m = await p.evaluate(() => { const r = document.querySelector(".menu").getBoundingClientRect(); return (r.left >= 0 && r.right <= innerWidth + 0.5 && r.top >= 0 && r.bottom <= innerHeight + 0.5) || [r.left, r.right, r.top, r.bottom, innerWidth, innerHeight] })
+      assert.ok(m === true, `${width}: the ${cls} menu inside the window ${JSON.stringify(m)}`)
+      await p.keyboard.press("Escape")
+    }
+    await shot(p, `t1-target-${width}`)
+    // The mode chosen there is the one the chat starts in.
+    await p.click("#target-chips .cchip--mode")
+    await p.locator(".menu .menu__item", { hasText: "Plan" }).click()
+    await p.fill("#composer-text", "Look around")
+    await p.click("#send")
+    await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+    const [made] = await p.evaluate(() => window.__mock.api("POST", "/chats"))
+    assert.deepEqual([made.args.body.device, made.args.body.directory, made.args.body.mode], ["token9", LONG_DIR, "plan"])
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+test("T1: the composer's chips wrap and never scroll: with a file, Draw a picture, Dictate, Stop and Send nothing is hidden at any width", async () => {
+  for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844]]) {
+    const p = await page(ci2(), { width, height })
+    await p.evaluate(() => document.querySelector('.chatrow[data-id="chat1"]').click())
+    await p.waitForSelector("#composer-chips .cchip--picture")
+    const style = await p.$eval("#composer-chips", (el) => { const cs = getComputedStyle(el); return [cs.overflowX, cs.flexWrap] })
+    assert.deepEqual(style, ["visible", "wrap"], "no scroller")
+    await p.fill("#composer-text", "A long message, ".repeat(30))
+    assert.ok(await noSideways(p, width), `${width}: nothing sideways`)
+    assert.deepEqual(await reachable(p, width), [], `${width}: every control inside`)
+    assert.ok(await inside(p, "#composer button", width), `${width}: the composer's buttons inside the window`)
+    const fits = await p.$eval("#composer-chips", (el) => el.scrollWidth <= el.clientWidth + 1)
+    assert.ok(fits, `${width}: the chips' line holds them`)
+    await shot(p, `t1-composer-${width}`)
     assert.deepEqual(p.errors, [])
     await p.context().close()
   }
