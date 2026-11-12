@@ -1223,6 +1223,13 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .menu__item:disabled { opacity: var(--opacity-dim); cursor: default; }
 .menu__item.is-danger { color: var(--danger); }
 .menu__label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* A row that says two things -- what it is, and a quieter word about it (a computer's host, a
+   folder's whole path): two tracks of the one row, the label left and the hint right. The hint
+   is as wide as its words up to most of the row, then it is cut; the label has the rest and is
+   cut first. Each with an ellipsis, a gap between them whatever they say. */
+.menu__label--two { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(65%); column-gap: var(--sp-3); align-items: baseline; }
+.menu__label--two > * { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.menu__hint { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); text-align: right; }
 .menu__check { color: var(--accent); }
 .menu__sep { height: var(--border-w); margin: var(--sp-1) 0; background: var(--border); }
 

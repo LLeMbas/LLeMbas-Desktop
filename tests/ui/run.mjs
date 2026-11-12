@@ -232,6 +232,29 @@ async function page(config, { width = 1280, height = 860, clock = false, wait = 
   // Another language than the account's: chosen as Settings would keep it, before the page loads.
   if (lang) await p.addInitScript((code) => localStorage.setItem("lembas.language", code), lang)
   await p.addInitScript({ path: join(HERE, "mock-tauri.js") })
+  // Every menu the page opens, in every test, is looked at as it appears: a row's label and its
+  // hint never touch (8 px between them at least) and neither runs out of the menu, which is
+  // inside the window. What is wrong is kept for the run loop, which fails the test for it.
+  await p.addInitScript(() => {
+    window.__menuProblems = []
+    const look = (menu) => {
+      const box = menu.getBoundingClientRect()
+      if (box.left < -0.5 || box.right > innerWidth + 0.5) window.__menuProblems.push(`a menu outside the window (${Math.round(box.left)}..${Math.round(box.right)} of ${innerWidth})`)
+      for (const item of menu.querySelectorAll(".menu__item")) {
+        const hint = item.querySelector(".menu__hint")
+        if (!hint) continue
+        const label = hint.previousElementSibling
+        const [l, h] = [label.getBoundingClientRect(), hint.getBoundingClientRect()]
+        const said = `"${label.textContent}" / "${hint.textContent}"`
+        if (h.left - l.right < 8) window.__menuProblems.push(`a menu row's label and hint touch (${Math.round(h.left - l.right)} px): ${said}`)
+        if (l.left < box.left - 0.5 || h.right > box.right + 0.5 || h.width < 8 || l.width < 8) window.__menuProblems.push(`a menu row's label or hint outside its menu, or gone: ${said}`)
+        if (getComputedStyle(hint).fontSize === getComputedStyle(label).fontSize && getComputedStyle(hint).color === getComputedStyle(label).color) window.__menuProblems.push(`a menu row's hint looks like its label: ${said}`)
+      }
+    }
+    new MutationObserver((changes) => {
+      for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1 && n.classList.contains("menu")) queueMicrotask(() => n.isConnected && look(n))
+    }).observe(document, { childList: true, subtree: true })
+  })
   await p.goto(`${ORIGIN}/index.html`)
   await p.waitForSelector(wait)
   p.errors = errors
@@ -1047,6 +1070,35 @@ test("D4: on a computer with no known folder the path is typed; back to this com
   await pickDevice(p, "This computer")
   await p.waitForFunction(() => /project/.test(document.querySelector("#target-chips").textContent))
   assert.deepEqual(p.errors, [])
+})
+
+test("D4: the computer menu's rows say a name and, apart from it, what the name does not: no host twice, a gap between the two, a long name cut before its hint, at 1280 and 390 px", async () => {
+  for (const [width, height] of [[1280, 860], [390, 844]]) {
+    const cfg = d4({
+      "GET /devices": { devices: [
+        { id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true },
+        { id: "token8", name: "thor", host: "Thor", platform: "linux-x64", terminal: true },
+        { id: "token9", name: "The studio", host: "studio", platform: "linux", terminal: true },
+        { id: "token7", name: LONG_HOST, host: `${LONG_HOST}.example.org`, platform: "linux-x64", terminal: true },
+      ] },
+    })
+    const p = await page(cfg, { width, height })
+    await p.evaluate(() => document.getElementById("new-chat-btn").click())
+    await targetChips(p)
+    await p.click("#target-chips .cchip--device")
+    await p.waitForSelector(".menu .menu__item")
+    const rows = await p.$$eval(".menu .menu__item", (l) => l.map((x) => { const two = x.querySelector(".menu__label--two"); return two ? [two.children[0].textContent, two.children[1].textContent] : [x.querySelector(".menu__label").textContent, ""] }))
+    assert.deepEqual(rows, [["This computer", "workbench"], ["thor", "linux-x64"], ["The studio", "studio · linux"], [LONG_HOST, `${LONG_HOST}.example.org · linux-x64`]], `${width}`)
+    // Side by side on one line, the hint quieter and to the right, both inside the menu, the menu inside the window.
+    const boxes = await p.$$eval(".menu .menu__label--two", (l) => l.map((two) => { const m = two.closest(".menu").getBoundingClientRect(); const [a, b] = [...two.children].map((c) => c.getBoundingClientRect()); return { gap: b.left - a.right, in: a.left >= m.left && b.right <= m.right + 0.5 && m.right <= innerWidth + 0.5 && m.left >= 0, line: Math.abs(a.bottom - b.bottom) < 6, cut: [...two.children].map((c) => c.scrollWidth > c.clientWidth), widths: [a.width, b.width] } }))
+    assert.ok(boxes.every((b) => b.gap >= 8 && b.in && b.line && b.widths.every((w) => w > 24)), `${width}: ${JSON.stringify(boxes)}`)
+    // Each right edge of a hint on one line (a shared track's end).
+    assert.equal(new Set(await p.$$eval(".menu .menu__hint", (l) => l.map((x) => Math.round(x.getBoundingClientRect().right)))).size, 1, `${width}: the hints end on one line`)
+    await shot(p, `d4-device-menu-${width}`)
+    await p.keyboard.press("Escape")
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
 })
 
 test("D4: with no other computer linked the bar still says the computer, its menu only this one; at 390 px the bar is one chip that opens the three", async () => {
@@ -4061,6 +4113,10 @@ try {
     ran++
     try {
       await fn()
+      // What the pages' own watch of every opened menu found (see `page`).
+      const menus = []
+      for (const context of opened) for (const pg of context.pages()) menus.push(...(await pg.evaluate(() => window.__menuProblems || []).catch(() => [])))
+      assert.deepEqual([...new Set(menus)], [], "every opened menu's rows")
       console.log(`ok   ${name}`)
     } catch (err) {
       failed++

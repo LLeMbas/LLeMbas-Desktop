@@ -1299,7 +1299,9 @@ function deviceChip(others) {
     renderNotice()
   }
   const items = [{ label: t("This computer"), hint: ctx.status()?.host || "", checked: here, run: () => choose(hereDevice() || "") }]
-  for (const d of others) items.push({ label: d.name || d.host || d.id, hint: [d.host, d.platform].filter(Boolean).join(" · "), checked: !here && current?.id === d.id, run: () => choose(d.id) })
+  // A computer's hint is what its name does not already say: one named after its host says the host once.
+  const beside = (label, parts) => parts.filter((x) => x && String(x).toLowerCase() !== String(label).toLowerCase()).join(" · ")
+  for (const d of others) items.push({ label: d.name || d.host || d.id, hint: beside(d.name || d.host || d.id, [d.host, d.platform]), checked: !here && current?.id === d.id, run: () => choose(d.id) })
   const label = deviceWord()
   return chip({ ico: ICONS.terminal, label, name: t("Computer"), title: `${t("Computer")}: ${label}`, cls: "cchip--device", onclick: (e) => menu(e.currentTarget, items) })
 }

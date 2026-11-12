@@ -4,6 +4,17 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A menu row's second word was glued to its first.** The computer menu of a new agent chat
+  read "This computerasus" and "thorthor · linux-x64": the quieter word beside a row's label
+  (a computer's host, a folder's whole path, a thinking level) had no style at all. The two are
+  on tracks of the row now -- the label left, the hint right, smaller and quieter, each cut
+  with an ellipsis where it is too long -- and a computer named after its host says the host
+  once. The test suite looks at every menu it opens for this.
+
 ## [1.0.0-beta.9] — 2026-11-12
 
 LLeMbas CLI 2.0.0-beta.9 inside, the look and words of LLeMbas 2.0.0-beta.11.
