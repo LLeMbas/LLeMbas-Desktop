@@ -2586,19 +2586,20 @@ test("P2: a reply is finished at `done`; the name a model gives the chat afterwa
 
 // --- S3: the composer's `/` and `@` menus -----------------------------------------------------------
 //
-// CONTRACT (unpinned): the server's menu routes as the plan for server 2.0.0-beta.11 words them --
+// CONTRACT (unpinned): the server's menu routes as its draft has them (`api/v2/menus.py` and
+// `serialise.mentions`, read in the server's working tree before it was committed) --
 // GET /devices/{id}/commands, GET /devices/{id}/files, GET /mentions, POST /attachments/from.
-// The answers below are written to that wording, not copied from a server fixture; replace them
-// with the fixtures (scripts/fetch-fixtures.sh) once the server has them.
+// The answers below are written to those shapes by hand; replace them with the server's
+// fixtures (scripts/fetch-fixtures.sh) once it has them.
 
 const MENTIONS = {
   items: [
     { kind: "file", path: "/notes/recipes/lembas recipe #2.md", name: "lembas recipe #2.md", detail: "/notes/recipes/lembas recipe #2.md" },
-    { kind: "attachment", id: "att7", name: "oven.png", detail: "48 kB" },
+    { kind: "attachment", id: "att7", name: "oven.png", detail: "image" },
   ],
 }
-const DEVICE_FILES = { files: [{ path: "src/app main.ts", kind: "file" }, { path: "src/tui", kind: "dir" }] }
-const DEVICE_COMMANDS = { commands: [{ name: "review", description: "Review the working tree", hint: "" }, { name: "commit", description: "Commit with a message", hint: "<message>" }, { name: "compact", description: "The device's own compact", hint: "" }] }
+const DEVICE_FILES = { files: [{ path: "src/app main.ts", kind: "file", name: "app main.ts" }, { path: "src/tui", kind: "dir", name: "tui" }], error: "", device: "workbench" }
+const DEVICE_COMMANDS = { commands: [{ name: "review", description: "Review the working tree", hint: "", kind: "custom" }, { name: "commit", description: "Commit with a message", hint: "<message>", kind: "skill" }, { name: "compact", description: "The device's own compact", hint: "", kind: "builtin" }], device: "workbench" }
 
 function s3(over = {}) {
   const cfg = i8()
@@ -2611,7 +2612,7 @@ function s3(over = {}) {
     "GET /mentions": MENTIONS,
     "GET /devices/token1/files": DEVICE_FILES,
     "GET /devices/token1/commands": DEVICE_COMMANDS,
-    "POST /attachments/from": { attachment: { id: "att9", name: "oven.png", size: 48000, image: false } },
+    "POST /attachments/from": { attachment: { id: "att9", name: "oven.png", mime: "image/png", size: 48000, kind: "image", image: false, width: 0, height: 0 } },
     "POST /chats/chat1/messages": { message: userMessage("m7", "sent"), reply: null },
     "POST /chats/chat2/messages": { message: userMessage("m8", "sent"), reply: null },
     "PATCH /chats/chat1": { chat: chatRow({ title: "Waybread, properly" }) },
@@ -2904,6 +2905,7 @@ test("S3: in a chat on the server a file is mentioned by its path or attached as
   await p.clock.fastForward(400)
   await p.waitForFunction(() => /Fetch this page/.test(document.getElementById("composer-menu")?.textContent || ""))
   assert.equal((await menuRows(p))[0], "# A page to read")
+  assert.equal(await p.textContent("#composer-menu .cmenu__note"), "https://example.org/lembas")
   await p.keyboard.press("Enter")
   await p.waitForFunction(() => window.__mock.api("POST", "/attachments/from").length === 3)
   assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/attachments/from")))[2].args.body, { chat: "chat1", url: "https://example.org/lembas" })
@@ -2931,6 +2933,15 @@ test("S3: in a chat on the server a file is mentioned by its path or attached as
   await o.clock.fastForward(400)
   await o.waitForSelector("#composer-menu:not([hidden])")
   assert.match(await o.textContent("#composer-menu"), /Nothing matches “x”\./)
+  // A device that could not answer says so in its place (the server's `error`), and the rest shows.
+  await o.evaluate(() => {
+    window.__mock.answer("GET /devices/token1/files", { files: [], error: "The device did not answer in time.", device: "workbench" })
+    window.__mock.answer("GET /mentions", { items: [{ kind: "url", url: "https://example.org/a", name: "https://example.org/a", detail: "" }] })
+  })
+  await o.keyboard.type("y")
+  await o.clock.fastForward(400)
+  await o.waitForFunction(() => /did not answer in time/.test(document.getElementById("composer-menu")?.textContent || ""))
+  assert.deepEqual(await menuRows(o), ["# On the device", "# A page to read", "Fetch this page"])
   await o.keyboard.press("Escape")
   await o.fill("#composer-text", "")
   await o.keyboard.type("/")
@@ -2977,12 +2988,14 @@ test("S3: the menu is the composer's own width, directly above it, at 1920, 1280
 
 // --- T3: the terminal -- typed ahead, ended, reconnected, switched off ------------------------------
 //
-// CONTRACT (unpinned): `GET /terminals` -> { terminals: [{ id, device, directory, opened }] } and
-// `DELETE /terminals/{id}`, as the plan for server 2.0.0-beta.11 words them; the answers below are
-// written to that wording, not copied from a server fixture. The `closed` frame's `reason` is the
-// server's own (`api/terminal.py`): exited, idle, shutdown, revoked, error.
+// CONTRACT (unpinned): `GET /terminals` -> { shells: [{ id, device, directory, seconds, chat,
+// watched }] }, `POST /terminals/{id}/end` -> 204, the ready frame's `id` and `resumed`, and the
+// refusal's `shells` at the limit, as the server's draft has them (read in its working tree
+// before it was committed); the answers below are written to those shapes by hand, not copied
+// from a server fixture. The `closed` frame's `reason` is the server's own: exited, idle,
+// shutdown, revoked, error, ended.
 
-const SHELLS = { terminals: [{ id: "sh1", device: "token1", directory: "/home/dev/project", opened: "2026-01-02T03:04:05+00:00" }, { id: "sh2", device: "token1", directory: "/home/dev/other", opened: "2026-01-02T02:00:00+00:00" }] }
+const SHELLS = { shells: [{ id: "sh1", device: "workbench", directory: "/home/dev/project", seconds: 754, chat: "chat2", watched: true }, { id: "sh2", device: "workbench", directory: "/home/dev/other", seconds: 4000, chat: "", watched: false }] }
 /** Under a fake clock: move it on in steps (every timer runs) until the page says `fn` holds. */
 async function runUntil(p, fn, step = 100, most = 100) {
   for (let i = 0; i < most; i++) {
@@ -3020,7 +3033,7 @@ test("T3: what is typed while the shell is still being opened is kept and sent i
 })
 
 test("T3: End shell asks, then ends this panel's shell on the server and offers a new one", async () => {
-  const p = await page(b3({ "GET /terminals": SHELLS, "DELETE /terminals/sh1": null }))
+  const p = await page(b3({ "GET /terminals": SHELLS, "POST /terminals/sh1/end": null }))
   await openPanel(p)
   await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
   assert.ok(await p.isVisible("#terminal-end"), "End shell, once there is a shell")
@@ -3030,10 +3043,10 @@ test("T3: End shell asks, then ends this panel's shell on the server and offers 
   assert.match(await p.textContent("dialog[open]"), /What is running in it stops/)
   // Cancel: nothing ended.
   await p.click("dialog[open] .btn >> text=Cancel")
-  assert.equal(await p.evaluate(() => window.__mock.api("DELETE", "/terminals/").length), 0)
+  assert.equal(await p.evaluate(() => window.__mock.api("POST", "/terminals/").length), 0)
   await p.click("#terminal-end")
   await p.click("dialog[open] .btn--danger")
-  await p.waitForFunction(() => window.__mock.api("DELETE", "/terminals/sh1").length === 1)
+  await p.waitForFunction(() => window.__mock.api("POST", "/terminals/sh1/end").length === 1)
   await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "The shell was ended.")
   assert.ok(await p.isHidden("#terminal-end"))
   assert.equal(await p.textContent("#terminal-again"), "New shell")
@@ -3042,10 +3055,10 @@ test("T3: End shell asks, then ends this panel's shell on the server and offers 
   await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
   // Where the shell's ready frame names it, that id is the one ended.
   await p.evaluate(() => window.__mock.shell("control", { t: "ready", id: "sh9", label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false }))
-  await p.evaluate(() => window.__mock.answer("DELETE /terminals/sh9", null))
+  await p.evaluate(() => window.__mock.answer("POST /terminals/sh9/end", null))
   await p.click("#terminal-end")
   await p.click("dialog[open] .btn--danger")
-  await p.waitForFunction(() => window.__mock.api("DELETE", "/terminals/sh9").length === 1)
+  await p.waitForFunction(() => window.__mock.api("POST", "/terminals/sh9/end").length === 1)
   await p.context().close()
   // A server without the routes: said, and the shell stays.
   const o = await page(b3())
@@ -3060,19 +3073,22 @@ test("T3: End shell asks, then ends this panel's shell on the server and offers 
 })
 
 test("T3: at the limit of open shells the ones open are listed, each with End; ended, a new one can be opened", async () => {
-  const refusal = [["control", { t: "error", message: "You already have 3 terminals open. Close one first." }], ["end", { code: 1000, reason: "", status: null, error: null }]]
-  const p = await page(b3({ "GET /terminals": SHELLS, "DELETE /terminals/sh2": null }, refusal))
+  // The refusal carries the open shells (the server's `error` frame at the limit).
+  const said = "You already have as many terminals open as you may (3). End one first."
+  const refusal = [["control", { t: "error", message: said, shells: SHELLS.shells }], ["end", { code: 1000, reason: "", status: null, error: null }]]
+  const p = await page(b3({ "GET /terminals": SHELLS, "POST /terminals/sh2/end": null }, refusal))
   await openPanel(p)
   await p.waitForSelector("#terminal-shells:not([hidden]) .termpanel__shell")
-  assert.equal(await termSays(p), "You already have 3 terminals open. Close one first.")
-  const rows = await p.$$eval("#terminal-shells .termpanel__shell", (l) => l.map((x) => [x.dataset.id, x.querySelector(".termpanel__shell-name").textContent, x.querySelector(".termpanel__shell-dir").textContent]))
-  assert.deepEqual(rows, [["sh1", "workbench", "/home/dev/project"], ["sh2", "workbench", "/home/dev/other"]])
+  assert.equal(await termSays(p), said)
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/terminals").length), 0, "the list came with the refusal")
+  const rows = await p.$$eval("#terminal-shells .termpanel__shell", (l) => l.map((x) => [x.dataset.id, ...[...x.querySelectorAll("span")].map((y) => y.textContent)]))
+  assert.deepEqual(rows, [["sh1", "workbench", "/home/dev/project", "12m 34s"], ["sh2", "workbench", "/home/dev/other", "1h 06m"]])
   assert.equal(await p.textContent("#terminal-again"), "Reconnect")
   await shot(p, "t3-limit")
-  // End one: the list is read again and is shorter.
-  await p.evaluate(() => window.__mock.answer("GET /terminals", { terminals: [{ id: "sh1", device: "token1", directory: "/home/dev/project", opened: "2026-01-02T03:04:05+00:00" }] }))
+  // End one: the list is read again from the server and is shorter.
+  await p.evaluate(() => window.__mock.answer("GET /terminals", { shells: [{ id: "sh1", device: "workbench", directory: "/home/dev/project", seconds: 760, chat: "chat2", watched: true }] }))
   await p.click("#terminal-shells .termpanel__shell[data-id='sh2'] .btn")
-  await p.waitForFunction(() => window.__mock.api("DELETE", "/terminals/sh2").length === 1)
+  await p.waitForFunction(() => window.__mock.api("POST", "/terminals/sh2/end").length === 1)
   await p.waitForFunction(() => document.querySelectorAll("#terminal-shells .termpanel__shell").length === 1)
   // Reconnect, now that there is room: a shell, and the list goes.
   await p.evaluate(() => (window.__mockConfig.terminal = [["control", { t: "ready", label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false }]]))
@@ -3105,6 +3121,12 @@ test("T3: a lost connection is tried again by itself, each time after longer, an
   await p.clock.runFor(1100)
   await p.waitForFunction(() => window.__mock.terminals().length === 3)
   await p.waitForFunction(() => /^Connected again\. If the server or the computer restarted meanwhile, this is a new shell\.$/.test(document.querySelector("#terminal-message").textContent))
+  // (A server that says so settles it: `resumed` true is the shell that was running.)
+  await p.evaluate(() => (window.__mockConfig.terminal = [["control", { t: "ready", id: "sh1", resumed: true, label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false }]]))
+  await p.evaluate(() => window.__mock.shell("end", { code: null, reason: "", status: null, error: "The connection broke off: reset" }))
+  await p.clock.runFor(1100)
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected again, to the same shell.")
+  await p.evaluate(() => (window.__mockConfig.terminal = [["control", { t: "ready", id: "sh3", resumed: false, label: "workbench", dir: "/home/dev/project", cols: 80, rows: 24, shared: false, osc: false }]]))
   assert.ok(await p.isHidden("#terminal-again"))
   assert.match(await screenText(p), /reconnected/)
   // The link to the computer drops (the server says so): reconnected, and the shell is new.
@@ -3112,24 +3134,24 @@ test("T3: a lost connection is tried again by itself, each time after longer, an
   await p.waitForFunction(() => /The connection to the computer was lost\. Reconnecting in 1 s…/.test(document.querySelector("#terminal-message").textContent))
   // Reconnect now does not wait.
   await p.click("#terminal-again")
-  await p.waitForFunction(() => window.__mock.terminals().length === 4)
+  await p.waitForFunction(() => window.__mock.terminals().length === 5)
   await p.waitForFunction(() => /This is a new shell: the one before ended with the connection\./.test(document.querySelector("#terminal-message").textContent))
   // The shell exited: said, and nothing is opened by itself -- New shell is the person's to press.
   await p.evaluate(() => window.__mock.shell("control", { t: "closed", reason: "exited", message: "The shell exited." }))
   await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "The shell exited.")
   await p.clock.runFor(60000)
-  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 4, "no shell opened by itself")
+  assert.equal(await p.evaluate(() => window.__mock.terminals().length), 5, "no shell opened by itself")
   assert.equal(await p.textContent("#terminal-again"), "New shell")
   // After every try has failed it stops, and waits for Reconnect.
   await p.click("#terminal-again")
-  await p.waitForFunction(() => window.__mock.terminals().length === 5)
+  await p.waitForFunction(() => window.__mock.terminals().length === 6)
   await p.evaluate(() => (window.__mockConfig.terminal = [["end", { code: null, reason: "", status: null, error: "Could not reach the server: refused" }]]))
   await p.evaluate(() => window.__mock.shell("end", { code: null, reason: "", status: null, error: "The connection broke off: reset" }))
   await runUntil(p, () => /It did not come back/.test(document.querySelector("#terminal-message").textContent), 1000, 120)
   await p.waitForFunction(() => /It did not come back\. Reconnect when it is there again\./.test(document.querySelector("#terminal-message").textContent))
   assert.equal(await p.textContent("#terminal-again"), "Reconnect")
   const tried = await p.evaluate(() => window.__mock.terminals().length)
-  assert.equal(tried, 5 + 6, "six tries, 1 2 4 8 15 30 s apart, and no more")
+  assert.equal(tried, 6 + 6, "six tries, 1 2 4 8 15 30 s apart, and no more")
   await p.clock.runFor(120000)
   assert.equal(await p.evaluate(() => window.__mock.terminals().length), tried)
   // Another chat: the old shell's reconnecting is not carried over.
@@ -3194,7 +3216,7 @@ test("T3: the panel fits at 1920, 1280, 1024, 800, 390 px and the window's small
     await p.click("#chat-tools [data-terminal-toggle]")
     await p.waitForFunction(() => document.querySelector("#terminal .xterm-rows")?.textContent.includes("dev@workbench"))
     // Every state's controls at once: the marks' arrows, End, the lost line with Reconnect now, the list.
-    await p.evaluate(() => window.__mock.shell("control", { t: "error", message: "You already have 3 terminals open. Close one first." }))
+    await p.evaluate((shells) => window.__mock.shell("control", { t: "error", message: "You already have as many terminals open as you may (3). End one first.", shells }), SHELLS.shells)
     await p.waitForSelector("#terminal-shells:not([hidden]) .termpanel__shell")
     // xterm fits itself to its box a frame after the box changes (a ResizeObserver).
     await p.waitForTimeout(250)

@@ -12,9 +12,10 @@
 // above it (app.css `.cmenu`). Nothing is measured, so it is where the card is at any width.
 //
 // CONTRACT (unpinned): the three reads and the one write below are the server's `/api/v2` menu
-// routes as the plan for server 2.0.0-beta.11 words them; no fixture of them is pinned in
-// tests/ui/fixtures yet. Each is marked `CONTRACT` where it is called. A server without them
-// answers 404: the device's and the server's groups are then simply absent.
+// routes as its draft has them (`api/v2/menus.py`, read in the server's working tree before it
+// was committed); no fixture of them is pinned in tests/ui/fixtures yet. Each is marked
+// `CONTRACT` where it is called. A server without them answers 404: the device's and the
+// server's groups are then simply absent.
 
 import { $, h, clear, icon, ICONS } from "./dom.js"
 import { get, post } from "./bridge.js"
@@ -66,6 +67,7 @@ const looksLikeUrl = (text) => /^https?:\/\/[^\s/]+\.[^\s]+$/i.test(text) || /^w
 // --- The device's own commands --------------------------------------------------------------------
 
 let deviceCommands = []
+let deviceLabel = "" // the device's short name, as the server says it with its commands
 let deviceKey = ""
 let deviceAt = 0
 
@@ -77,7 +79,7 @@ function refreshDevice() {
     deviceKey = ""
     return
   }
-  // CONTRACT: GET /devices/{id}/commands?chat=&cwd= -> { commands: [{ name, description, hint }] }
+  // CONTRACT: GET /devices/{id}/commands?chat=&cwd= -> { commands: [{ name, description, hint, kind }], device }
   const path = `/devices/${enc(w.device)}/commands?chat=${enc(w.chat)}&cwd=${enc(w.cwd)}`
   if (path === deviceKey && Date.now() - deviceAt < 5000) return
   deviceKey = path
@@ -85,6 +87,7 @@ function refreshDevice() {
   get(path)
     .then((r) => {
       if (path !== deviceKey) return
+      deviceLabel = typeof r?.device === "string" ? r.device : ""
       deviceCommands = (r?.commands || [])
         .filter((c) => c && typeof c.name === "string" && c.name)
         .map((c) => ({ name: c.name.replace(/^\/+/, ""), summary: c.description || "", argument: c.hint || "", device: true }))
@@ -230,7 +233,7 @@ function drawCommands(query) {
     return option({ ico: c.device ? ICONS.terminal : ICONS.bolt, name: `/${c.name}${arg ? ` ${arg}` : ""}`, note: c.summary, mono: true, data: { command: c.name, ...(c.device && arg ? { input: "1" } : {}) } })
   }
   if (own.length) list.append(...group(t("Commands"), own.map(row)))
-  if (device.length) list.append(...group(ctx.where().deviceName || t("On the device"), device.map(row)))
+  if (device.length) list.append(...group(deviceLabel || ctx.where().deviceName || t("On the device"), device.map(row)))
 }
 
 /** What `@` offers for `query`: asked of the device (an agent chat) and of the server, together. */
@@ -238,9 +241,9 @@ async function loadMentions(query) {
   const mine = ++asked
   const w = ctx.where()
   const nothing = { files: [] }
-  // CONTRACT: GET /devices/{id}/files?q=&chat=&cwd= -> { files: [{ path, kind }] }
+  // CONTRACT: GET /devices/{id}/files?q=&chat=&cwd= -> { files: [{ path, kind, name }], error, device }
   const device = w.device ? get(`/devices/${enc(w.device)}/files?q=${enc(query)}&chat=${enc(w.chat)}&cwd=${enc(w.cwd)}`).catch(() => nothing) : Promise.resolve(nothing)
-  // CONTRACT: GET /mentions?q=&chat= -> { items: [{ kind: "attachment"|"file"|"url", id?, path?, name, detail }] }
+  // CONTRACT: GET /mentions?q=&chat= -> { items: [{ kind: "attachment"|"file"|"url", id?, path?, url?, name, detail }] }
   const server = get(`/mentions?q=${enc(query)}&chat=${enc(w.chat)}`).catch(() => ({ items: [] }))
   const [d, s] = await Promise.all([device, server])
   // A round trip late: the caret may have left the mention, or a newer lookup is on its way.
@@ -249,18 +252,21 @@ async function loadMentions(query) {
   const files = (Array.isArray(d?.files) ? d.files : []).filter((f) => f && typeof f.path === "string" && f.path)
   const of = (k) => items.filter((i) => i && i.kind === k)
   // A page to read: the server's word where it gives one, else what was typed when it reads as one.
-  const urls = of("url").length ? of("url") : looksLikeUrl(query) ? [{ kind: "url", name: query, detail: query }] : []
+  const urls = of("url").length ? of("url") : looksLikeUrl(query) ? [{ kind: "url", url: query, name: query }] : []
+  const named = (typeof d?.device === "string" && d.device) || w.deviceName
   clear(list)
+  // The device could not answer (its own words): said in its place, and the rest still shows.
+  if (!files.length && typeof d?.error === "string" && d.error) list.append(h("p", { class: "cmenu__group", text: t("On the device") }), empty(d.error))
   if (files.length) {
     list.append(
       ...group(
-        `${t("On the device")}${w.deviceName ? ` · ${w.deviceName}` : ""}`,
+        `${t("On the device")}${named ? ` · ${named}` : ""}`,
         files.map((f) => option({ ico: f.kind === "dir" ? ICONS.folder : ICONS.fileText, name: f.name || f.path.replace(/\/+$/, "").split("/").pop() || f.path, note: f.path, data: { token: f.path, path: "1" } })),
       ),
     )
   }
   if (urls.length) {
-    list.append(...group(t("A page to read"), urls.map((u) => option({ ico: ICONS.link, name: t("Fetch this page"), note: u.detail || u.name, data: { token: u.detail || u.name, url: u.detail || u.name, attach: "1" } }))))
+    list.append(...group(t("A page to read"), urls.map((u) => option({ ico: ICONS.link, name: t("Fetch this page"), note: u.url || u.name, data: { token: u.url || u.name, url: u.url || u.name, attach: "1" } }))))
   }
   if (of("file").length) {
     // A file in the server's tree: mentioned by its path in a chat on the server (the model reads
@@ -280,7 +286,7 @@ async function loadMentions(query) {
   if (of("attachment").length) {
     list.append(...group(t("Already in this chat"), of("attachment").map((a) => option({ ico: ICONS.attach, name: a.name, note: a.detail, mono: false, data: { token: a.name, attachment: a.id || "", attach: "1" } }))))
   }
-  if (!list.childElementCount) list.append(empty(query ? t("Nothing matches “%(q)s”.", { q: query }) : t("Nothing to mention yet.")))
+  if (!list.querySelector(".cmenu__option") && !list.childElementCount) list.append(empty(query ? t("Nothing matches “%(q)s”.", { q: query }) : t("Nothing to mention yet.")))
   show()
   highlight(0)
   keysLine()
@@ -349,9 +355,12 @@ function choose(el, { complete = false, attach = false } = {}) {
   hide()
   if (!copy) return
   const w = ctx.where()
-  // CONTRACT: POST /attachments/from { chat, attachment } | { path } | { url }
+  // CONTRACT: POST /attachments/from -- exactly one of { attachment } | { path } | { url }, with
+  //           the chat where there is one (and, before it exists, the model a copy is for)
   //           -> what POST /attachments answers: { attachment: { id, name, size, image, … } }
-  const body = d.attachment ? { chat: w.chat, attachment: d.attachment } : d.url ? { chat: w.chat, url: d.url } : { chat: w.chat, path: d.file }
+  const body = d.attachment ? { attachment: d.attachment } : d.url ? { url: d.url } : { path: d.file }
+  if (w.chat) body.chat = w.chat
+  else if (d.attachment && w.model) body.model = w.model
   const name = d.url ? d.url : el.querySelector(".cmenu__name")?.textContent || d.token
   attachFrom(name, async () => {
     const r = await post("/attachments/from", body)

@@ -16,8 +16,9 @@
 // the computed tokens, and again when the theme changes).
 
 import { $, h, icon, ICONS } from "./dom.js"
-import { openTerminal, why, get, del } from "./bridge.js"
+import { openTerminal, why, get, post } from "./bridge.js"
 import { ask } from "./popup.js"
+import { elapsed } from "./progress.js"
 
 const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"]
 const MAX_MARKED = 200
@@ -228,7 +229,10 @@ function control(frame) {
   if (frame.t === "ready") {
     tries = 0
     shellId = typeof frame.id === "string" ? frame.id : ""
-    say(greeting || (frame.shared ? t("Connected. This shell is also open in another tab, and they share a size.") : t("Connected.")))
+    // After a reconnect the server says whether the shell is the one that was running
+    // (`resumed`); one that does not say gets the line that fits what was lost.
+    const again = !greeting ? "" : frame.resumed === true ? t("Connected again, to the same shell.") : frame.resumed === false ? t("Connected again. This is a new shell: the one before ended with the connection.") : greeting
+    say(again || (frame.shared ? t("Connected. This shell is also open in another tab, and they share a size.") : t("Connected.")))
     greeting = ""
     if (frame.dir) $("terminal-where").textContent = frame.dir
     osc = !!frame.osc
@@ -262,9 +266,8 @@ function control(frame) {
     say(frame.message || t("This terminal closed."), true)
     drop()
     offer(t("Reconnect"))
-    // CONTRACT (unpinned): the server may mark the limit (`code: "limit"`); a refusal that says
-    // nothing of its kind is taken as one where the account has shells open.
-    if (frame.code ? frame.code === "limit" : true) listShells()
+    // CONTRACT (unpinned): at the limit the frame carries the person's open `shells`.
+    if (Array.isArray(frame.shells)) drawShells(frame.shells)
   }
 }
 
@@ -332,15 +335,18 @@ function reconnect() {
 const enc = encodeURIComponent
 
 /**
- * The account's open shells.
- * CONTRACT (unpinned): GET /terminals -> { terminals: [{ id, device, directory, opened }] } and
- * DELETE /terminals/{id}, as the plan for server 2.0.0-beta.11 words them; a server without
- * them answers 404, which is said.
+ * The account's open shells, and ending one.
+ * CONTRACT (unpinned): `GET /terminals` -> { shells: [{ id, device, directory, seconds, chat,
+ * watched }] } and `POST /terminals/{id}/end` -> 204, as the server's draft of these routes has
+ * them (read in its working tree; the plan worded them `terminals` and DELETE, and no fixture is
+ * pinned). A server without them answers 404, which is said.
  */
 async function openShells() {
   const r = await get("/terminals")
-  return Array.isArray(r?.terminals) ? r.terminals.filter((x) => x && typeof x.id === "string") : []
+  const list = Array.isArray(r?.shells) ? r.shells : Array.isArray(r?.terminals) ? r.terminals : []
+  return list.filter((x) => x && typeof x.id === "string")
 }
+const endOne = (id) => post(`/terminals/${enc(id)}/end`)
 
 /** End the shell this panel shows: asked first, since what runs in it stops. */
 async function endShell() {
@@ -350,11 +356,13 @@ async function endShell() {
   try {
     let id = shellId
     if (!id) {
-      const mine = (await openShells()).find((x) => (target.chat && x.chat === target.chat) || (x.device === target.device && x.directory === target.directory))
+      // A server that does not name the shell in its ready frame: found by its chat, or (before
+      // the chat) by its folder.
+      const mine = (await openShells()).find((x) => (target.chat ? x.chat === target.chat : !x.chat && x.directory === target.directory))
       id = mine?.id || ""
     }
     if (!id) return say(t("No open shell was found for this panel."), true)
-    await del(`/terminals/${enc(id)}`)
+    await endOne(id)
     stopCountdown()
     drop()
     shellId = ""
@@ -372,19 +380,12 @@ function hideShells() {
 }
 
 /** The open shells, each with End: shown where the server refused one more. */
-async function listShells() {
+function drawShells(list) {
   const box = $("terminal-shells")
-  let list
-  try {
-    list = await openShells()
-  } catch {
-    return hideShells()
-  }
+  list = (list || []).filter((x) => x && typeof x.id === "string")
   if (!list.length || session) return hideShells()
-  const when = (x) => {
-    const at = new Date(typeof x.opened === "number" ? x.opened * 1000 : x.opened)
-    return Number.isNaN(at.getTime()) ? "" : at.toLocaleTimeString(document.documentElement.lang || undefined, { hour: "2-digit", minute: "2-digit" })
-  }
+  // How long it has been open (`seconds`), as a clock writes it.
+  const since = (x) => (Number.isFinite(Number(x.seconds)) ? elapsed(Number(x.seconds) * 1000) : "")
   box.replaceChildren(
     h("p", { class: "termpanel__shells-title", text: t("Your open shells") }),
     h(
@@ -395,9 +396,10 @@ async function listShells() {
         end.addEventListener("click", async () => {
           end.disabled = true
           try {
-            await del(`/terminals/${enc(x.id)}`)
+            await endOne(x.id)
             say(t("The shell was ended."))
-            await listShells()
+            // What is open now, from the server; where it cannot say, this row simply goes.
+            drawShells(await openShells().catch(() => list.filter((y) => y !== x)))
           } catch (err) {
             end.disabled = false
             say(why(err), true)
@@ -408,7 +410,7 @@ async function listShells() {
           { class: "termpanel__shell", dataset: { id: x.id } },
           h("span", { class: "termpanel__shell-name", text: ctx.deviceName(x.device) || x.device || "" }),
           h("span", { class: "termpanel__shell-dir", title: x.directory || "", text: x.directory || "" }),
-          h("span", { class: "termpanel__shell-when", text: when(x) }),
+          h("span", { class: "termpanel__shell-when", text: since(x) }),
           end,
         )
       }),

@@ -60,7 +60,7 @@ All notable changes to LLeMbas Desktop. The format follows
   have open are listed -- computer, folder, since when -- each with End. A connection that is
   lost (the network, the server restarting, the link to the computer dropping) is tried again
   by itself after 1, 2, 4, 8, 15 and 30 seconds, counted down, with Reconnect now; when a shell
-  opens again it says in one line that it is a new one. A shell that exited or sat idle is not
+  opens again it says in one line whether it is the same one or a new one. A shell that exited or sat idle is not
   replaced by itself: New shell is yours to press. Ending and listing shells need a server with
   those routes (2.0.0-beta.11).
 - **The Terminal button says why it cannot open.** On an agent chat whose computer is not linked

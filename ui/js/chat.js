@@ -2075,7 +2075,7 @@ function menuContext() {
     where: () => {
       if (draft) {
         const device = draft.kind === "agent" ? draftDevice() : ""
-        return { chat: "", device, cwd: device ? draft.dir || "" : "", deviceName: device ? deviceWord() : "" }
+        return { chat: "", device, cwd: device ? draft.dir || "" : "", deviceName: device ? deviceWord() : "", model: draft.model || "" }
       }
       const chat = open?.chat
       const device = chat?.kind === "agent" ? chat.device?.token_id || "" : ""
