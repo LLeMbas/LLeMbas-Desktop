@@ -618,6 +618,8 @@ class Live {
   }
 
   async start() {
+    this.opened = Date.now()
+    this.frames = 0
     try {
       this.handle = await follow(`/chats/${encodeURIComponent(this.chat.id)}/messages/${encodeURIComponent(this.id)}/stream`, {
         onFrame: (event, data) => this.frame(event, data),
@@ -639,6 +641,7 @@ class Live {
     // 2.0.0-beta.11: the reply ends when it is saved, the naming a moment later).
     if (event === "title") return this.named(data?.chat)
     if (this.done) return
+    this.frames = (this.frames || 0) + 1
     // Any frame that carries `progress` (the status frame does, from server 2.0.0-beta.8 on):
     // the object, or null for nothing running -- then the status text again.
     if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "progress")) {
@@ -729,8 +732,12 @@ class Live {
     // so (the chat still says it is being written, the stream closes as it opens) would be read
     // and followed in a loop as fast as the server answers: after a few times it is said, and
     // the person reads again.
+    // Only a stream that gave nothing counts: one that sent frames for a while and was then
+    // closed (a proxy's time limit on a long reply) is simply followed again, however often.
     if (!err) {
-      ended = ended.id === this.id ? { id: this.id, n: ended.n + 1 } : { id: this.id, n: 1 }
+      const empty = !this.frames || Date.now() - this.opened < QUICK_END
+      if (!empty) ended = { id: "", n: 0 }
+      else ended = ended.id === this.id ? { id: this.id, n: ended.n + 1 } : { id: this.id, n: 1 }
       if (ended.n > 3) err = { detail: t("The connection was lost.") }
     }
     if (err) {
@@ -751,8 +758,10 @@ function setRunning(on) {
   $("composer").dataset.running = String(on)
 }
 
-/** The reply whose stream last ended without `done`, and how many times running. */
+/** The reply whose stream last ended without `done` having given anything, and how many times running. */
 let ended = { id: "", n: 0 }
+/** A stream that ends sooner than this (ms) after it was opened gave nothing worth the name. */
+const QUICK_END = 5000
 
 function follower(chat, messageId) {
   if (open?.live) open.live.stop()
