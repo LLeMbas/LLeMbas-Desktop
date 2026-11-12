@@ -1077,7 +1077,7 @@ test("D4: the computer menu's rows say a name and, apart from it, what the name 
     const cfg = d4({
       "GET /devices": { devices: [
         { id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true },
-        { id: "token8", name: "thor", host: "Thor", platform: "linux-x64", terminal: true },
+        { id: "token8", name: "mill", host: "Mill", platform: "linux-x64", terminal: true },
         { id: "token9", name: "The studio", host: "studio", platform: "linux", terminal: true },
         { id: "token7", name: LONG_HOST, host: `${LONG_HOST}.example.org`, platform: "linux-x64", terminal: true },
       ] },
@@ -1088,7 +1088,7 @@ test("D4: the computer menu's rows say a name and, apart from it, what the name 
     await p.click("#target-chips .cchip--device")
     await p.waitForSelector(".menu .menu__item")
     const rows = await p.$$eval(".menu .menu__item", (l) => l.map((x) => { const two = x.querySelector(".menu__label--two"); return two ? [two.children[0].textContent, two.children[1].textContent] : [x.querySelector(".menu__label").textContent, ""] }))
-    assert.deepEqual(rows, [["This computer", "workbench"], ["thor", "linux-x64"], ["The studio", "studio · linux"], [LONG_HOST, `${LONG_HOST}.example.org · linux-x64`]], `${width}`)
+    assert.deepEqual(rows, [["This computer", "workbench"], ["mill", "linux-x64"], ["The studio", "studio · linux"], [LONG_HOST, `${LONG_HOST}.example.org · linux-x64`]], `${width}`)
     // Side by side on one line, the hint quieter and to the right, both inside the menu, the menu inside the window.
     const boxes = await p.$$eval(".menu .menu__label--two", (l) => l.map((two) => { const m = two.closest(".menu").getBoundingClientRect(); const [a, b] = [...two.children].map((c) => c.getBoundingClientRect()); return { gap: b.left - a.right, in: a.left >= m.left && b.right <= m.right + 0.5 && m.right <= innerWidth + 0.5 && m.left >= 0, line: Math.abs(a.bottom - b.bottom) < 6, cut: [...two.children].map((c) => c.scrollWidth > c.clientWidth), widths: [a.width, b.width] } }))
     assert.ok(boxes.every((b) => b.gap >= 8 && b.in && b.line && b.widths.every((w) => w > 24)), `${width}: ${JSON.stringify(boxes)}`)

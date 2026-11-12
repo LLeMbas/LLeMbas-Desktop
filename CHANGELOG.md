@@ -9,7 +9,7 @@ All notable changes to LLeMbas Desktop. The format follows
 ### Fixed
 
 - **A menu row's second word was glued to its first.** The computer menu of a new agent chat
-  read "This computerasus" and "thorthor · linux-x64": the quieter word beside a row's label
+  read "This computerworkbench" and "millmill · linux-x64": the quieter word beside a row's label
   (a computer's host, a folder's whole path, a thinking level) had no style at all. The two are
   on tracks of the row now -- the label left, the hint right, smaller and quieter, each cut
   with an ellipsis where it is too long -- and a computer named after its host says the host
