@@ -639,6 +639,7 @@ KEYS = (
     "Open Settings",
     # terminal.js: a reconnect that found the shell still running
     "Connected again, to the same shell.",
+    "What was typed while it was reconnecting was not sent.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -964,6 +965,7 @@ OWN: dict[str, dict[str, str]] = {
         "Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator.": "Zapněte ho tam: v LLeMbas Desktop v Nastavení, nebo v nastavení LLeMbas CLI, remote.terminal. Pokud je zapnutý, váš účet možná terminál používat nesmí: zeptejte se správce.",
         "Open Settings": "Otevřít Nastavení",
         "Connected again, to the same shell.": "Znovu připojeno ke stejnému shellu.",
+        "What was typed while it was reconnecting was not sent.": "Co jste napsali během opětovného připojování, nebylo odesláno.",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -1284,6 +1286,7 @@ OWN: dict[str, dict[str, str]] = {
         "Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator.": "Schalten Sie es dort ein: in LLeMbas Desktop unter Einstellungen oder in den Einstellungen der LLeMbas CLI, remote.terminal. Ist es eingeschaltet, darf Ihr Konto das Terminal womöglich nicht nutzen: Fragen Sie den Administrator.",
         "Open Settings": "Einstellungen öffnen",
         "Connected again, to the same shell.": "Wieder verbunden, mit derselben Shell.",
+        "What was typed while it was reconnecting was not sent.": "Was während des erneuten Verbindens getippt wurde, wurde nicht gesendet.",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1604,6 +1607,7 @@ OWN: dict[str, dict[str, str]] = {
         "Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator.": "Actívelo allí: en LLeMbas Desktop, en Ajustes, o en los ajustes de la CLI de LLeMbas, remote.terminal. Si está activado, puede que su cuenta no tenga permiso para el terminal: pregunte al administrador.",
         "Open Settings": "Abrir Ajustes",
         "Connected again, to the same shell.": "Conectado de nuevo, al mismo shell.",
+        "What was typed while it was reconnecting was not sent.": "Lo que se escribió mientras se reconectaba no se envió.",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1924,6 +1928,7 @@ OWN: dict[str, dict[str, str]] = {
         "Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator.": "Activez-le là-bas : dans LLeMbas Desktop, sous Paramètres, ou dans les paramètres de la CLI LLeMbas, remote.terminal. S’il est activé, votre compte n’a peut-être pas droit au terminal : demandez à l’administrateur.",
         "Open Settings": "Ouvrir les Paramètres",
         "Connected again, to the same shell.": "Reconnecté, au même shell.",
+        "What was typed while it was reconnecting was not sent.": "Ce qui a été saisi pendant la reconnexion n’a pas été envoyé.",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -2244,6 +2249,7 @@ OWN: dict[str, dict[str, str]] = {
         "Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator.": "Kapcsolja be ott: a LLeMbas Desktop Beállításaiban, vagy a LLeMbas CLI beállításaiban, remote.terminal. Ha be van kapcsolva, lehet, hogy a fiókja nem használhatja a terminált: kérdezze a rendszergazdát.",
         "Open Settings": "Beállítások megnyitása",
         "Connected again, to the same shell.": "Újra csatlakozva, ugyanahhoz a shellhez.",
+        "What was typed while it was reconnecting was not sent.": "Amit az újracsatlakozás közben beírt, nem lett elküldve.",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -2564,6 +2570,7 @@ OWN: dict[str, dict[str, str]] = {
         "Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator.": "Attivalo lì: in LLeMbas Desktop, in Impostazioni, oppure nelle impostazioni della CLI di LLeMbas, remote.terminal. Se è attivo, il tuo account potrebbe non avere il permesso per il terminale: chiedi all’amministratore.",
         "Open Settings": "Apri Impostazioni",
         "Connected again, to the same shell.": "Connessione ristabilita, alla stessa shell.",
+        "What was typed while it was reconnecting was not sent.": "Ciò che è stato digitato durante la riconnessione non è stato inviato.",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2884,6 +2891,7 @@ OWN: dict[str, dict[str, str]] = {
         "Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator.": "Włącz go tam: w LLeMbas Desktop w Ustawieniach albo w ustawieniach LLeMbas CLI, remote.terminal. Jeśli jest włączony, Twoje konto może nie mieć prawa do terminala: zapytaj administratora.",
         "Open Settings": "Otwórz Ustawienia",
         "Connected again, to the same shell.": "Połączono ponownie, z tą samą powłoką.",
+        "What was typed while it was reconnecting was not sent.": "To, co wpisano podczas ponownego łączenia, nie zostało wysłane.",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -3204,6 +3212,7 @@ OWN: dict[str, dict[str, str]] = {
         "Switch it on there: in LLeMbas Desktop under Settings, or in the LLeMbas CLI's settings, remote.terminal. If it is on, your account may not be allowed the terminal: ask the administrator.": "Zapnite ho tam: v LLeMbas Desktop v Nastaveniach, alebo v nastaveniach LLeMbas CLI, remote.terminal. Ak je zapnutý, váš účet možno terminál používať nesmie: opýtajte sa správcu.",
         "Open Settings": "Otvoriť Nastavenia",
         "Connected again, to the same shell.": "Znova pripojené k tomu istému shellu.",
+        "What was typed while it was reconnecting was not sent.": "To, čo ste napísali počas opätovného pripájania, sa neodoslalo.",
     },
 }
 

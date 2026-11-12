@@ -31,7 +31,14 @@ const BACKOFF = [1, 2, 4, 8, 15, 30]
 const MAX_EARLY = 64 * 1024
 
 let ctx = { layout: () => {}, composer: () => {}, deviceName: () => "" }
-let tries = 0 // how many reconnects in a row have not reached a shell
+let tries = 0 // how many reconnects in a row have not reached a shell that stayed
+let behinds = 0 // how many times in a row this window was let go for not keeping up
+let steady = 0 // the timer after which a shell that answered counts as one that stayed
+// A shell that answers and is lost again sooner than this (ms) did not stay: the next try waits
+// longer, as if it had not answered -- or a server that accepts and drops is asked every second.
+const STEADY = 10000
+// How long (s) before connecting again after being let go for not keeping up, each time in a row.
+const BEHIND = [0, 2, 5, 15, 30]
 let countdown = 0 // the interval that counts a reconnect down
 let greeting = "" // what the next shell says first, when it stands in for a lost one
 let shellId = "" // the server's own id of the open shell, where its ready frame gives one
@@ -159,12 +166,19 @@ function build() {
 /**
  * Keys for the shell. While its socket is still being opened they are kept, in order, and sent
  * the moment it is: what is typed ahead of a shell is not lost.
+ *
+ * Not so after a lost connection. What is typed while it connects again is held here until the
+ * server says which shell answered (`ready`): the one that was running gets it; a new one does
+ * not -- the end of a half-typed line must not run, alone, in a fresh shell.
  */
 function typeIn(data) {
   const s = session
   if (!s || !data) return
-  if (s.handle) s.handle.input(data)
-  else if (s.early.reduce((n, x) => n + x.length, 0) + data.length <= MAX_EARLY) s.early.push(data)
+  const kept = (list) => list.reduce((n, x) => n + x.length, 0) + data.length <= MAX_EARLY
+  if (s.again && !s.ready) {
+    if (kept(s.held)) s.held.push(data)
+  } else if (s.handle) s.handle.input(data)
+  else if (kept(s.early)) s.early.push(data)
 }
 
 function refit() {
@@ -186,11 +200,12 @@ function decode(b64) {
   return bytes
 }
 
-async function connect() {
+/** Open the shell. `again`: in place of one whose connection was lost (see `typeIn`). */
+async function connect(again = false) {
   if (!target || !term || session) return
   const t0 = target
   // The session exists before the socket answers, so frames that come first are this one's.
-  const mine = { handle: null, key: t0.key, draft: !t0.chat, early: [] }
+  const mine = { handle: null, key: t0.key, draft: !t0.chat, early: [], again: again || !!greeting, ready: false, held: [] }
   session = mine
   offer("")
   hideShells()
@@ -211,7 +226,9 @@ async function connect() {
       },
     })
   } catch (err) {
-    if (session === mine) session = null
+    // Let go of meanwhile: the panel's line is another session's now, and stays as it is.
+    if (session !== mine) return
+    session = null
     say(why(err), true)
     offer(t("Reconnect"))
     return
@@ -227,12 +244,28 @@ async function connect() {
 
 function control(frame) {
   if (frame.t === "ready") {
-    tries = 0
+    const s = session
+    // It answered; whether it stays is known a little later, and only then do the tries start over.
+    clearTimeout(steady)
+    steady = setTimeout(() => {
+      if (session === s) tries = behinds = 0
+    }, STEADY)
     shellId = typeof frame.id === "string" ? frame.id : ""
+    // What was typed while a lost connection came back: to the shell that was running, never to a new one.
+    let unsent = false
+    if (s && !s.ready) {
+      s.ready = true
+      if (s.again && s.held.length) {
+        if (frame.resumed === true) for (const data of s.held) s.handle?.input(data)
+        else unsent = true
+      }
+      s.held = []
+    }
     // After a reconnect the server says whether the shell is the one that was running
     // (`resumed`); one that does not say gets the line that fits what was lost.
     const again = !greeting ? "" : frame.resumed === true ? t("Connected again, to the same shell.") : frame.resumed === false ? t("Connected again. This is a new shell: the one before ended with the connection.") : greeting
-    say(again || (frame.shared ? t("Connected. This shell is also open in another tab, and they share a size.") : t("Connected.")))
+    const said = again || (frame.shared ? t("Connected. This shell is also open in another tab, and they share a size.") : t("Connected."))
+    say(unsent ? `${said} ${t("What was typed while it was reconnecting was not sent.")}` : said)
     greeting = ""
     if (frame.dir) $("terminal-where").textContent = frame.dir
     osc = !!frame.osc
@@ -244,11 +277,16 @@ function control(frame) {
   } else if (frame.t === "behind") {
     // This window stopped reading and was let go so the others kept up. The scrollback is the
     // state: connecting again costs nothing.
+    // Not at once every time: a window that is let go again and again waits longer each time.
     say(frame.message || t("Reconnecting…"))
     drop()
     term.reset()
     forgetMarks()
-    connect()
+    const key = target?.key
+    const pause = BEHIND[Math.min(behinds++, BEHIND.length - 1)] * 1000
+    const go = () => target?.key === key && !session && terminalOpen() && connect(true)
+    if (pause) setTimeout(go, pause)
+    else go()
   } else if (frame.t === "closed") {
     drop()
     // The server's reason (`api/terminal.py`): the link to the computer dropped ("error") or the
@@ -350,15 +388,23 @@ const endOne = (id) => post(`/terminals/${enc(id)}/end`)
 /** End the shell this panel shows: asked first, since what runs in it stops. */
 async function endShell() {
   if (!target) return
+  // Which shell, as the panel shows it now: the question below takes time, and the panel may be
+  // another chat's by the time it is answered.
+  const mine = { key: target.key, chat: target.chat, directory: target.directory, name: target.name, id: shellId }
   const yes = await ask({ title: t("End this shell?"), text: t("What is running in it stops and its scrollback goes. The chat is not affected."), ok: t("End shell"), cancel: t("Cancel"), danger: true })
   if (!yes) return
   try {
-    let id = shellId
+    let id = mine.id
     if (!id) {
       // A server that does not name the shell in its ready frame: found by its chat, or (before
-      // the chat) by its folder.
-      const mine = (await openShells()).find((x) => (target.chat ? x.chat === target.chat : !x.chat && x.directory === target.directory))
-      id = mine?.id || ""
+      // the chat) by its computer and folder.
+      const found = (await openShells()).find((x) => (mine.chat ? x.chat === mine.chat : !x.chat && x.directory === mine.directory && (!x.device || !mine.name || x.device === mine.name)))
+      id = found?.id || ""
+    }
+    if (target?.key !== mine.key) {
+      // The panel shows another shell now: the one asked about is ended, this one is left alone.
+      if (id) await endOne(id)
+      return
     }
     if (!id) return say(t("No open shell was found for this panel."), true)
     await endOne(id)
