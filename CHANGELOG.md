@@ -99,7 +99,8 @@ All notable changes to LLeMbas Desktop. The format follows
   task's history has its columns shared by every row, so a status is never cut short and the
   dates line up; at 390 px a scheduled task's name is whole in its header with the buttons under
   it, and Draw a picture is not cut; a model that only thinks or does not says Thinking instead
-  of a level's name. The test suite now walks every screen at those sizes in both looks and
+  of a level's name; a subagent's row in the activity panel has the same room above its name
+  as under its last line. The test suite now walks every screen at those sizes in both looks and
   refuses a sideways scroll or a control outside the window or cut off.
 
 ### Fixed
