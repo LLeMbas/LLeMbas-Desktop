@@ -1454,6 +1454,8 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .cmenu[hidden] { display: none; }
 .cmenu__list { min-height: 0; overflow-y: auto; padding: var(--sp-1) 0; }
+/* A lookup is on its way: what is listed is the one before's, shown as waiting and not to be pressed. */
+.cmenu__list[aria-busy="true"] { opacity: var(--opacity-dim); pointer-events: none; }
 .cmenu__group { padding: var(--sp-2) var(--sp-3) var(--sp-1); font: 600 var(--text-xs) var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .cmenu__option {
   display: grid;
@@ -2139,6 +2141,8 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 @container chat (max-width: 30rem) {
   .ask__options { grid-template-columns: minmax(0, 1fr); }
   .opt.opt--typed { grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-2); }
+  /* The menu's line of keys is for a keyboard; at a phone's width it wrapped to two lines and took the list's room. */
+  .cmenu__keys { display: none; }
 }
 
 /* 48rem (--bp-narrow): the sidebar is a drawer over the page, opened from the title bar. */

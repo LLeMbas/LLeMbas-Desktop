@@ -25,10 +25,17 @@ const SECTIONS = [
 export function scrollToSection(id) {
   const el = $(`set-${id}`)
   if (!el) return
+  // The scroll this causes must not mark another group (the last ones cannot reach the top).
+  chosen = id
+  clearTimeout(chosenTimer)
+  chosenTimer = setTimeout(() => (chosen = ""), 400)
   el.scrollIntoView({ block: "start" })
   markNav(id)
   el.querySelector("button, select, input")?.focus({ preventScroll: true })
 }
+
+let chosen = "" // the group just asked for from the list: it stays marked while its own scroll settles
+let chosenTimer = 0
 
 function markNav(id) {
   for (const b of $("settings-nav").querySelectorAll("button")) b.setAttribute("aria-current", String(b.dataset.id === id))
@@ -278,9 +285,14 @@ export function initSettings(getStatus) {
   })
   $("settings-body").addEventListener("scroll", () => {
     // The group at the top is the one marked beside them.
-    const top = $("settings-body").getBoundingClientRect().top
+    if (chosen) return
+    const body = $("settings-body")
+    const top = body.getBoundingClientRect().top
+    const all = [...body.querySelectorAll(".set")]
     let at = ""
-    for (const sec of $("settings-body").querySelectorAll(".set")) if (sec.getBoundingClientRect().top - top < 64) at = sec.id.replace(/^set-/, "")
+    for (const sec of all) if (sec.getBoundingClientRect().top - top < 64) at = sec.id.replace(/^set-/, "")
+    // At the very end the last group is the one in view, though it never reaches the top.
+    if (all.length && body.scrollTop + body.clientHeight >= body.scrollHeight - 2) at = all[all.length - 1].id.replace(/^set-/, "")
     if (at) markNav(at)
   })
 }

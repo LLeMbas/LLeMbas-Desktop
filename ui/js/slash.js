@@ -29,6 +29,7 @@ let kind = "" // "/" or "@" while open
 let active = -1
 let pending = 0 // the debounce timer of the `@` lookups
 let asked = 0 // which `@` lookup is the latest: an older one's late answer is dropped
+let waiting = false // an `@` lookup is on its way: what is listed is the one before's, not to be chosen
 
 const DEBOUNCE = 150
 
@@ -65,6 +66,7 @@ const looksLikeUrl = (text) => /^https?:\/\/[^\s/]+\.[^\s]+$/i.test(text) || /^w
 
 // --- The device's own commands --------------------------------------------------------------------
 
+const DEVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/
 let deviceCommands = []
 let deviceLabel = "" // the device's short name, as the server says it with its commands
 let deviceKey = ""
@@ -81,6 +83,11 @@ function refreshDevice() {
   // CONTRACT: GET /devices/{id}/commands?chat=&cwd= -> { commands: [{ name, description, hint, kind }], device }
   const path = `/devices/${enc(w.device)}/commands?chat=${enc(w.chat)}&cwd=${enc(w.cwd)}`
   if (path === deviceKey && Date.now() - deviceAt < 5000) return
+  // Another device, chat or folder: the one before's commands are not offered for this one.
+  if (path !== deviceKey) {
+    deviceCommands = []
+    deviceLabel = ""
+  }
   deviceKey = path
   deviceAt = Date.now()
   get(path)
@@ -88,8 +95,11 @@ function refreshDevice() {
       if (path !== deviceKey) return
       deviceLabel = typeof r?.device === "string" ? r.device : ""
       deviceCommands = (r?.commands || [])
-        .filter((c) => c && typeof c.name === "string" && c.name)
-        .map((c) => ({ name: c.name.replace(/^\/+/, ""), summary: c.description || "", argument: c.hint || "", device: true }))
+        .map((c) => (c && typeof c.name === "string" ? { ...c, name: c.name.replace(/^\/+/, "") } : null))
+        // A name as the server's own rule has it (no space, nothing that could be read as more
+        // than a name): what is sent is `/name`, and must be that command and nothing else.
+        .filter((c) => c && DEVICE_NAME.test(c.name))
+        .map((c) => ({ name: c.name, summary: String(c.description || ""), argument: String(c.hint || ""), device: true }))
       if (open && kind === "/") refresh()
     })
     .catch(() => {
@@ -120,12 +130,16 @@ export function commandIn(value) {
   return found ? { name: found.name, rest: m[2] || "" } : null
 }
 
-function runCommand(name, rest) {
+function runCommand(name, rest, device = false) {
+  // A device's, chosen from the menu: sent as the message it is -- never run as one of the
+  // app's own, whatever it is called and whatever the app offers by now.
+  if (device) {
+    const theirs = deviceCommands.find((c) => c.name === name)
+    if (theirs && ctx.where().device) ctx.send(`/${theirs.name}${rest ? ` ${rest}` : ""}`)
+    return
+  }
   const own = available().find((c) => c.name === name)
   if (own) return own.run(rest || "")
-  // A device's, chosen from the menu: sent as the message it is.
-  const theirs = fromDevice().find((c) => c.name === name)
-  if (theirs) ctx.send(`/${theirs.name}${rest ? ` ${rest}` : ""}`)
 }
 
 /** Every command with what it takes and does, for /help. */
@@ -153,6 +167,8 @@ function build() {
 function hide() {
   clearTimeout(pending)
   asked++
+  waiting = false
+  list?.removeAttribute("aria-busy")
   if (!menu) return
   menu.hidden = true
   open = false
@@ -229,7 +245,7 @@ function drawCommands(query) {
   const row = (c) => {
     const arg = argumentOf(c)
     // A device's command that takes something after its name is completed, never sent bare.
-    return option({ ico: c.device ? ICONS.terminal : ICONS.bolt, name: `/${c.name}${arg ? ` ${arg}` : ""}`, note: c.summary, mono: true, data: { command: c.name, ...(c.device && arg ? { input: "1" } : {}) } })
+    return option({ ico: c.device ? ICONS.terminal : ICONS.bolt, name: `/${c.name}${arg ? ` ${arg}` : ""}`, note: c.summary, mono: true, data: { command: c.name, ...(c.device ? { device: "1" } : {}), ...(c.device && arg ? { input: "1" } : {}) } })
   }
   if (own.length) list.append(...group(t("Commands"), own.map(row)))
   if (device.length) list.append(...group(deviceLabel || ctx.where().deviceName || t("On the device"), device.map(row)))
@@ -247,6 +263,8 @@ async function loadMentions(query) {
   const [d, s] = await Promise.all([device, server])
   // A round trip late: the caret may have left the mention, or a newer lookup is on its way.
   if (mine !== asked || kind !== "@") return
+  waiting = false
+  list.removeAttribute("aria-busy")
   const items = Array.isArray(s?.items) ? s.items : []
   const files = (Array.isArray(d?.files) ? d.files : []).filter((f) => f && typeof f.path === "string" && f.path)
   const of = (k) => items.filter((i) => i && i.kind === k)
@@ -310,6 +328,11 @@ function refresh() {
   }
   kind = "@"
   clearTimeout(pending)
+  // What is listed answers an earlier question: until the answer to this one is here none of
+  // it can be chosen (Enter and Tab wait), and it is drawn as waiting.
+  asked++
+  waiting = true
+  list?.setAttribute("aria-busy", "true")
   pending = setTimeout(() => loadMentions(token.query), DEBOUNCE)
 }
 
@@ -345,7 +368,7 @@ function choose(el, { complete = false, attach = false } = {}) {
     // Cleared before it runs: a command is the whole message, never left for the next Enter.
     box().value = ""
     ctx.changed()
-    runCommand(d.command, "")
+    runCommand(d.command, "", !!d.device)
     return
   }
   const copy = !!d.attach || (attach && !!d.also)
@@ -385,6 +408,13 @@ function key(e) {
       return true
     }
     if (e.key === "Enter" || e.key === "Tab") {
+      // The list is an earlier lookup's: nothing of it is chosen, and the message is not sent
+      // with half a mention in it either.
+      if (waiting && kind === "@") {
+        e.preventDefault()
+        e.stopPropagation()
+        return true
+      }
       const all = options()
       if (all.length && active >= 0) {
         e.preventDefault()
