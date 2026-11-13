@@ -22,6 +22,12 @@
 //! server's run is said by the schedule's title and the page's words, without actions. A server
 //! without the stream answers 404, and nothing is said.
 //!
+//! **A result is told by its report** (server 2.0.0-beta.12, harness spec 3.8.0 `reports.md`): a
+//! run that has something to tell files a report, and the stream's `reports` frame
+//! (`{"unread", "newest": report | null}`) says so. The notification is the report's -- its title
+//! and its summary -- and is not shown while the window in front already shows that report. A
+//! run that finished without one is not news; a run that failed still is, as before.
+//!
 //! Every notification shown is remembered by its id (`Notes`), so a click on it or on one of its
 //! actions knows which chat or which run it was about.
 
@@ -95,6 +101,10 @@ pub struct Watch {
     /// Each schedule's last run at the last look, and whether it had finished (None before the
     /// first look).
     runs: Mutex<Option<HashMap<String, (String, bool)>>>,
+    /// The report the page shows, if any.
+    pub open_report: Mutex<Option<String>>,
+    /// The newest report at the last look (None before the first look; "" for none yet).
+    newest: Mutex<Option<String>>,
     /// Set to end the event stream that is followed now; `reset` sets it and puts a new one here.
     stop: Mutex<Arc<AtomicBool>>,
     /// The notifications shown, so a click on one knows what it was about.
@@ -104,8 +114,6 @@ pub struct Watch {
 /// How a scheduled task's run is told.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Told {
-    /// It has a result.
-    Result,
     /// It failed.
     Failed,
     /// It failed for the third time in a row: pause it?
@@ -180,6 +188,16 @@ pub enum Note {
     Chat(String),
     /// A scheduled task's run.
     Run { schedule: String, run: String },
+    /// A report a scheduled run filed.
+    Report(String),
+}
+
+/// A report newly filed: what its notification says.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Filed {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
 }
 
 /// The notifications shown, by id: the most recent `NOTES_KEPT`.
@@ -209,30 +227,27 @@ impl Notes {
 }
 
 /// The run statuses that are an end (`db/models/schedule.py`): `running` and `waiting` are not.
-const FINISHED: [&str; 5] = ["ok", "silent", "failed", "skipped", "missed"];
+const FINISHED: [&str; 6] = ["ok", "silent", "unchanged", "failed", "skipped", "missed"];
 /// The failure in a row that asks whether to pause (`notify.PAUSE_AFTER`).
 const PAUSE_AFTER: i64 = 3;
 
-/// Whether a finished run is told, and how: the server's word when it already told (`notified`),
-/// else its notify policy for the schedule as the server applies it.
+/// Whether a finished run is told, and how. Only a failure is: a result is told by the report
+/// the run filed (`look_reports`), and a run that filed none has nothing to tell. A failure is
+/// said when the server already told a device (`notified`), else by the schedule's policy as the
+/// server applies it: the first in a row, and the third, which asks whether to pause.
 pub fn decide(policy: &str, status: &str, notified: bool, streak: i64) -> Option<Told> {
-    let failed = matches!(status, "failed" | "skipped");
-    let kind = if failed && streak == PAUSE_AFTER {
+    if !matches!(status, "failed" | "skipped") {
+        return None;
+    }
+    let kind = if streak == PAUSE_AFTER {
         Told::Pause
-    } else if failed {
-        Told::Failed
     } else {
-        Told::Result
+        Told::Failed
     };
     if notified {
         return Some(kind);
     }
-    match (policy, status) {
-        ("never", _) => None,
-        (_, "ok") | ("always", "silent") => Some(Told::Result),
-        _ if failed && (streak <= 1 || streak == PAUSE_AFTER) => Some(kind),
-        _ => None,
-    }
+    (policy != "never" && (streak <= 1 || streak == PAUSE_AFTER)).then_some(kind)
 }
 
 impl Watch {
@@ -331,6 +346,40 @@ impl Watch {
         out
     }
 
+    /// Note the stream's `reports` frame (`{"unread", "newest": report | null}`); the report
+    /// that is newly the newest and unread. The first look only notes: a report filed before
+    /// the app looked is not news, and one is told once however often the frame comes again.
+    pub fn look_reports(&self, frame: &Value) -> Option<Filed> {
+        let newest = frame.get("newest").filter(|r| r.is_object());
+        let id = newest
+            .and_then(|r| r.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let mut seen = self.newest.lock().unwrap();
+        let before = seen.replace(id.clone());
+        let report = newest?;
+        if id.is_empty() || before.is_none() || before.as_deref() == Some(id.as_str()) {
+            return None;
+        }
+        if report.get("unread").and_then(Value::as_bool) != Some(true) {
+            return None;
+        }
+        let text = |key: &str| {
+            report
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        Some(Filed {
+            id,
+            title: text("title"),
+            summary: text("summary"),
+        })
+    }
+
     /// The flag that ends the event stream followed now.
     pub fn stop_flag(&self) -> Arc<AtomicBool> {
         self.stop.lock().unwrap().clone()
@@ -340,6 +389,7 @@ impl Watch {
     pub fn reset(&self) {
         *self.running.lock().unwrap() = None;
         *self.runs.lock().unwrap() = None;
+        *self.newest.lock().unwrap() = None;
         let mut stop = self.stop.lock().unwrap();
         stop.store(true, Ordering::SeqCst);
         *stop = Arc::new(AtomicBool::new(false));
@@ -432,49 +482,80 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_run_is_said_once_by_its_policy_and_a_silent_one_only_when_always() {
+    fn a_finished_run_is_not_news_and_a_failed_one_is_said_once() {
         let w = Watch::default();
         assert!(w
             .look_schedules(&schedules(&[
-                ("a", "matters", 0, Some(("r1", "ok", false))),
+                ("a", "when", 0, Some(("r1", "ok", false))),
                 ("b", "always", 0, None)
             ]))
             .is_empty());
-        // Running is not news; finishing is, even under the same run id.
+        // A result is its report's to tell: finishing well says nothing here, whatever the policy.
+        let out = w.look_schedules(&schedules(&[
+            ("a", "when", 0, Some(("r2", "ok", true))),
+            ("b", "always", 0, Some(("r3", "unchanged", false))),
+            ("c", "when", 1, Some(("r4", "failed", false))),
+            ("d", "never", 1, Some(("r5", "failed", false))),
+        ]));
+        assert_eq!(out, vec![ran("c", "r4", Told::Failed)]);
+        // The same list again: not said twice.
         assert!(w
             .look_schedules(&schedules(&[(
-                "a",
-                "matters",
-                0,
-                Some(("r2", "running", false))
+                "c",
+                "when",
+                1,
+                Some(("r4", "failed", true))
             )]))
-            .is_empty());
-        let out = w.look_schedules(&schedules(&[
-            ("a", "matters", 0, Some(("r2", "ok", false))),
-            ("b", "always", 0, Some(("r3", "silent", false))),
-            ("c", "matters", 0, Some(("r4", "silent", false))),
-            ("d", "never", 0, Some(("r5", "ok", false))),
-        ]));
-        assert_eq!(
-            out,
-            vec![ran("a", "r2", Told::Result), ran("b", "r3", Told::Result)]
-        );
-        // The same list again (the server told a device meanwhile): not said twice.
-        assert!(w
-            .look_schedules(&schedules(&[("a", "matters", 0, Some(("r2", "ok", true)))]))
             .is_empty());
     }
 
     #[test]
     fn failures_are_said_the_first_time_and_the_third_asks_to_pause() {
-        assert_eq!(decide("matters", "failed", false, 1), Some(Told::Failed));
-        assert_eq!(decide("matters", "failed", false, 2), None);
+        assert_eq!(decide("when", "failed", false, 1), Some(Told::Failed));
+        assert_eq!(decide("when", "failed", false, 2), None);
         assert_eq!(decide("always", "skipped", false, 3), Some(Told::Pause));
         assert_eq!(decide("never", "failed", false, 1), None);
-        assert_eq!(decide("matters", "missed", false, 0), None);
+        assert_eq!(decide("when", "missed", false, 0), None);
+        assert_eq!(decide("always", "ok", true, 0), None);
         // The server's own word wins: it told a device.
-        assert_eq!(decide("matters", "failed", true, 2), Some(Told::Failed));
-        assert_eq!(decide("matters", "silent", true, 0), Some(Told::Result));
+        assert_eq!(decide("when", "failed", true, 2), Some(Told::Failed));
+    }
+
+    #[test]
+    fn a_report_is_told_when_it_is_newly_the_newest_and_unread() {
+        let frame = |id: Option<&str>, unread: bool| match id {
+            Some(id) => {
+                json!({ "unread": 1, "newest": { "id": id, "title": " Two cakes are unwrapped ", "summary": "Two of the twelve.", "unread": unread } })
+            }
+            None => json!({ "unread": 0, "newest": null }),
+        };
+        let w = Watch::default();
+        // The first look only notes.
+        assert_eq!(w.look_reports(&frame(Some("rep1"), true)), None);
+        assert_eq!(w.look_reports(&frame(Some("rep1"), true)), None);
+        assert_eq!(
+            w.look_reports(&frame(Some("rep2"), true)),
+            Some(Filed {
+                id: "rep2".into(),
+                title: "Two cakes are unwrapped".into(),
+                summary: "Two of the twelve.".into()
+            })
+        );
+        // Again, read meanwhile, deleted: nothing more.
+        assert_eq!(w.look_reports(&frame(Some("rep2"), false)), None);
+        assert_eq!(w.look_reports(&frame(None, false)), None);
+        assert_eq!(
+            w.look_reports(&frame(Some("rep3"), false)),
+            None,
+            "already read elsewhere"
+        );
+        // After a reset the first look only notes again.
+        w.reset();
+        assert_eq!(w.look_reports(&frame(Some("rep9"), true)), None);
+        // An account with none yet, then its first.
+        let fresh = Watch::default();
+        assert_eq!(fresh.look_reports(&frame(None, false)), None);
+        assert!(fresh.look_reports(&frame(Some("rep1"), true)).is_some());
     }
 
     #[test]

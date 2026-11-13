@@ -291,6 +291,7 @@ async fn set_server(handle: AppHandle, address: String) -> Result<Status, String
         app.terminals.close_all();
         // Another server: its Pyodide is not the one made ready, and is not served any more.
         app.python.clear();
+        app.sealed.clear_pages();
     }
     *app.account.lock().unwrap() = server::load_account(&app.config_dir, &d.base);
     *app.server.lock().unwrap() = Some(d);
@@ -402,6 +403,7 @@ fn sign_out(handle: AppHandle) {
     app.watch.reset();
     app.terminals.close_all();
     app.python.clear();
+    app.sealed.clear_pages();
     if let Some(a) = account {
         std::thread::spawn(move || server::sign_out(&a.server, &a.token));
     }
@@ -415,6 +417,7 @@ fn token_refused(handle: &AppHandle) {
         server::forget_account(&app.config_dir);
         app.terminals.close_all();
         app.python.clear();
+        app.sealed.clear_pages();
         announce(handle);
     }
 }
@@ -1009,6 +1012,104 @@ fn sealed_close(app: tauri::State<'_, App>, url: String) {
     app.sealed.forget(sealed::id_of(&path));
 }
 
+/// What the page is told of a page of an answer: where its frame loads it, and its title.
+#[derive(Serialize)]
+struct AnswerPage {
+    url: String,
+    title: String,
+}
+
+/// A name in a page's address: a message's or a report's id, a digest.
+fn page_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 96
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// A colour as the page's address takes one: `#rgb`, `#rrggbb` or `#rrggbbaa`, nothing else.
+fn page_colour(s: &str) -> bool {
+    let hex = s.strip_prefix('#').unwrap_or("");
+    s.starts_with('#')
+        && matches!(hex.len(), 3 | 6 | 8)
+        && hex.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The path of a page of an answer on the server (`/pages/m/{message}/{digest}` or
+/// `/pages/r/{report}/{digest}`) with the theme's colours -- also what it is held under; `None`
+/// where a part is not what it must be.
+fn page_path(
+    kind: &str,
+    owner: &str,
+    digest: &str,
+    colours: &[(String, String)],
+) -> Option<String> {
+    if !matches!(kind, "m" | "r") || !page_name(owner) || !page_name(digest) {
+        return None;
+    }
+    let mut query = String::new();
+    for name in ["bg", "ink", "muted", "accent", "line"] {
+        if let Some((_, value)) = colours.iter().find(|(k, v)| k == name && page_colour(v)) {
+            query.push(if query.is_empty() { '?' } else { '&' });
+            query.push_str(&format!("{name}=%23{}", &value[1..]));
+        }
+    }
+    Some(format!("/pages/{kind}/{owner}/{digest}{query}"))
+}
+
+/// A page a model wrote into an answer or a report, made ready for its sealed frame. The server
+/// rebuilds the page as a static document (it is the one sanitiser: the app never cleans a
+/// model's markup); this fetches that document through the app's own door, holds it, and says
+/// where the frame loads it. The page's script never sees the document.
+#[tauri::command]
+async fn page_open(
+    handle: AppHandle,
+    kind: String,
+    owner: String,
+    digest: String,
+    colours: Option<std::collections::BTreeMap<String, String>>,
+) -> Result<AnswerPage, ApiError> {
+    let colours: Vec<(String, String)> = colours.unwrap_or_default().into_iter().collect();
+    let Some(path) = page_path(&kind, &owner, &digest, &colours) else {
+        return Err(ApiError::new(400, "Not a page's address."));
+    };
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    if let Some(id) = handle.state::<App>().sealed.page(&path) {
+        return Ok(AnswerPage {
+            url: sealed::url(&id),
+            title: String::new(),
+        });
+    }
+    let asked = path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        server::request(&app_url, &token, "GET", &asked, None)
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(&handle);
+    }
+    let said = result?;
+    let Some(html) = said.get("html").and_then(Value::as_str) else {
+        return Err(ApiError::new(0, "The server sent no page."));
+    };
+    let title = said
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let id = handle
+        .state::<App>()
+        .sealed
+        .hold_page(&path, html.to_string());
+    Ok(AnswerPage {
+        url: sealed::url(&id),
+        title,
+    })
+}
+
 // --- The page's own settings ---------------------------------------------------------------------
 
 /// The account's theme, as the page read it from the server: the window is painted in it, and
@@ -1044,6 +1145,12 @@ fn set_notify(handle: AppHandle, on: bool) -> Result<(), String> {
 #[tauri::command]
 fn set_open_chat(app: tauri::State<'_, App>, chat: Option<String>) {
     *app.watch.open.lock().unwrap() = chat;
+}
+
+/// Which report the page shows (none: `null`): one being read is not announced.
+#[tauri::command]
+fn set_open_report(app: tauri::State<'_, App>, report: Option<String>) {
+    *app.watch.open_report.lock().unwrap() = report;
 }
 
 #[tauri::command]
@@ -1760,6 +1867,10 @@ fn notification_action(handle: &AppHandle, done: &ActionPerformed) {
             show(handle);
             let _ = handle.emit("open-chat", chat);
         }
+        (watch::Note::Report(report), "tap" | "open") => {
+            show(handle);
+            let _ = handle.emit("open-report", report);
+        }
         (watch::Note::Run { schedule, run }, "tap" | "open") => {
             show(handle);
             let _ = handle.emit(
@@ -1804,6 +1915,46 @@ const EVENTS_NONE: std::time::Duration = std::time::Duration::from_secs(300);
 /// frame goes to the page as it is (the Scheduled page redraws from it), and a scheduled task's
 /// newly finished run is told by its notify decision (`watch::decide`). Said even with the window
 /// in front: it ran on its own. Signing out or another server ends the stream (`Watch::reset`).
+/// The stream's `reports` frame: handed to the page (its Reports row counts the unread), and a
+/// report newly filed is told -- by its own title and summary -- unless the window in front
+/// already shows it.
+fn report_filed(handle: &AppHandle, data: &str) {
+    let Ok(frame) = serde_json::from_str::<Value>(data) else {
+        return;
+    };
+    let app = handle.state::<App>();
+    let filed = app.watch.look_reports(&frame);
+    let _ = handle.emit("reports", &frame);
+    let Some(report) = filed else {
+        return;
+    };
+    if !app.settings().notify {
+        return;
+    }
+    let in_front = main_window(handle)
+        .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false));
+    if in_front && app.watch.open_report.lock().unwrap().as_deref() == Some(report.id.as_str()) {
+        return;
+    }
+    let words = app.watch.words.lock().unwrap().clone();
+    let id = app.watch.notes.add(watch::Note::Report(report.id));
+    let _ = handle
+        .notification()
+        .builder()
+        .id(id)
+        .title(if report.title.is_empty() {
+            "LLeMbas".to_string()
+        } else {
+            report.title
+        })
+        .body(if report.summary.is_empty() {
+            words.scheduled
+        } else {
+            report.summary
+        })
+        .show();
+}
+
 fn watch_events(handle: AppHandle) {
     std::thread::spawn(move || loop {
         let app = handle.state::<App>();
@@ -1813,6 +1964,10 @@ fn watch_events(handle: AppHandle) {
         };
         let stop = app.watch.stop_flag();
         let result = server::stream(&app_url, &token, "/events", &stop, |event, data| {
+            if event == "reports" {
+                report_filed(&handle, data);
+                return true;
+            }
             if event != "schedules" {
                 return true;
             }
@@ -1834,7 +1989,6 @@ fn watch_events(handle: AppHandle) {
                 };
                 let body = r.body.clone().unwrap_or_else(|| {
                     match r.told {
-                        watch::Told::Result => &words.scheduled,
                         watch::Told::Failed => &words.scheduled_failed,
                         watch::Told::Pause => &words.scheduled_pause,
                     }
@@ -1992,6 +2146,8 @@ pub fn run() {
             local_read,
             sealed_open,
             sealed_close,
+            page_open,
+            set_open_report,
             python_prepare,
             attach_pick,
             library_upload,
@@ -2142,6 +2298,49 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_page_of_an_answer_is_asked_for_by_names_and_colours_only() {
+        let c = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert_eq!(
+            super::page_path(
+                "m",
+                "msg-1",
+                "526b3a6b",
+                &[
+                    c("ink", "#E2E8EC"),
+                    c("bg", "#101418"),
+                    c("line", "red"),
+                    c("x", "#fff")
+                ]
+            )
+            .as_deref(),
+            Some("/pages/m/msg-1/526b3a6b?bg=%23101418&ink=%23E2E8EC")
+        );
+        assert_eq!(
+            super::page_path("r", "rep1", "d", &[]).as_deref(),
+            Some("/pages/r/rep1/d")
+        );
+        for (kind, owner, digest) in [
+            ("x", "a", "b"),
+            ("m", "../a", "b"),
+            ("m", "a", "b?c=d"),
+            ("m", "", "b"),
+            ("m", "a/b", "c"),
+            ("r", "a", "b#c"),
+        ] {
+            assert_eq!(
+                super::page_path(kind, owner, digest, &[]),
+                None,
+                "{kind} {owner} {digest}"
+            );
+        }
+        assert!(
+            !super::page_colour("#12")
+                && !super::page_colour("rgb(1,2,3)")
+                && super::page_colour("#abc")
+        );
+    }
+
     use super::*;
 
     #[test]
