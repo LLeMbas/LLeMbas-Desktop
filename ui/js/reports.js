@@ -143,6 +143,8 @@ async function open(id) {
     h(
       "article",
       { class: "arch__page report", dataset: { id: r.id } },
+      // The title whole, as the page's own heading: the header's is cut where the window is narrow.
+      h("h2", { class: "report__title", text: r.title || t("Report") }),
       h(
         "p",
         { class: "report__meta" },

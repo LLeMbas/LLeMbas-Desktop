@@ -1968,6 +1968,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .rrow__from, .rrow__when { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .report { display: grid; gap: var(--sp-4); }
 .report__meta { margin: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); align-items: center; font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
+.report__title { margin: 0; font: 600 var(--text-lg) / var(--leading-tight) var(--font-display); color: var(--ink); overflow-wrap: anywhere; }
 .report__body { min-width: 0; }
 .linkish { padding: 0; font: inherit; color: var(--accent); background: none; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .crumb { display: inline-flex; gap: var(--sp-1); align-items: center; padding: 0; font: inherit; color: var(--ink-muted); background: none; border: 0; cursor: pointer; }

@@ -4212,6 +4212,7 @@ test("R1: the server's reports frame moves the count and the open list; a server
   await p.waitForSelector("#reports-body .report .hpage__frame")
   assert.ok(await noSideways(p, 390))
   assert.deepEqual(await controlsOut(p, 390), [])
+  assert.ok(await p.$eval("#reports-body .report__title", (x) => x.textContent.length > 10 && x.scrollWidth <= x.clientWidth + 1), "the report's title is whole on the page")
   const box = await p.$eval("#reports-body .hpage", (x) => { const r = x.getBoundingClientRect(); return [r.left >= 0, r.right <= innerWidth, Math.round(r.height)] })
   assert.ok(box[0] && box[1], "the page's box inside the window")
   await shot(p, "r1-report-390")
