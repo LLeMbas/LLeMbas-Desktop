@@ -986,11 +986,7 @@ async fn python_prepare(handle: AppHandle) -> Result<PythonRunner, ApiError> {
         app.python.set(&version, dir, names);
         Ok(PythonRunner {
             enabled: true,
-            url: {
-                let url = python::url(&version);
-                arm(&url);
-                url
-            },
+            url: python::url(&version),
             version,
         })
     })
@@ -1005,9 +1001,7 @@ async fn python_prepare(handle: AppHandle) -> Result<PythonRunner, ApiError> {
 /// Hold HTML for the viewer's sealed frame; the address the frame loads.
 #[tauri::command]
 fn sealed_open(app: tauri::State<'_, App>, html: String) -> String {
-    let url = sealed::url(&app.sealed.hold(html));
-    arm(&url);
-    url
+    sealed::url(&app.sealed.hold(html))
 }
 
 #[tauri::command]
@@ -1088,10 +1082,8 @@ async fn page_open(
         return Err(ApiError::new(401, "Not signed in."));
     };
     if let Some(id) = handle.state::<App>().sealed.page(&path) {
-        let url = sealed::url(&id);
-        arm(&url);
         return Ok(AnswerPage {
-            url,
+            url: sealed::url(&id),
             title: String::new(),
         });
     }
@@ -1131,9 +1123,10 @@ async fn page_open(
         .state::<App>()
         .sealed
         .hold_page(&path, html.to_string());
-    let url = sealed::url(&id);
-    arm(&url);
-    Ok(AnswerPage { url, title })
+    Ok(AnswerPage {
+        url: sealed::url(&id),
+        title,
+    })
 }
 
 /// The pages of answers held are let go: the chat or the report shown is read again, so what
@@ -1576,58 +1569,34 @@ fn media_stream(window: &WebviewWindow) {
     let _ = window;
 }
 
-/// How long after the app's page was given a frame's address a navigation to it is let through.
-const ARMED_FOR: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// The frame addresses the app's own page was just given (`sealed_open`, `page_open`,
-/// `python_prepare`), each with when: only these may be navigated to.
-static ARMED: std::sync::Mutex<Vec<(String, std::time::Instant)>> =
-    std::sync::Mutex::new(Vec::new());
-
-/// The app's page is about to load `url` in a frame.
-fn arm(url: &str) {
-    let mut armed = ARMED.lock().unwrap();
-    armed.retain(|(_, at)| at.elapsed() < ARMED_FOR);
-    armed.push((url.to_string(), std::time::Instant::now()));
-}
-
-/// Whether `url` (a frame's address on one of the app's own schemes) was just given to the
-/// app's page -- with or without a fragment of its own (a link inside the document to a place
-/// in it).
-fn armed(url: &Url) -> bool {
-    let mut bare = url.clone();
-    bare.set_fragment(None);
-    ARMED
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|(u, at)| at.elapsed() < ARMED_FOR && Url::parse(u).is_ok_and(|u| u == bare))
-}
-
 /// The window shows the app's own page, and the frames it holds on schemes of their own -- the
 /// viewer's sealed pages, the pages of answers and the `python` tool's runner; nothing else, ever.
 /// A link the page wants followed goes to the system's browser through `open_external`; a
 /// navigation it did not ask for -- a link in a sealed frame -- simply goes nowhere.
 ///
-/// The hook is told an address, not which frame goes there. So an address on the app's own
-/// schemes is let through only when the app's page was just given it for a frame (`arm`): a
-/// frame that tries to take itself to another held document, to the viewer's, or to the
-/// runner, names an address nobody armed, and stays where it is.
+/// The hook is told an address, not which frame goes there, so it cannot hold a frame to its
+/// own document: a frame could be taken to another address on the app's own schemes. What is
+/// there stays what it is -- a page of an answer keeps its empty sandbox wherever its frame
+/// goes, and every held document is served under its own policy.
 fn allowed(url: &Url) -> bool {
     let local_app = url.scheme() == "tauri"
         || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"));
-    let own = |scheme: &str| {
-        url.scheme() == scheme
-            || (url.scheme() == "http"
-                && url
-                    .host_str()
-                    .is_some_and(|h| h == format!("{scheme}.localhost")))
-    };
-    // That the window never shows the runner as its own page is held where it is served
+    let sealed = url.scheme() == sealed::SCHEME
+        || (url.scheme() == "http"
+            && url
+                .host_str()
+                .is_some_and(|h| h == format!("{}.localhost", sealed::SCHEME)));
+    // The `python` tool's runner: a frame on its own scheme too, with no bridge (`python.rs`).
+    // This says the address may be gone to; it cannot tell a frame from the window itself, so
+    // that the window never shows the runner as its own page is held where it is served
     // (`python::respond` refuses a request for a document that is not a frame's) and by the
     // runner, which does nothing when it is not a frame.
-    let framed = (own(sealed::SCHEME) || own(python::SCHEME)) && armed(url);
-    local_app || framed || url.as_str() == "about:blank"
+    let runner = url.scheme() == python::SCHEME
+        || (url.scheme() == "http"
+            && url
+                .host_str()
+                .is_some_and(|h| h == format!("{}.localhost", python::SCHEME)));
+    local_app || sealed || runner || url.as_str() == "about:blank"
 }
 
 fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
@@ -2487,34 +2456,15 @@ mod tests {
         ] {
             assert!(allowed(&Url::parse(ok).unwrap()), "{ok}");
         }
-        // A frame's address on the app's own schemes: only one the app's page was just given.
+        // The app's own frames: the viewer's sealed page, a page of an answer, the runner.
         for framed in [
             "llembas-sealed://localhost/p1",
             "http://llembas-sealed.localhost/p1",
-            "llembas-sealed://localhost/s7",
+            "llembas-sealed://localhost/s7#totals",
             "llembas-python://localhost/runner.html?v=314.0.7",
             "http://llembas-python.localhost/runner.html?v=314.0.7",
         ] {
-            assert!(
-                !allowed(&Url::parse(framed).unwrap()),
-                "{framed}, not given"
-            );
-            arm(framed);
-            assert!(allowed(&Url::parse(framed).unwrap()), "{framed}, given");
-        }
-        // A link inside a page to a place in it; never to another held document, the viewer's
-        // or the runner with other words.
-        assert!(allowed(
-            &Url::parse("llembas-sealed://localhost/s7#totals").unwrap()
-        ));
-        for other in [
-            "llembas-sealed://localhost/s8",
-            "llembas-sealed://localhost/p2",
-            "llembas-sealed://localhost/s7/x",
-            "llembas-python://localhost/runner.html?v=0",
-            "llembas-python://localhost/pyodide/314.0.7/pyodide.mjs",
-        ] {
-            assert!(!allowed(&Url::parse(other).unwrap()), "{other}");
+            assert!(allowed(&Url::parse(framed).unwrap()), "{framed}");
         }
         for no in [
             "https://ai.example/",
