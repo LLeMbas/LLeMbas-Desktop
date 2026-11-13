@@ -6,9 +6,8 @@
 // id's MD5, modulo 360), so a model looks the same in the app and in the browser. Saturation and
 // lightness are the theme's (app.css), only the hue is the model's.
 
-import { h, icon, ICONS } from "./dom.js"
+import { h } from "./dom.js"
 import { invoke } from "./bridge.js"
-import { menu } from "./popup.js"
 
 // Each picture once per run: its path -> a promise of its `data:` URL (null when it cannot be had,
 // so a missing picture is not asked for again with every redraw).
@@ -80,49 +79,6 @@ export function avatar(model) {
   return el
 }
 
-/**
- * A model picker: a button showing the chosen model (avatar and name) that opens the list, each
- * with its avatar. `onChange(id)` when another is chosen. The element's `value` is the id.
- */
-export function modelPicker({ id, models, value, onChange, label }) {
-  let current = value
-  const btn = h("button", { type: "button", class: "picker", id, "aria-haspopup": "menu", "aria-label": label })
-  const draw = () => {
-    const m = models.find((x) => x.id === current)
-    btn.replaceChildren(
-      m ? avatar(m) : h("span", { class: "avatar avatar--none", "aria-hidden": "true" }),
-      h("span", { class: "picker__name", text: m ? m.name : current || "—" }),
-      icon(ICONS.chevronDown),
-    )
-    btn.title = m ? `${m.name} (${m.id})` : current || ""
-  }
-  btn.addEventListener("click", () => {
-    menu(
-      btn,
-      models.map((m) => ({
-        label: m.name,
-        lead: avatar(m),
-        checked: m.id === current,
-        run: () => {
-          if (m.id === current) return
-          current = m.id
-          draw()
-          onChange?.(m.id)
-        },
-      })),
-    )
-  })
-  Object.defineProperty(btn, "value", {
-    get: () => current,
-    set: (v) => {
-      current = v
-      draw()
-    },
-  })
-  draw()
-  return btn
-}
-
 // --- How hard a model thinks, and how many subagents a chat may have --------------------------------
 //
 // The levels are the harness spec's (3.2.0, `models/schema.json`), as /api/v2/models gives them:
@@ -147,49 +103,6 @@ export function levelsOf(model) {
 /** A level as the person reads it: `off` and `default` in their language, an effort as it is. */
 export function levelWord(level) {
   return level === "off" ? t("off") : level === "default" ? t("default") : String(level)
-}
-
-/**
- * The control for a model's levels, or null where it has one level: the Thinking switch (a real
- * checkbox with the switch role, the label its tap target) or the selector. `value` is the level
- * in force; `onChange(level)` when the person changes it. The element's `value` is the level.
- */
-export function effortControl({ model, value, onChange, id, compact }) {
-  const { levels, start, control } = levelsOf(model)
-  if (control === "none") return null
-  let current = levels.includes(value) ? value : start
-  if (control === "switch") {
-    const on = levels.find((l) => l !== "off") || start
-    const box = h("input", { type: "checkbox", role: "switch", id, checked: current !== "off" })
-    const el = h(
-      "label",
-      { class: `toggle${compact ? " toggle--compact" : ""}`, title: t("Think before answering") },
-      box,
-      h("span", { class: "toggle__label", text: t("Think before answering") }),
-    )
-    box.addEventListener("change", () => {
-      current = box.checked ? on : "off"
-      onChange?.(current)
-    })
-    Object.defineProperty(el, "value", {
-      get: () => current,
-      set: (v) => {
-        current = v
-        box.checked = v !== "off"
-      },
-    })
-    return el
-  }
-  const el = h(
-    "select",
-    { id, class: compact ? "head__mode" : null, "aria-label": t("Reasoning effort"), title: t("Reasoning effort") },
-    levels.map((l) => h("option", { value: l, text: levelWord(l), selected: l === current })),
-  )
-  el.addEventListener("change", () => {
-    current = el.value
-    onChange?.(current)
-  })
-  return el
 }
 
 /**
