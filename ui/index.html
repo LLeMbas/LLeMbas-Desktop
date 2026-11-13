@@ -52,6 +52,7 @@
       </div>
       <div class="side__nav">
         <button type="button" class="navrow" id="nav-scheduled" data-view="scheduled"><span class="navrow__icon"></span><span data-i18n>Scheduled</span></button>
+        <button type="button" class="navrow navrow--counted" id="nav-reports" data-view="reports" hidden><span class="navrow__icon"></span><span data-i18n>Reports</span><span class="navrow__count" id="reports-count" hidden></span></button>
         <button type="button" class="navrow" id="nav-files" data-view="files"><span class="navrow__icon"></span><span data-i18n>Files</span></button>
         <button type="button" class="navrow" id="nav-archived" data-view="archived"><span class="navrow__icon"></span><span data-i18n>Archived</span></button>
         <button type="button" class="navrow" id="nav-memory" data-view="memory"><span class="navrow__icon"></span><span data-i18n>Memory</span></button>
@@ -155,6 +156,15 @@
         <div class="head__tools"><button type="button" class="tool" id="archived-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button></div>
       </header>
       <div class="page__body" id="archived-body"></div>
+    </section>
+
+    <section class="page" id="page-reports" hidden aria-labelledby="reports-title">
+      <header class="head">
+        <h1 class="head__title" id="reports-title" data-i18n>Reports</h1>
+        <div class="head__place"></div>
+        <div class="head__tools" id="reports-tools"></div>
+      </header>
+      <div class="page__body" id="reports-body"></div>
     </section>
 
     <section class="page" id="page-memory" hidden aria-labelledby="memory-title">

@@ -25,6 +25,7 @@ import { DISPLAY } from "./spec.js"
 import { initSlash, commandIn, commandTable, closeComposerMenu } from "./slash.js"
 import { accountThemes, accountTheme, chooseTheme } from "./look.js"
 import { pythonFor, pythonState, retryPython } from "./python.js"
+import { pageMount, pageWriting } from "./pages.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 import { scopePopover } from "./scope.js"
 import { readAloudButton } from "./voice.js"
@@ -385,7 +386,7 @@ function endOf(m, last) {
 function assistantMessage(m, chat, last = null) {
   const el = h("article", { class: "msg msg--assistant", dataset: { id: m.id } })
   const steps = h("div", { class: "msg__steps" })
-  renderSteps(steps, m.steps || [], chat)
+  renderSteps(steps, m.steps || [], chat, false, m.id)
   el.append(steps)
   const end = endOf(m, last)
   if (end) {
@@ -415,16 +416,16 @@ function assistantMessage(m, chat, last = null) {
   return el
 }
 
-function renderSteps(box, steps, chat, live = false) {
+function renderSteps(box, steps, chat, live = false, owner = "") {
   // What the person opened or closed stays so while the reply is written: a call is known by
   // its id (or its place), and the server sends every step again with each change.
   const was = new Map([...box.querySelectorAll("details[data-key]")].map((d) => [d.dataset.key, d.open]))
   clear(box)
-  for (const s of steps) box.append(step(s, chat, live))
+  for (const s of steps) box.append(step(s, chat, live, owner))
   for (const d of box.querySelectorAll("details[data-key]")) if (was.has(d.dataset.key)) d.open = was.get(d.dataset.key)
 }
 
-function step(s, chat, live) {
+function step(s, chat, live, owner) {
   switch (s.kind) {
     case "thinking":
       return h(
@@ -434,7 +435,9 @@ function step(s, chat, live) {
         h("div", { class: "step__pre", text: s.text || "" }),
       )
     case "text":
-      return h("div", { class: "step step--text md" }, markdown(s.markdown || ""))
+      // A page the model wrote (`pages`: the server names each) is a sealed frame in its place;
+      // while the reply is written, its title only.
+      return h("div", { class: "step step--text md" }, markdown(s.markdown || "", live ? { writing: pageWriting } : s.pages?.length && owner ? { list: s.pages, mount: (pg) => pageMount({ kind: "m", owner, title: pg.title, digest: pg.digest }) } : null))
     case "tools":
       return h("div", { class: "step step--tools" }, (s.calls || []).map((c, i) => toolCall(c, chat, live, `call${s.index ?? ""}.${c.id || i}`)))
     case "steer":
@@ -650,7 +653,7 @@ class Live {
     }
     switch (event) {
       case "steps":
-        renderSteps(this.steps, data.steps || [], this.chat, true)
+        renderSteps(this.steps, data.steps || [], this.chat, true, this.id)
         this.tailed(data.tail)
         break
       case "tail":
@@ -712,7 +715,7 @@ class Live {
     if (!tail) return
     this.thinking.textContent = tail.thinking ? `${t("Thinking")} ${tail.label || ""}…` : ""
     this.thinking.hidden = !tail.thinking
-    clear(this.tail).append(markdown(tail.text || ""))
+    clear(this.tail).append(markdown(tail.text || "", { writing: pageWriting }))
     // The calls running right now (`tail.calls`), drawn as finished ones are; what the person
     // opened stays open as the frames come again.
     const calls = Array.isArray(tail.calls) ? tail.calls : []
@@ -1029,6 +1032,13 @@ function renderHead(chat) {
   setTitle(chat.title)
   const place = clear($("chat-place"))
   const tools = clear($("chat-tools"))
+  // The conversation that continues a report says which report, with the way back to Reports:
+  // it is in no list of chats.
+  if (chat.kind === "report") {
+    const of = ctx.reportOf?.(chat.id)
+    setTitle(`${t("Report")}: ${of?.title || chat.title || ""}`)
+    place.append(h("button", { type: "button", class: "place place--back", id: "chat-report-back", title: t("Back to Reports"), onclick: () => ctx.nav?.reports?.(of?.id || "") }, icon(ICONS.back), h("span", { class: "place__name", text: t("Back to Reports") })))
+  }
   if (chat.kind === "agent" && chat.device) {
     const here = onThisComputer(chat)
     place.append(
@@ -1539,10 +1549,47 @@ async function renderChips() {
   }
   box.replaceChildren(...parts.filter(Boolean))
   fitHead()
-  const offer = await teamOffered(chat)
-  if (!offer || drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
-  box.append(agentsChip(open.chat.agents || chat.agents, (a) => save({ agents: a }), offer))
-  fitHead()
+  const [offer, pages] = await Promise.all([teamOffered(chat), pagesOffered(chat)])
+  if (drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
+  if (offer) box.append(agentsChip(open.chat.agents || chat.agents, (a) => save({ agents: a }), offer))
+  if (pages) box.append(pagesChip(chat, pages))
+  if (offer || pages) fitHead()
+}
+
+/**
+ * Whether this chat is offered pages in its answers, and whether they are on: the server's own
+ * word (`GET /chats/{id}/html-pages` -> { offered, on }: the instance's switch and the model's
+ * flag, never in an agent chat). Null where it is not offered, or the server has no such route.
+ */
+async function pagesOffered(chat) {
+  if (chat.kind !== "chat" || chat.archived) return null
+  try {
+    const r = await get(`/chats/${encodeURIComponent(chat.id)}/html-pages`)
+    return r?.offered === true ? { on: r.on === true } : null
+  } catch {
+    return null
+  }
+}
+
+/** The chat's switch for pages in answers (experimental on the server): said, and switched by a press. */
+function pagesChip(chat, state) {
+  const words = t("Pages in answers")
+  return chip({
+    ico: ICONS.fileCode,
+    label: `${words}: ${state.on ? t("on") : t("off")}`,
+    title: t("The model may add a page to an answer: a table, a chart or a layout, shown in a sealed frame. Experimental."),
+    cls: `cchip--pages${state.on ? "" : " is-dim"}`,
+    menuish: false,
+    onclick: async () => {
+      try {
+        await post(`/chats/${encodeURIComponent(chat.id)}/html-pages`, { on: !state.on })
+        alertIn("")
+      } catch (err) {
+        alertIn(why(err))
+      }
+      if (open?.chat?.id === chat.id) renderChips()
+    },
+  })
 }
 
 /**
@@ -1753,6 +1800,9 @@ export async function openChat(id) {
   if (r.more) list.append(earlier())
   for (const m of r.messages) {
     if (m.id === r.live) continue
+    // A report's conversation opens with a line the server wrote in the person's place (so the
+    // report can be the first thing said): not theirs, and not shown.
+    if (r.chat.kind === "report" && m.role === "user" && m.machine) continue
     list.append(m.role === "user" ? userMessage(m) : assistantMessage(m, r.chat))
   }
   ctx.opened(r.chat)

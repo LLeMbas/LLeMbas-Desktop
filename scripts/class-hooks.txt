@@ -33,3 +33,5 @@ subagent            a hook; styled as .agent
 subagent__line      a hook; styled as .agent__text
 subagents__slots    a hook; styled as .tasks__goal
 subagents__list     a hook; styled as .tasks__list
+hpage__larger       a hook for the tests; styled as .btn
+run__report-open    a hook for the tests; styled as .btn

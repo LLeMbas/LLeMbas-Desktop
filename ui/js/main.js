@@ -22,6 +22,7 @@ import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
 import { initAgent, link } from "./agent.js"
 import { initScheduled, showScheduled, scheduledCommands } from "./scheduled.js"
+import { initReports, showReports, reportsCommands, reportOf } from "./reports.js"
 import { initArchived, showArchived } from "./archived.js"
 import { showMemory } from "./memory.js"
 import { initVoice, voiceFor } from "./voice.js"
@@ -164,6 +165,8 @@ function showPage(name) {
   $("main").hidden = name !== "chat"
   $("page-files").hidden = name !== "files"
   $("page-scheduled").hidden = name !== "scheduled"
+  $("page-reports").hidden = name !== "reports"
+  if (name !== "reports") invoke("set_open_report", { report: null })
   $("page-archived").hidden = name !== "archived"
   $("page-memory").hidden = name !== "memory"
   $("settings").hidden = name !== "settings"
@@ -202,6 +205,22 @@ function showChat(id) {
   openChat(id).then(markCurrent)
 }
 
+/**
+ * The conversation that continues a report: the ordinary chat view, with the sidebar still on
+ * Reports -- that chat is in no list of chats, and the way back is to where it came from.
+ */
+function showReportChat(id) {
+  showPage("chat")
+  $("nav-reports").setAttribute("aria-current", "true")
+  openChat(id).then(markCurrent)
+}
+
+/** The Reports page: the list, or one report. */
+function openReports(id = "") {
+  showPage("reports")
+  showReports(id)
+}
+
 function showSettings(on, section) {
   if (!on) {
     showPage("chat")
@@ -236,6 +255,7 @@ function commands() {
     { label: t("New chat"), run: () => startNew("chat") },
     { label: t("Scheduled"), run: () => (showPage("scheduled"), showScheduled()) },
     ...scheduledCommands(),
+    ...reportsCommands(),
     { label: t("Files"), run: () => showFiles() },
     { label: t("Archived"), run: showArchivedPage },
     { label: t("Memory"), run: () => showMemoryPage() },
@@ -309,7 +329,10 @@ async function boot() {
       sidebar: () => sideOpen($("shell").dataset.side !== "true"),
       settings: (section) => showSettings(true, section),
       scheduled: () => (showPage("scheduled"), showScheduled()),
+      reports: (id) => openReports(id),
     },
+    // The report a chat continues, where this window opened it from one.
+    reportOf: (chat) => reportOf(chat),
     // Archived or deleted: the list without it, and a new chat where it was open.
     gone: (chat) => {
       if (!openChatId() || openChatId() === chat.id) {
@@ -333,7 +356,7 @@ async function boot() {
     openFile: (path, name) => openServerFile(path, name),
     openMemory: (id) => showMemoryPage(id),
   })
-  initScheduled({ status: () => status, models: () => models, me: () => me, thisDevices, openChat: (id) => showChat(id), show: () => showPage("scheduled") })
+  initScheduled({ status: () => status, models: () => models, me: () => me, thisDevices, openChat: (id) => showChat(id), openReport: (id) => openReports(id), show: () => showPage("scheduled") })
   onViewer((on) => {
     $("shell").dataset.viewer = String(on)
   })
@@ -362,6 +385,20 @@ async function boot() {
     startNew()
   })
   $("nav-scheduled").querySelector(".navrow__icon").replaceChildren(icon(ICONS.clock))
+  initReports({
+    show: () => showPage("reports"),
+    openChat: (id) => showReportChat(id),
+    openSchedule: (id) => (showPage("scheduled"), showScheduled(id)),
+    // The count beside Reports; no row at all on a server without reports.
+    count: (n, missing = false) => {
+      $("nav-reports").hidden = missing
+      $("reports-count").hidden = !n
+      $("reports-count").textContent = n > 99 ? "99+" : String(n || "")
+      $("reports-count").setAttribute("aria-label", n ? t("%(n)s unread", { n }) : "")
+    },
+  })
+  $("nav-reports").querySelector(".navrow__icon").replaceChildren(icon(ICONS.bell))
+  $("nav-reports").addEventListener("click", () => openReports())
   $("nav-scheduled").addEventListener("click", () => {
     showPage("scheduled")
     showScheduled()
@@ -427,6 +464,9 @@ async function boot() {
   // A notification clicked: the chat it told of, or the scheduled task whose run it was.
   listen("open-chat", (e) => {
     if (view === "app" && typeof e.payload === "string") showChat(e.payload)
+  })
+  listen("open-report", (e) => {
+    if (view === "app" && typeof e.payload === "string") openReports(e.payload)
   })
   listen("open-schedule", (e) => {
     const id = e.payload?.schedule

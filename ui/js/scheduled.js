@@ -55,6 +55,7 @@ let shown = null // the task whose page is open: { id, last, running }
 const STATUS = {
   ok: () => t("Done"),
   silent: () => t("Nothing to report"),
+  unchanged: () => t("Unchanged"),
   failed: () => t("Failed"),
   missed: () => t("Missed"),
   skipped: () => t("Skipped"),
@@ -62,17 +63,22 @@ const STATUS = {
   running: () => t("Running"),
 }
 
+// Notify when (harness spec 3.8.0, reports.md §3): when a run files a report -- which is what
+// tells the person. `when` carries the person's own condition (`notify_when`; "" is the
+// server's default, `notify_default`). A server from before reports said `matters`: read as `when`.
 const NOTIFY = {
-  matters: () => t("When it matters"),
-  always: () => t("Always"),
+  always: () => t("Every run"),
+  when: () => t("When…"),
   never: () => t("Never"),
 }
 
 const NOTIFY_HINT = {
-  matters: () => t("A result, but not a run with nothing to report."),
-  always: () => t("Every result, even with nothing to report."),
-  never: () => t("Only in its history."),
+  always: () => t("A report every time, also when nothing was found."),
+  when: () => t("A report only when this holds; otherwise the run leaves one line in the history."),
+  never: () => t("No report and no notification: each run is only a line in the history."),
 }
+
+const notifyOf = (task) => (task?.notify === "always" || task?.notify === "never" ? task.notify : "when")
 
 const MODE = {
   fresh: () => t("A new chat for each run"),
@@ -352,7 +358,7 @@ async function drawTask(id) {
         fact(t("Model"), modelWords(models, task.model)),
         fact(t("Reasoning effort"), h("span", { text: task.effort ? levelWord(task.effort) : t("The model's own") })),
         fact(t("Subagents"), h("span", { text: task.agents ? t("Up to %(n)s at once", { n: task.agents }) : t("None") })),
-        fact(t("Tell me"), h("span", { text: NOTIFY[task.notify]?.() || NOTIFY.matters() })),
+        fact(t("Notify when"), h("span", { id: "sched-notify-said", text: notifyOf(task) === "when" ? task.notify_when || task.notify_default || NOTIFY.when() : NOTIFY[notifyOf(task)]() })),
         fact(t("Runs"), h("span", { text: MODE[task.mode]?.() || MODE.fresh() })),
         "runs_on" in task ? whereFact(task.runs_on, devices) : null,
       ),
@@ -457,7 +463,21 @@ function runNote(run) {
     const again = run.retry_at ? t("tried again %(when)s", { when: when(run.retry_at) }) : ""
     return [run.error?.text || STATUS.waiting(), again].filter(Boolean).join(" · ")
   }
-  return run.error?.text || ""
+  // What went wrong, else the run's own line in the history (`note`: what it found, or that it
+  // filed a report), with what it cost where the server keeps that.
+  return [run.error?.text || run.note || "", runCost(run)].filter(Boolean).join(" · ")
+}
+
+/** A run's cost as the server says it (`cost`: a number, or `{ amount, currency }`); "" for none. */
+function runCost(run) {
+  const c = run.cost
+  const amount = typeof c === "number" ? c : typeof c?.amount === "number" ? c.amount : null
+  if (amount === null) return ""
+  try {
+    return new Intl.NumberFormat(document.documentElement.lang || "en", { style: "currency", currency: (typeof c === "object" && c.currency) || "USD", maximumFractionDigits: 4 }).format(amount)
+  } catch {
+    return String(amount)
+  }
 }
 
 function runRow(task, run) {
@@ -500,7 +520,14 @@ function runRow(task, run) {
       TIMING[run.timing] ? h("span", { class: "run__late", text: TIMING[run.timing]() }) : null,
     ),
     h("span", { class: "run__model", title: switched }, h("span", { text: model.name || (task.runs_on ? task.runs_on.device_name || "" : "") }), switched ? h("span", { class: "run__switched", text: t("switched") }) : null),
-    open || h("span", { class: "run__error", title: note, text: note }),
+    h(
+      "span",
+      { class: "run__end" },
+      // The run's one line, the report it filed (opened in Reports), and its result.
+      note ? h("span", { class: `run__error${run.error?.text || run.status === "waiting" ? "" : " is-note"}`, title: note, text: note }) : null,
+      run.report ? h("button", { type: "button", class: "btn btn--sm run__report-open", text: t("Report"), onclick: () => ctx.openReport?.(run.report) }) : null,
+      open,
+    ),
     detail,
   )
 }
@@ -553,7 +580,8 @@ async function drawForm(task) {
     model: task?.model || "",
     effort: task?.effort || "",
     agents: task?.agents || null,
-    notify: task?.notify || "matters",
+    notify: notifyOf(task),
+    notify_when: task?.notify_when || "",
     mode: task?.mode || "fresh",
     runs_on: task?.runs_on ? { device: task.runs_on.device, cwd: task.runs_on.cwd, mode: task.runs_on.mode, approval_wait_minutes: task.runs_on.approval_wait_minutes } : null,
   }
@@ -651,6 +679,30 @@ async function drawForm(task) {
     return out
   }
 
+  // Notify when: Every run / When… / Never, and -- a field of its own beside it, there only
+  // for When… -- the person's own condition (the server's default stands where they wrote
+  // none). Each a field of the form's three slots: label, control, hint.
+  const notifyFields = () => {
+    const fallback = task?.notify_default || tasks.find((x) => x.notify_default)?.notify_default || ""
+    const when = h("input", { type: "text", id: "sched-notify-when", maxlength: "500", value: draft.notify_when, placeholder: fallback, oninput: (e) => (draft.notify_when = e.target.value) })
+    const condition = field(t("When to write a report"), when, fallback ? t("Left empty: %(default)s", { default: fallback }) : "", "sched-notify-when")
+    condition.hidden = draft.notify !== "when"
+    const choice = h(
+      "select",
+      {
+        id: "sched-notify",
+        onchange: (e) => {
+          draft.notify = e.target.value
+          condition.hidden = draft.notify !== "when"
+          settings.querySelector("#sched-notify-hint").textContent = NOTIFY_HINT[draft.notify]()
+          if (!condition.hidden) when.focus()
+        },
+      },
+      Object.entries(NOTIFY).map(([v, word]) => h("option", { value: v, text: word(), selected: draft.notify === v })),
+    )
+    return [field(t("Notify when"), choice, NOTIFY_HINT[draft.notify](), "sched-notify", "sched-notify-hint"), condition]
+  }
+
   const drawSettings = () => {
     const model = smodels.find((m) => m.id === draft.model) || ctx.models().find((m) => m.id === draft.model)
     const select = (id, table, key, onChange) =>
@@ -683,7 +735,7 @@ async function drawForm(task) {
     )
     settings.replaceChildren(
       ...(canPlace ? whereFields() : []),
-      field(t("Tell me"), select("sched-notify", NOTIFY, "notify", () => (settings.querySelector("#sched-notify-hint").textContent = NOTIFY_HINT[draft.notify]())), NOTIFY_HINT[draft.notify]?.() || "", "sched-notify", "sched-notify-hint"),
+      ...notifyFields(),
       field(t("Runs"), select("sched-mode", MODE, "mode"), draft.mode === "continue" ? t("Each run sees the ones before it.") : t("Each run starts with nothing but the instruction."), "sched-mode"),
       field(t("Model"), modelSelect, t("A busy model is waited for, then the next free one is used."), "sched-model"),
       field(t("Reasoning effort"), effort, levels.length ? "" : t("Choose a model to choose its effort."), "sched-effort"),
@@ -751,6 +803,7 @@ async function drawForm(task) {
       effort: draft.effort,
       agents: draft.agents,
       notify: draft.notify,
+      notify_when: draft.notify === "when" ? draft.notify_when.trim() : "",
       mode: draft.mode,
     }
     if (canPlace) body.runs_on = draft.runs_on ? { ...draft.runs_on } : null

@@ -390,6 +390,11 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
   border-radius: var(--radius-lg);
   cursor: pointer;
 }
+/* A row with a count at its end (Reports: the unread): a third track, the count's own width. */
+.navrow--counted { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.navrow[hidden] { display: none; }
+.navrow__count { min-width: var(--sp-5); padding: 0 var(--sp-1); font: 600 var(--text-xs) / 1.6 var(--font-ui); text-align: center; color: var(--accent-ink); background: var(--accent); border-radius: var(--radius-full); }
+.navrow__count[hidden] { display: none; }
 .navrow:hover { color: var(--ink); background: var(--surface-hover); }
 .navrow[aria-current="true"] { color: var(--ink); background: var(--surface-active); }
 .navrow__icon { display: grid; place-items: center; }
@@ -539,6 +544,8 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
 .place.is-here .icon { color: var(--leaf); }
 .place__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
 .place__where { color: var(--ink-faint); white-space: nowrap; }
+button.place--back { grid-template-columns: 16px minmax(0, auto); cursor: pointer; }
+button.place--back:hover { border-color: var(--border-strong); }
 /* Where the chat's Python runs: the same quiet pill, its words giving with an ellipsis; as a
    button (it could not be made ready) in the warning's colour. */
 #chat-python { display: contents; }
@@ -882,6 +889,24 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .md pre code { padding: 0; background: none; }
 .md a { color: var(--accent); }
 .md a.md-unsafe { color: var(--ink-muted); text-decoration: line-through dotted; }
+/* A page a model wrote into an answer (pages.js): a titled box of one known height -- the page
+   scrolls inside its frame, the reply around it never jumps when the frame comes or goes. The
+   frame is the sealed scheme's; nothing of the page is in this document. */
+.hpage { margin: var(--sp-3) 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); overflow: hidden; min-width: 0; }
+.hpage__head { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; min-height: var(--control-h); padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3); border-bottom: var(--border-w) solid var(--border); font: var(--text-sm) var(--font-ui); }
+.hpage__icon { display: grid; place-items: center; color: var(--ink-faint); }
+.hpage__title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+.hpage__body { display: grid; align-content: center; justify-items: center; gap: var(--sp-2); height: min(28rem, 70vh); padding: 0; }
+.hpage.is-writing .hpage__body { height: auto; min-height: calc(2 * var(--control-h)); padding: var(--sp-3); }
+.hpage__note { margin: 0; padding: 0 var(--sp-3); font: var(--text-sm) var(--font-ui); text-align: center; overflow-wrap: anywhere; }
+.hpage__note.is-error { color: var(--warning); }
+/* The frame is the body's whole height, said as a length: a percentage of a grid row that is as
+   tall as its content would leave it at a frame's default height, in the middle. */
+.hpage__frame { display: block; width: 100%; height: min(28rem, 70vh); border: 0; background: var(--surface); align-self: start; justify-self: stretch; }
+.hpage-dialog > .hpage__frame { height: 100%; }
+.hpage-dialog { width: min(72rem, calc(100vw - 2 * var(--sp-4))); height: calc(100vh - 2 * var(--sp-4)); max-width: none; max-height: none; padding: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--ink); background: var(--surface); border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-soft); overflow: hidden; }
+.hpage-dialog:not([open]) { display: none; }
+.hpage-dialog::backdrop { background: var(--scrim, rgb(0 0 0 / 0.5)); }
 .md-code { position: relative; display: grid; }
 .md-lang { position: absolute; top: var(--sp-1); left: var(--sp-3); font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
 .md-code:has(.md-lang) pre { padding-top: var(--sp-6); }
@@ -1880,9 +1905,14 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .run__late { font: var(--text-xs) var(--font-ui); color: var(--warning); }
 .run__model { display: inline-grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; min-width: 0; color: var(--ink-muted); }
 .run__model > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-/* A run's note has what the row has left, at its end: on one line where it fits, on two where it
-   does not, and only then cut (the whole of it is in the opened row and the tooltip). */
-.run__error { justify-self: end; max-width: 100%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; text-align: right; color: var(--warning); font-size: var(--text-xs); line-height: var(--leading-tight); }
+/* The end of a run's row has what the row has left: the run's one line (what went wrong, in the
+   warning's colour; or what it found), on one line where it fits and two where it does not,
+   then the report it filed and its result as buttons that never give. */
+.run__end { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); align-items: center; justify-items: end; min-width: 0; }
+.run__end > .btn { grid-column: auto; }
+.run__error { max-width: 100%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; text-align: right; color: var(--warning); font-size: var(--text-xs); line-height: var(--leading-tight); }
+.run__error.is-note { color: var(--ink-muted); }
+.field[hidden] { display: none; }
 .sched--new { gap: var(--sp-3); }
 .sched__words { width: 100%; font-size: var(--text-base); border-radius: var(--radius-soft); padding: var(--sp-3) var(--sp-4); }
 .sched__card { display: grid; gap: var(--sp-4); padding: var(--sp-4); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
@@ -1921,6 +1951,25 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .smodel__state { font: var(--text-xs) var(--font-ui); color: var(--warning); }
 .smodel__state.is-free { color: var(--success); }
 /* A page's way back, before its title: "Scheduled ›". */
+/* Reports: the list -- one row a report: a dot where it is unread, its title over its summary
+   (the track that gives), then who filed it and when, on tracks the list's rows share. One
+   report: its facts on a line, then its words at a reading width. */
+.rlist { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: var(--sp-5) minmax(0, 1fr) fit-content(40%); gap: var(--sp-2) var(--sp-3); }
+.rrow { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
+.rrow:hover { border-color: var(--border-strong); }
+.rrow__open { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-height: calc(2 * var(--control-h)); padding: var(--sp-2) var(--sp-3) var(--sp-2) 0; text-align: left; font: inherit; color: inherit; background: transparent; border: 0; border-radius: var(--radius-soft); cursor: pointer; }
+.rrow__dot { justify-self: end; width: var(--dot-size); height: var(--dot-size); border-radius: var(--radius-full); }
+.rrow.is-unread .rrow__dot { background: var(--accent); }
+.rrow__what { display: grid; gap: var(--sp-1); min-width: 0; }
+.rrow__title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink-muted); }
+.rrow.is-unread .rrow__title { font-weight: 600; color: var(--ink); }
+.rrow__summary { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: var(--text-sm); color: var(--ink-muted); }
+.rrow__meta { display: grid; justify-items: end; gap: var(--sp-1); min-width: 0; font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
+.rrow__from, .rrow__when { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.report { display: grid; gap: var(--sp-4); }
+.report__meta { margin: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); align-items: center; font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
+.report__body { min-width: 0; }
+.linkish { padding: 0; font: inherit; color: var(--accent); background: none; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .crumb { display: inline-flex; gap: var(--sp-1); align-items: center; padding: 0; font: inherit; color: var(--ink-muted); background: none; border: 0; cursor: pointer; }
 .crumb:hover { color: var(--ink); }
 .crumb__sep { margin: 0 var(--sp-2); color: var(--ink-faint); font-weight: 400; }
