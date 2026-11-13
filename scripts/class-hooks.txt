@@ -12,18 +12,14 @@ msg__files          a hook; styled as .tiles
 step                a reply's step; each kind is styled by its own class beside it
 step__label         a hook; styled by .step__row's tracks
 step--text          a reply's words; styled as .md
-call--*             a call's kind, for the tests; the row is styled as .call, its icon chosen in the script
 msg__tail           a hook for the live reply's words; styled as .md
 msg__running        the calls running now; styled as .step--tools' children are, by .call
-job--*              a job's state, for the tests; the state is said in its chip
-ask--*              a card's kind, for the tests; every card is styled as .ask
 ask__what           a hook; a paragraph of the card
 ask__reason         a hook; styled as .muted
 opt__label          a hook; a track of .opt
 textarea            says a box is a text area; styled by its tag
 mlist               the memory list; styled as .arch
 mrow__edit          a hook; styled as .mrow.is-editing textarea
-range2__input--*    which end of the two-ended slider, for the script and the tests; styled as .range2__input
 sched__what         a hook; a block of the task's page
 sched__next         a hook; a block of the task's page
 run__text           a run's words; styled as .md
@@ -35,3 +31,22 @@ subagents__slots    a hook; styled as .tasks__goal
 subagents__list     a hook; styled as .tasks__list
 hpage__larger       a hook for the tests; styled as .btn
 run__report-open    a hook for the tests; styled as .btn
+is-loading          a hook for the tests; the note is styled as .status
+cchip--picture      a hook: which chip it is, for the tests and the scripts; every chip is styled as .cchip
+cchip--mode         a hook: which chip it is; styled as .cchip
+cchip--model        a hook: which chip it is; styled as .cchip
+cchip--subagents    a hook: which chip it is; styled as .cchip
+cchip--folder       a hook: which chip it is; styled as .cchip
+cchip--device       a hook: which chip it is; styled as .cchip
+cchip--pages        a hook: which chip it is; styled as .cchip
+# Prefixes completed at run time: the classes each makes, then why. `hook:` -- the family is a
+# hook, with or without a rule for a value; otherwise every value made must have a rule.
+is-*                pending|in_progress|completed|done|queued|working|waiting|stopped|error|failed|denied|running|ok|silent|unchanged|missed|skipped|ready|uploading|warn|busy|idle|finished|paused|out_of_context  hook: a state of its element, for the style sheet and the tests; a state with no rule looks as the element does
+ctx--*              messages|system|memory|instructions|tools|mcp_tools|since|buffer|free  a context category's colour: each has its rule
+call--*             shell|edit|read|search|web|task|tool|hidden  hook: a call's kind, for the tests; the row is styled as .call, its icon chosen in the script
+job--*              running|done|failed|stopped  hook: a job's state, for the tests; the state is said in its chip
+ask--*              approval|question|plan|phone_action  hook: a card's kind, for the tests; every card is styled as .ask
+frow__icon--*       dir|mount|code|html|markdown|text  a file's kind in the explorer: each has its rule, or is listed here
+frow__icon--markdown a plain file: the icon in the row's own colour
+frow__icon--text    a plain file: the icon in the row's own colour
+range2__input--*    min|max  hook: which end of the two-ended slider, for the script and the tests; styled as .range2__input
