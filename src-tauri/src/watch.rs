@@ -449,6 +449,13 @@ impl Watch {
         self.reports.store(true, Ordering::SeqCst);
         let first = std::mem::replace(&mut *self.first.lock().unwrap(), false);
         let Some(report) = frame.get("newest").filter(|r| r.is_object()) else {
+            // Nothing unread; what was filed and read elsewhere meanwhile still moves the mark.
+            if let Some(latest) = frame.get("latest_created").and_then(Value::as_str) {
+                let mut mark = self.mark.lock().unwrap();
+                if mark.as_deref().is_none_or(|m| later(latest, m)) && !latest.is_empty() {
+                    *mark = Some(latest.to_string());
+                }
+            }
             return News::None;
         };
         let text = |key: &str| {
@@ -463,12 +470,26 @@ impl Watch {
         if id.is_empty() || created.is_empty() {
             return News::None;
         }
+        // The server's own word for when the newest report of any state was filed
+        // (`latest_created`): a report has arrived only when that is later than the mark. A
+        // server that does not say it leaves the newest unread one's own stamp.
+        let latest = frame
+            .get("latest_created")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let stamp = latest.unwrap_or(&created).to_string();
         let mut mark = self.mark.lock().unwrap();
         let before = mark.clone();
-        if before.as_deref().is_some_and(|m| !later(&created, m)) {
+        if before.as_deref().is_some_and(|m| !later(&stamp, m)) {
             return News::None;
         }
-        *mark = Some(created);
+        *mark = Some(stamp.clone());
+        // The one that arrived is named only where it is the newest unread one: if it was read
+        // elsewhere already, there is nothing to tell.
+        if created != stamp {
+            return News::None;
+        }
         let newest = Filed {
             id,
             title: text("title"),
@@ -708,6 +729,48 @@ mod tests {
         assert_eq!(w.look_reports(&frame(1, Some(("rep4", T4)))), News::None);
         // It is deleted, an older one marked unread again elsewhere: still nothing.
         assert_eq!(w.look_reports(&frame(1, Some(("rep2", T2)))), News::None);
+    }
+
+    #[test]
+    fn the_servers_latest_created_says_whether_a_report_arrived() {
+        let with = |f: Value, latest: Option<&str>| {
+            let mut f = f;
+            f["latest_created"] = json!(latest);
+            f
+        };
+        let w = Watch::default();
+        w.begin(None);
+        assert_eq!(
+            w.look_reports(&with(frame(2, Some(("rep3", T3))), Some(T3))),
+            News::None
+        );
+        // The newest is read: an older unread one is named, and nothing later was filed.
+        assert_eq!(
+            w.look_reports(&with(frame(1, Some(("rep2", T2))), Some(T3))),
+            News::None
+        );
+        // A report arrives: later than the mark, and it is the newest unread one.
+        assert_eq!(
+            w.look_reports(&with(frame(2, Some(("rep4", T4))), Some(T4))),
+            News::One(filed("rep4"))
+        );
+        // One arrives and is read elsewhere before the frame: the mark moves, nothing is told --
+        // not the older unread one the frame names, and not that one again later.
+        const T5: &str = "2026-01-06T03:04:05+00:00";
+        assert_eq!(
+            w.look_reports(&with(frame(1, Some(("rep2", T2))), Some(T5))),
+            News::None
+        );
+        assert_eq!(w.mark().as_deref(), Some(T5));
+        // Nothing unread at all, but something was filed and read meanwhile.
+        const T6: &str = "2026-01-07T03:04:05+00:00";
+        assert_eq!(w.look_reports(&with(frame(0, None), Some(T6))), News::None);
+        assert_eq!(w.mark().as_deref(), Some(T6));
+        // No reports at all yet (`latest_created: null`).
+        let fresh = Watch::default();
+        fresh.begin(None);
+        assert_eq!(fresh.look_reports(&with(frame(0, None), None)), News::None);
+        assert_eq!(fresh.mark(), None);
     }
 
     #[test]
