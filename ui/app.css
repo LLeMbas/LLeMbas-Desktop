@@ -539,6 +539,14 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
 .place.is-here .icon { color: var(--leaf); }
 .place__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
 .place__where { color: var(--ink-faint); white-space: nowrap; }
+/* Where the chat's Python runs: the same quiet pill, its words giving with an ellipsis; as a
+   button (it could not be made ready) in the warning's colour. */
+#chat-python { display: contents; }
+#chat-python[hidden] { display: none; }
+.place--python { grid-template-columns: 16px minmax(0, auto); max-width: 100%; }
+.place--python .place__where { overflow: hidden; text-overflow: ellipsis; }
+button.place--python { cursor: pointer; }
+.place--python.is-warn, .place--python.is-warn .place__where { color: var(--warning); }
 
 .thread { overflow: auto; min-height: 0; padding: var(--sp-6) var(--sp-4) var(--sp-4); scroll-behavior: auto; }
 .thread > * { max-width: var(--column); margin-left: auto; margin-right: auto; }

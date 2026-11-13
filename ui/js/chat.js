@@ -24,7 +24,7 @@ import { ACTIONS, callDuration, callFacts, callTitle, changeText, count, diffCou
 import { DISPLAY } from "./spec.js"
 import { initSlash, commandIn, commandTable, closeComposerMenu } from "./slash.js"
 import { accountThemes, accountTheme, chooseTheme } from "./look.js"
-import { pythonFor } from "./python.js"
+import { pythonFor, pythonState, retryPython } from "./python.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 import { scopePopover } from "./scope.js"
 import { readAloudButton } from "./voice.js"
@@ -1045,12 +1045,67 @@ function renderHead(chat) {
     const terminal = terminalControl()
     if (terminal) tools.append(terminal)
   }
+  // A chat on the server whose Python runs here says so, quietly, beside its title.
+  if (chat.kind === "chat") {
+    place.append(h("span", { id: "chat-python", hidden: true }))
+    renderPython()
+  }
   // An archived chat says so where it is read, with the way back into the sidebar.
   if (chat.archived) tools.append(h("button", { type: "button", class: "btn btn--sm head__unarchive", text: t("Restore chat"), title: t("Archived"), onclick: () => unarchiveChat(open?.chat || chat) }))
   if (!chat.archived) tools.append(h("button", { type: "button", class: "tool", id: "scope-open", "aria-label": t("Tools and skills…"), title: t("Tools and skills…"), "aria-haspopup": "dialog", onclick: (e) => scopePopover(e.currentTarget, open?.chat || chat) }, icon(ICONS.tools)))
   tools.append(activityButton())
   tools.append(h("button", { type: "button", class: "tool", "aria-label": t("More"), title: t("More"), onclick: (e) => chatMenu(e.currentTarget, open?.chat || chat) }, icon(ICONS.more)))
   fitHead()
+}
+
+/**
+ * Whether this window runs the chat's Python (python.js), beside the title: said in a few quiet
+ * words where it does; where the runner could not be made ready, that -- a press says why and
+ * tries again. Nothing where Python is off on the server, the chat is an agent's (its code runs
+ * on its computer), or the runner is still being made ready.
+ */
+export function pythonChanged() {
+  renderPython()
+  fitHead()
+}
+
+function renderPython() {
+  const at = $("chat-python")
+  if (!at) return
+  const { state, reason } = open?.chat?.kind === "chat" ? pythonState() : { state: "off", reason: "" }
+  at.hidden = state === "off"
+  if (state === "ready") {
+    const words = t("Python runs in this window")
+    at.replaceChildren(h("span", { class: "place place--python", title: words }, icon(ICONS.fileCode), h("span", { class: "place__where", text: words })))
+  } else if (state === "failed") {
+    const words = t("Python cannot run in this window")
+    at.replaceChildren(
+      h(
+        "button",
+        {
+          type: "button",
+          class: "place place--python is-warn",
+          "aria-haspopup": "dialog",
+          title: words,
+          onclick: (e) =>
+            popover(
+              e.currentTarget,
+              h(
+                "div",
+                { class: "pop__body" },
+                h("p", { class: "pop__title", text: words }),
+                reason ? h("p", { text: reason }) : null,
+                h("p", { class: "hint", text: t("It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.") }),
+                h("div", { class: "pop__actions" }, h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Try again"), onclick: () => (closePopover(), retryPython()) })),
+              ),
+              { label: words },
+            ),
+        },
+        icon(ICONS.fileCode),
+        h("span", { class: "place__where", text: words }),
+      ),
+    )
+  } else at.replaceChildren()
 }
 
 // --- The chat's settings, top right ---------------------------------------------------------------

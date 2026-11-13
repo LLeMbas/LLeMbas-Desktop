@@ -6,6 +6,14 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A chat says when its Python runs in this window.** Beside the title of a chat on the server:
+  "Python runs in this window", once the window really is the chat's page for the `python`
+  tool. Where the runner's files could not be made ready it says "Python cannot run in this
+  window"; a press gives the reason and Try again. Nothing is said where Python is off on the
+  server or the chat is an agent's.
+
 ### Fixed
 
 - **A menu row's second word was glued to its first.** The computer menu of a new agent chat

@@ -640,6 +640,10 @@ KEYS = (
     # terminal.js: a reconnect that found the shell still running
     "Connected again, to the same shell.",
     "What was typed while it was reconnecting was not sent.",
+    # chat.js: where the chat's Python runs
+    "Python runs in this window",
+    "Python cannot run in this window",
+    "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -966,6 +970,9 @@ OWN: dict[str, dict[str, str]] = {
         "Open Settings": "Otevřít Nastavení",
         "Connected again, to the same shell.": "Znovu připojeno ke stejnému shellu.",
         "What was typed while it was reconnecting was not sent.": "Co jste napsali během opětovného připojování, nebylo odesláno.",
+        "Python runs in this window": "Python běží v tomto okně",
+        "Python cannot run in this window": "Python v tomto okně běžet nemůže",
+        "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Zkouší se to znovu samo. Do té doby běží Python této konverzace v kartě prohlížeče, kde je konverzace otevřená.",
     },
     "de": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -1287,6 +1294,9 @@ OWN: dict[str, dict[str, str]] = {
         "Open Settings": "Einstellungen öffnen",
         "Connected again, to the same shell.": "Wieder verbunden, mit derselben Shell.",
         "What was typed while it was reconnecting was not sent.": "Was während des erneuten Verbindens getippt wurde, wurde nicht gesendet.",
+        "Python runs in this window": "Python läuft in diesem Fenster",
+        "Python cannot run in this window": "Python kann in diesem Fenster nicht laufen",
+        "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Es wird von selbst erneut versucht. Bis dahin läuft das Python dieses Chats in einem Browser-Tab, in dem der Chat geöffnet ist.",
     },
     "es": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1608,6 +1618,9 @@ OWN: dict[str, dict[str, str]] = {
         "Open Settings": "Abrir Ajustes",
         "Connected again, to the same shell.": "Conectado de nuevo, al mismo shell.",
         "What was typed while it was reconnecting was not sent.": "Lo que se escribió mientras se reconectaba no se envió.",
+        "Python runs in this window": "Python se ejecuta en esta ventana",
+        "Python cannot run in this window": "Python no puede ejecutarse en esta ventana",
+        "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Se vuelve a intentar por sí solo. Hasta entonces, el Python de este chat se ejecuta en una pestaña del navegador que tenga el chat abierto.",
     },
     "fr": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -1929,6 +1942,9 @@ OWN: dict[str, dict[str, str]] = {
         "Open Settings": "Ouvrir les Paramètres",
         "Connected again, to the same shell.": "Reconnecté, au même shell.",
         "What was typed while it was reconnecting was not sent.": "Ce qui a été saisi pendant la reconnexion n’a pas été envoyé.",
+        "Python runs in this window": "Python s’exécute dans cette fenêtre",
+        "Python cannot run in this window": "Python ne peut pas s’exécuter dans cette fenêtre",
+        "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Une nouvelle tentative a lieu d’elle-même. D’ici là, le Python de cette conversation s’exécute dans un onglet du navigateur où la conversation est ouverte.",
     },
     "hu": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -2250,6 +2266,9 @@ OWN: dict[str, dict[str, str]] = {
         "Open Settings": "Beállítások megnyitása",
         "Connected again, to the same shell.": "Újra csatlakozva, ugyanahhoz a shellhez.",
         "What was typed while it was reconnecting was not sent.": "Amit az újracsatlakozás közben beírt, nem lett elküldve.",
+        "Python runs in this window": "A Python ebben az ablakban fut",
+        "Python cannot run in this window": "A Python nem tud futni ebben az ablakban",
+        "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Magától újra megpróbálja. Addig ennek a beszélgetésnek a Pythonja egy olyan böngészőlapon fut, ahol a beszélgetés meg van nyitva.",
     },
     "it": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -2571,6 +2590,9 @@ OWN: dict[str, dict[str, str]] = {
         "Open Settings": "Apri Impostazioni",
         "Connected again, to the same shell.": "Connessione ristabilita, alla stessa shell.",
         "What was typed while it was reconnecting was not sent.": "Ciò che è stato digitato durante la riconnessione non è stato inviato.",
+        "Python runs in this window": "Python viene eseguito in questa finestra",
+        "Python cannot run in this window": "Python non può essere eseguito in questa finestra",
+        "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Viene riprovato da solo. Fino ad allora, il Python di questa chat viene eseguito in una scheda del browser in cui la chat è aperta.",
     },
     "pl": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -2892,6 +2914,9 @@ OWN: dict[str, dict[str, str]] = {
         "Open Settings": "Otwórz Ustawienia",
         "Connected again, to the same shell.": "Połączono ponownie, z tą samą powłoką.",
         "What was typed while it was reconnecting was not sent.": "To, co wpisano podczas ponownego łączenia, nie zostało wysłane.",
+        "Python runs in this window": "Python działa w tym oknie",
+        "Python cannot run in this window": "Python nie może działać w tym oknie",
+        "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Próba zostanie ponowiona samoczynnie. Do tego czasu Python tego czatu działa w karcie przeglądarki, w której czat jest otwarty.",
     },
     "sk": {
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
@@ -3213,6 +3238,9 @@ OWN: dict[str, dict[str, str]] = {
         "Open Settings": "Otvoriť Nastavenia",
         "Connected again, to the same shell.": "Znova pripojené k tomu istému shellu.",
         "What was typed while it was reconnecting was not sent.": "To, čo ste napísali počas opätovného pripájania, sa neodoslalo.",
+        "Python runs in this window": "Python beží v tomto okne",
+        "Python cannot run in this window": "Python v tomto okne bežať nemôže",
+        "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Skúša sa to znova samo. Dovtedy beží Python tejto konverzácie v karte prehliadača, kde je konverzácia otvorená.",
     },
 }
 

@@ -3749,6 +3749,7 @@ test("PY: a chat on the server shown in the window is announced as its page, a c
   const [said] = await answered(p)
   const [announced] = await pagePosts(p, "announce")
   assert.match(announced.page_id, /^[0-9a-f]{24}$/, "a page id of the server's shape")
+  assert.equal((await p.textContent("#chat-python .place--python")).trim(), "Python runs in this window")
   assert.deepEqual(said, { page_id: announced.page_id, call_id: "call1", result: { stdout: "hello\nfrom python", result: "42", error: "", files: [] } })
   // The poll named this page, and carries on after the call.
   const takes = await p.evaluate(() => window.__mock.api("GET", "/chats/chat1/page/take").map((x) => x.args.path))
@@ -3773,6 +3774,7 @@ test("PY: a chat on the server shown in the window is announced as its page, a c
   assert.deepEqual(await pagePosts(p, "withdraw"), [{ page_id: announced.page_id }])
   await p.waitForTimeout(200)
   assert.equal(await p.evaluate(() => window.__mock.api("POST", "/chats/chat2/page/").length), 0)
+  assert.equal(await p.locator("#chat-python").count(), 0, "an agent chat's Python is its computer's: nothing is said here")
   // Back: a page of its own again, with a new id -- and a new frame: the one that ran a call was thrown away on leaving.
   await openChatRow(p, "chat1")
   await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat1/page/announce").length === 2)
@@ -3860,6 +3862,21 @@ test("PY: a poll answered with nothing at once is not asked again at once: the p
   assert.deepEqual(p.errors, [])
 })
 
+test("PY: where the chat's Python runs is said beside the title at 1280, 800 and 390 px without pushing anything out of the header", async () => {
+  for (const [width, height] of [[1280, 860], [800, 700], [390, 844]]) {
+    const p = await page(py(), { width, height })
+    await p.evaluate(() => document.querySelector('.chatrow[data-id="chat1"]').click())
+    await p.waitForSelector("#chat-python .place--python")
+    const [pill, head] = await p.evaluate(() => ["#chat-python .place--python", "#chat-head"].map((q) => { const r = document.querySelector(q).getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width } }))
+    assert.ok(pill.left >= head.left && pill.right <= head.right + 0.5 && pill.width >= 24, `${width}: inside the header ${JSON.stringify(pill)}`)
+    assert.ok(await noSideways(p, width), `${width}: nothing sideways`)
+    assert.deepEqual(await reachable(p, width), [], `${width}: every control of the header reachable`)
+    await shot(p, `py-header-${width}`)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
 test("PY: the window is announced as the chat's page only once its runner is there: not while the files are fetched, not when they could not be -- tried again later, and nothing alarming shown", async () => {
   // The files could not be fetched or did not verify (Rust's words): nothing is announced, so
   // the server asks another page of the chat meanwhile; nothing is taken either.
@@ -3872,15 +3889,27 @@ test("PY: the window is announced as the chat's page only once its runner is the
   assert.equal(await p.evaluate(() => window.__mock.api("GET", "/chats/chat1/page/take").length), 0)
   assert.equal(await p.locator("#python-runner").count(), 0, "no frame without verified files")
   assert.equal(await p.locator(".is-error:visible, .notice:visible").count(), 0, "nothing alarming")
+  // Said quietly beside the title; a press says why (Rust's words) and offers to try at once.
+  assert.equal((await p.textContent("#chat-python button.place--python.is-warn")).trim(), "Python cannot run in this window")
+  await p.click("#chat-python button.place--python")
+  await p.waitForSelector(".pop")
+  assert.match(await p.textContent(".pop"), /pyodide\.asm\.wasm is not the file the server's list names/)
+  const before = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length)
+  await p.click(".pop .btn--primary")
+  await runUntil(p, () => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length >= 2, 20, 20)
+  assert.equal(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length), before + 1, "Try again tries at once, not when the wait is over")
+  assert.equal(await p.locator(".pop").count(), 0)
   // Tried again after a pause that grows (2 s, 4 s): still failing, still silent.
   await p.clock.runFor(7000)
   const tried = await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length)
-  assert.ok(tried >= 2 && tried <= 4, `tried again, not in a loop (${tried})`)
+  assert.ok(tried >= 3 && tried <= 5, `tried again, not in a loop (${tried})`)
   assert.deepEqual(await pagePosts(p, "announce"), [])
   // Put right, but slow (the first download): announced only when the runner says it is there.
   await p.evaluate((url) => Object.assign(window.__mockConfig, { python: { url, version: "0.0.0-test" }, pythonDelay: 3000 }), `${RUNNER}/runner.html?v=0.0.0-test`)
   await runUntil(p, () => window.__mock.calls.filter((c) => c.cmd === "python_prepare").length > 0 && !!document.getElementById("python-runner"), 500, 40)
   await runUntil(p, () => window.__mock.api("POST", "/chats/chat1/page/announce").length === 1, 200, 60)
+  assert.equal((await p.textContent("#chat-python .place--python")).trim(), "Python runs in this window")
+  assert.equal(await p.locator("#chat-python button").count(), 0, "said, not a control")
   // The call that waited is run.
   await runUntil(p, () => window.__mock.api("POST", "/chats/chat1/page/answer").length === 1, 200, 60)
   assert.equal((await pagePosts(p, "answer"))[0].result.stdout, "hello")

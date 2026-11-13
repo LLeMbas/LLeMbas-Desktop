@@ -37,7 +37,7 @@ import { invoke, get, post } from "./bridge.js"
 const ANNOUNCE_EVERY = 20000
 const enc = encodeURIComponent
 
-let ctx = { me: () => null }
+let ctx = { me: () => null, changed: null }
 let runner = null // { url, version, frame, ready: Promise, sig, used } once the frame is asked for
 let attached = null // the chat this window is a page of: { chat, page, stopped, timer }
 let nextCall = Promise.resolve() // one call at a time: the frame has one worker
@@ -214,6 +214,33 @@ function stop(a) {
   if (a.stopped) return
   a.stopped = true
   clearInterval(a.timer)
+  a.again?.()
+  said(a, "off")
+}
+
+/** Keep what the window is for the chat's Python, and tell the page when it changes. */
+function said(a, state, reason = "") {
+  if (a.state === state && a.reason === reason) return
+  a.state = state
+  a.reason = reason
+  if (attached === a || state === "off") ctx.changed?.()
+}
+
+/**
+ * What this window is for the Python of the chat it shows: `ready` (it is the chat's page: the
+ * `python` tool's code runs here), `failed` with the `reason` (the runner could not be made
+ * ready; it is tried again by itself, and at once with `retryPython`), or `off` -- Python is
+ * not on, the chat is not one to run it for, or the runner is still being made ready.
+ */
+export function pythonState() {
+  const a = attached
+  if (!a || a.stopped) return { state: "off", reason: "" }
+  return a.state === "ready" || a.state === "failed" ? { state: a.state, reason: a.reason || "" } : { state: "off", reason: "" }
+}
+
+/** Try to make the runner ready now, not when the wait is over. */
+export function retryPython() {
+  attached?.again?.()
 }
 
 /**
@@ -264,6 +291,7 @@ async function loop(a) {
       // until it can be -- said, so the server asks another page meanwhile.
       clearInterval(a.timer)
       post(`/chats/${enc(a.chat)}/page/withdraw`, { page_id: a.page }).catch(() => {})
+      said(a, "preparing")
       return attach(a)
     }
   }
@@ -286,11 +314,16 @@ async function attach(a) {
       break
     } catch (err) {
       if (err?.status === 409) return stop(a)
-      await wait(pause)
+      // Said in the chat's header, quietly, with the reason and a way to try at once.
+      said(a, "failed", String(err?.detail || err?.message || err || ""))
+      await Promise.race([wait(pause), new Promise((now) => (a.again = now))])
+      a.again = null
       pause = Math.min(pause * 2, 60000)
+      if (!a.stopped) said(a, "preparing")
     }
   }
   if (a.stopped) return
+  said(a, "ready")
   announce(a)
   a.timer = setInterval(() => announce(a), ANNOUNCE_EVERY)
   loop(a)
@@ -308,13 +341,14 @@ export function pythonFor(chat) {
   if (attached) {
     const old = attached
     attached = null
+    ctx.changed?.()
     if (!old.stopped) {
       stop(old)
       post(`/chats/${enc(old.chat)}/page/withdraw`, { page_id: old.page }).catch(() => {})
     }
   }
   if (!want) return
-  const a = { chat: want, page: pageId(), stopped: false, timer: 0 }
+  const a = { chat: want, page: pageId(), stopped: false, timer: 0, state: "preparing", reason: "", again: null }
   attached = a
   // The runner is made ready in the background; the chat does not wait for it, and the window
   // is announced as its page only once it is there.
