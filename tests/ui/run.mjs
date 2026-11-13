@@ -4008,6 +4008,31 @@ test("V4: at 390 px a scheduled task's name is whole in its header, its buttons 
   assert.deepEqual(p.errors, [])
 })
 
+test("V4: a scheduled task's status in the list and a run's note use the room their row has: neither is cut where it fits, and the rows share their lines", async () => {
+  for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700]]) {
+    const p = await page(gallery("moria"), { width, height })
+    await p.evaluate(() => document.getElementById("nav-scheduled").click())
+    await p.waitForSelector("#scheduled-body .task .schip")
+    const chips = await p.$$eval("#scheduled-body .task .schip", (l) => l.map((x) => ({ said: x.textContent, whole: x.scrollWidth <= x.clientWidth, in: x.getBoundingClientRect().right <= x.closest(".task").getBoundingClientRect().right })))
+    assert.ok(chips.length && chips.every((c) => c.whole && c.in), `${width}: ${JSON.stringify(chips)}`)
+    // The row's parts beside each other, none over another.
+    const parts = await p.$$eval("#scheduled-body .task__open > *", (l) => l.filter((x) => x.offsetParent !== null).map((x) => { const r = x.getBoundingClientRect(); return [r.left, r.right] }))
+    assert.ok(parts.every(([left], i) => i === 0 || left >= parts[i - 1][1] + 8), `${width}: ${JSON.stringify(parts)}`)
+    assert.deepEqual(await controlsOut(p, width), [], `${width}: the list's controls`)
+    await shot(p, `v4-scheduled-row-${width}`)
+    await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" }))
+    await p.waitForSelector("#scheduled-body .run")
+    const notes = await p.$$eval("#scheduled-body .run__error", (l) => l.map((x) => ({ said: x.textContent, whole: x.scrollWidth <= x.clientWidth && x.scrollHeight <= x.clientHeight + 1, lines: Math.round(x.getBoundingClientRect().height / parseFloat(getComputedStyle(x).lineHeight)), in: x.getBoundingClientRect().right <= x.closest(".runs").getBoundingClientRect().right + 0.5 })))
+    await shot(p, `v4-scheduled-runs-${width}`)
+    // On one line or two, whole (this note is a long one); never past the list, never more than two lines.
+    assert.ok(notes.length && notes.every((c) => c.in && c.lines <= 2 && (c.whole || width < 1024)), `${width}: ${JSON.stringify(notes)}`)
+    assert.ok(await noSideways(p, width))
+    await shot(p, `v4-scheduled-runs-${width}`)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
 // Every screen, at the five widths, in both looks. What must hold on all of them is asserted --
 // the window never scrolls sideways, every control is inside the window and not cut off by what
 // holds it, no two controls of a row are drawn over each other -- and with $SHOTS each is left

@@ -31,6 +31,11 @@ All notable changes to LLeMbas Desktop. The format follows
   does not fit, it is where it is that gives (`/srv/projects/customers…/site`): the last name,
   the part that tells one path from another, stays whole. The whole path is in the tooltip.
 
+- **Scheduled: a task's status and a run's note use the room their row has.** The status in the
+  list was cut at a fixed width ("Waiting for the co…") with the row half empty; the list's rows
+  now share their tracks and the status is as wide as it says. A run's note takes what the row
+  has left, on two lines where one is not enough.
+
 ### Removed
 
 - Two controls nothing drew any more (the model picker and the effort control from before the

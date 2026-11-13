@@ -1800,16 +1800,20 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .empty__text { max-width: var(--w-prose-sm); color: var(--ink-muted); font-size: var(--text-sm); }
 .empty__actions { display: flex; justify-content: center; }
 
-/* Scheduled: the list. One row per task on fixed tracks -- icon, title over its rule, the next
-   run, the last run's status, and the pause switch outside the row's button. */
-.tasks-list { list-style: none; margin: 0 auto; padding: 0; display: grid; gap: var(--sp-2); }
-.task { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
+/* Scheduled: the list. One row per task -- icon, title over its rule, the next run, the last
+   run's status, and the pause switch outside the row's button -- on tracks that are the list's
+   own, shared by every row (subgrid): the status is as wide as the longest one in the list says
+   (up to a good part of the row), so none is cut short where there is room, and every row's
+   parts still start on the same lines. Narrower, the list drops a track (`--task-cols`). */
+/* (The first track holds the row button's own padding beside the icon: a subgrid's padding comes out of its edge tracks.) */
+.tasks-list { --task-icon: calc(var(--sp-8) + var(--sp-3)); --task-cols: var(--task-icon) minmax(0, 1fr) var(--w-field-sm) fit-content(45%) auto; --task-open: 1 / 5; list-style: none; margin: 0 auto; padding: 0; display: grid; grid-template-columns: var(--task-cols); gap: var(--sp-2) var(--sp-3); }
+.task { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
 .task:hover { border-color: var(--border-strong); }
 .task.is-paused .task__title, .task.is-paused .task__icon { color: var(--ink-faint); }
 .task__open {
   display: grid;
-  grid-template-columns: var(--sp-8) minmax(0, 1fr) var(--w-field-sm) var(--w-field-sm);
-  gap: var(--sp-3);
+  grid-column: var(--task-open);
+  grid-template-columns: subgrid;
   align-items: center;
   min-height: calc(2 * var(--control-h));
   padding: var(--sp-2) var(--sp-3);
@@ -1852,7 +1856,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 /* A run's row: how it went · when · on what · its note or Open. The tracks are the list's, shared
    by every row (subgrid): the first is as wide as the longest status in the list -- whatever its
    words are in a language -- so no status is cut short and every date starts on one line. */
-.runs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr) minmax(0, var(--w-field-sm)) auto; column-gap: var(--sp-3); }
+.runs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content max-content fit-content(var(--w-field-sm)) minmax(0, 1fr); column-gap: var(--sp-3); }
 .run {
   display: grid;
   grid-column: 1 / -1;
@@ -1868,7 +1872,9 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .run__late { font: var(--text-xs) var(--font-ui); color: var(--warning); }
 .run__model { display: inline-grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; min-width: 0; color: var(--ink-muted); }
 .run__model > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.run__error { max-width: var(--w-field-sm); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--warning); font-size: var(--text-xs); }
+/* A run's note has what the row has left, at its end: on one line where it fits, on two where it
+   does not, and only then cut (the whole of it is in the opened row and the tooltip). */
+.run__error { justify-self: end; max-width: 100%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; text-align: right; color: var(--warning); font-size: var(--text-xs); line-height: var(--leading-tight); }
 .sched--new { gap: var(--sp-3); }
 .sched__words { width: 100%; font-size: var(--text-base); border-radius: var(--radius-soft); padding: var(--sp-3) var(--sp-4); }
 .sched__card { display: grid; gap: var(--sp-4); padding: var(--sp-4); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
@@ -2128,7 +2134,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 @media (max-width: 64rem) {
   .shell[data-viewer="true"], .shell[data-activity="true"], .shell[data-terminal="true"] { --panel-col: 0px; }
   .viewer, .activity, .termpanel, .shell[data-activity="true"] .viewer, .shell[data-terminal="true"] .viewer { grid-area: main; z-index: var(--z-panel); border-left: 0; }
-  .task__open { grid-template-columns: var(--sp-8) minmax(0, 1fr) var(--w-field-sm); }
+  .tasks-list { --task-cols: var(--task-icon) minmax(0, 1fr) fit-content(45%) auto; --task-open: 1 / 4; }
   .task__next { display: none; }
 }
 
@@ -2205,6 +2211,6 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   .bar > .bar__agent { grid-template-columns: var(--dot-size); }
   .setup .row { grid-template-columns: minmax(0, 1fr); }
   .setup .field { grid-template-rows: auto auto auto; }
-  .task__open { grid-template-columns: var(--sp-8) minmax(0, 1fr); }
+  .tasks-list { --task-cols: var(--task-icon) minmax(0, 1fr) auto; --task-open: 1 / 3; }
   .task__last { display: none; }
 }
