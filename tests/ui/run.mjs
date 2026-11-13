@@ -4419,11 +4419,11 @@ test("H1: a long chat's pages are held by need: frames only near the window, mad
   await p.evaluate(() => document.querySelector('.msg[data-id="p29"]').scrollIntoView())
   await p.waitForSelector('.msg[data-id="p29"] .hpage__frame')
   assert.equal((await pageOpens(p)).filter((a) => a.owner === "p29").length, 2, "asked of Rust again, which holds it or fetches it")
-  // The server has it no more (a grant taken away, the message gone): said in its place.
-  await p.evaluate(() => (window.__mockConfig.pages = { __error: { status: 404, detail: "The page is not there." } }))
+  // It cannot be had just now (the server did not answer): said in its place, with Try again.
+  await p.evaluate(() => (window.__mockConfig.pages = { __error: { status: 502, detail: "The server did not answer." } }))
   await p.evaluate(() => document.querySelector('.msg[data-id="p15"]').scrollIntoView({ block: "center" }))
   await p.waitForSelector('.msg[data-id="p15"] .hpage__note.is-error')
-  assert.match(await p.textContent('.msg[data-id="p15"] .hpage__body'), /This page could not be shown: The page is not there\./)
+  assert.match(await p.textContent('.msg[data-id="p15"] .hpage__body'), /This page could not be shown: The server did not answer\./)
   await p.evaluate(() => (window.__mockConfig.pages = {}))
   await p.click('.msg[data-id="p15"] .hpage__body .btn')
   await p.waitForSelector('.msg[data-id="p15"] .hpage__frame')
