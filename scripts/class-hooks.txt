@@ -1,0 +1,35 @@
+# Classes the page gives an element that have no rule of their own, on purpose, each with why.
+# scripts/check-classes.mjs fails for a class that is neither styled nor listed here, and for a
+# line here the page no longer uses. `name*` is a prefix completed at run time.
+settings            the Settings page's name; styled as .page and by its parts
+termpanel__send     a hook for the tests; styled as .btn
+room__text          a room message's words; styled as .md
+arow__unarchive     a hook for the tests; styled as .btn
+arow__more          the row's last track, a .tool or an empty box of the same track
+arch__empty         a hook for the tests; styled as .muted
+tile--image         says a tile is a picture, for the tests; the picture is styled as .tile__thumb
+msg__files          a hook; styled as .tiles
+step                a reply's step; each kind is styled by its own class beside it
+step__label         a hook; styled by .step__row's tracks
+step--text          a reply's words; styled as .md
+call--*             a call's kind, for the tests; the row is styled as .call, its icon chosen in the script
+msg__tail           a hook for the live reply's words; styled as .md
+msg__running        the calls running now; styled as .step--tools' children are, by .call
+job--*              a job's state, for the tests; the state is said in its chip
+ask--*              a card's kind, for the tests; every card is styled as .ask
+ask__what           a hook; a paragraph of the card
+ask__reason         a hook; styled as .muted
+opt__label          a hook; a track of .opt
+textarea            says a box is a text area; styled by its tag
+mlist               the memory list; styled as .arch
+mrow__edit          a hook; styled as .mrow.is-editing textarea
+range2__input--*    which end of the two-ended slider, for the script and the tests; styled as .range2__input
+sched__what         a hook; a block of the task's page
+sched__next         a hook; a block of the task's page
+run__text           a run's words; styled as .md
+sched__nextbox      a hook; a block of the form
+subagents__ended    a hook; styled as .tasks__more
+subagent            a hook; styled as .agent
+subagent__line      a hook; styled as .agent__text
+subagents__slots    a hook; styled as .tasks__goal
+subagents__list     a hook; styled as .tasks__list

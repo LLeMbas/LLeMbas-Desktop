@@ -16,5 +16,7 @@ if grep -nE '\.(innerHTML|outerHTML)\s*=|insertAdjacentHTML|document\.write' ui/
   echo "check-ui: the lines above set HTML from a string" >&2
   bad=1
 fi
+# Every class the page uses has a rule in a style sheet, or is listed as a hook with its reason.
+node scripts/check-classes.mjs || bad=1
 [ "$bad" -eq 0 ] && echo "check-ui: the page's scripts parse, and none sets HTML"
 exit "$bad"

@@ -21,6 +21,17 @@ All notable changes to LLeMbas Desktop. The format follows
 - **A background job's state under a reply being written** is said in the app's language, not
   as the server's raw word.
 
+### Changed
+
+- **A class with no style fails the checks.** `scripts/check-classes.mjs` (run by
+  `scripts/check-ui.sh`, so by CI) reads every class the page gives an element and fails for one
+  no style sheet has a rule for, unless `scripts/class-hooks.txt` lists it with its reason.
+
+### Removed
+
+- Two controls nothing drew any more (the model picker and the effort control from before the
+  chat's chips) and the style rules of six classes nothing used.
+
 ## [1.0.0-beta.9] — 2026-11-12
 
 LLeMbas CLI 2.0.0-beta.9 inside, the look and words of LLeMbas 2.0.0-beta.11.
