@@ -21,7 +21,7 @@ event_done.json event_done_title_pending.json event_title.json event_steps.json 
 mentions.json mentions_url.json device_commands.json device_files.json attachment_from.json
 devices.json terminals.json terminal_ready.json terminal_refused.json
 python_state.json python_call.json python_result.json
-reports.json report.json report_reply.json event_reports.json schedules.json schedule_runs.json
+reports.json report.json report_orphan.json report_reply.json event_reports.json chat_report.json schedules.json schedule_runs.json
 page.json step_text_page.json chat_html_pages.json models.json"
 
 [ $# -eq 1 ] || { echo "usage: scripts/fetch-fixtures.sh <server-ref>" >&2; exit 2; }

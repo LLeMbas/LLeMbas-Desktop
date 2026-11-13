@@ -4079,7 +4079,9 @@ test("V4: a scheduled task's status in the list and a run's note use the room th
 // sealed frame by this harness as Rust serves it), step_text_page.json, chat_html_pages.json.
 
 const REPORT = fixture("report").report
-const reportChat = () => ({ ...chatRow({ id: fixture("report_reply").chat, title: REPORT.title }), kind: "report" })
+// The conversation a report continues, as the server serialises it (chat_report.json: `controls`
+// rename and delete, and `report`, the one it continues).
+const reportChat = () => ({ ...fixture("chat_report"), id: fixture("report_reply").chat })
 function r1(over = {}) {
   const chat = reportChat()
   return {
@@ -4209,7 +4211,8 @@ test("R1: Reply opens the report's conversation as a chat that is in no list: it
 })
 
 test("R1: a report's conversation: only its very first line is the server's and hidden -- also among earlier messages -- its header is the server's word for the report, and deleting it leads back to the report", async () => {
-  const chat = { ...reportChat(), report: { id: REPORT.id, title: REPORT.title } }
+  const chat = reportChat()
+  assert.deepEqual([chat.controls, chat.report], [["rename", "delete"], { id: REPORT.id, title: REPORT.title }])
   const seed = { ...userMessage("m1", "Here is the report this conversation continues."), machine: true }
   const woke = { ...userMessage("m4", "A background job finished: the oven is hot."), machine: true }
   const said = (id, text) => reply({ id, steps: [{ index: 0, kind: "text", open: true, markdown: text }] })
@@ -4235,14 +4238,18 @@ test("R1: a report's conversation: only its very first line is the server's and 
   await p.waitForFunction((c) => window.__mock.api("DELETE", `/chats/${c}`).length === 1, chat.id)
   await p.waitForSelector("#reports-body .report")
   assert.match(await p.textContent("#reports-title"), new RegExp(REPORT.title))
-  // A report whose task is gone: the server says so (`schedule: null`) and there is no link; one
-  // deleted since is found out when asked for, and said in the link's place.
-  await p.evaluate((r) => window.__mock.answer(`GET /reports/${r.id}`, { report: { ...r, schedule: null } }), REPORT)
+  // A report whose task is gone (report_orphan.json: `schedule: null`, its name kept in
+  // `schedule_title`): the name as text, no link; one deleted since is found out when asked
+  // for, and said in the link's place.
+  const orphan = fixture("report_orphan")
+  await p.evaluate((r) => window.__mock.answer(`GET /reports/${r.report.id}`, r), orphan)
   await p.evaluate((id) => window.__mock.emit("open-report", id), REPORT.id)
-  await p.waitForFunction(() => !document.getElementById("report-schedule") && !!document.querySelector("#reports-body .report"))
-  await p.evaluate((r) => { window.__mock.answer(`GET /reports/${r.id}`, { report: r }); window.__mock.answer(`GET /schedules/${r.schedule.id}`, { __error: { status: 404, detail: "Not found" } }) }, REPORT)
+  await p.waitForSelector("#report-schedule-gone")
+  assert.equal(await p.textContent("#report-schedule-gone"), orphan.report.schedule_title)
+  assert.equal(await p.locator("#report-schedule").count(), 0)
   await p.evaluate(() => document.getElementById("reports-back").click())
   await p.waitForSelector("#reports-body .rrow")
+  await p.evaluate((r) => { window.__mock.answer(`GET /reports/${r.id}`, { report: r }); window.__mock.answer(`GET /schedules/${r.schedule.id}`, { __error: { status: 404, detail: "Not found" } }) }, REPORT)
   await p.click("#reports-body .rrow__open")
   await p.waitForSelector("#report-schedule")
   await p.click("#report-schedule")
@@ -4379,6 +4386,15 @@ test("H1: each page is its own fence's, wherever the fence is: two in one reply,
   assert.equal(await p.textContent('.msg[data-id="two"] .hpage__body'), "This page could not be shown safely.")
   assert.equal(await p.locator('.msg[data-id="two"] .hpage__body .btn').count(), 0)
   assert.ok(await p.evaluate(() => window.__mock.calls.some((c) => c.cmd === "pages_clear")), "what was held is let go when a chat is read again")
+  // The server has no such page (404: written without pages offered, or gone): the fence is the
+  // code block it is, in the page's place.
+  await p.evaluate(() => (window.__mockConfig.pages = { __error: { status: 404, detail: "Not found" } }))
+  await p.evaluate(() => window.__mock.emit("open-chat", "chat1"))
+  await p.waitForSelector('.msg[data-id="two"] .md-code')
+  await p.waitForFunction(() => document.querySelectorAll('.msg[data-id="two"] .hpage').length === 0)
+  assert.deepEqual(await p.$$eval('.msg[data-id="two"] .md-code pre', (l) => l.map((x) => x.textContent.trim().split("\n")[0])), ["<p>1</p>", "<p>2</p>"])
+  // A fence with a space before the word, or another word, is no page -- for the server and here alike.
+  assert.equal(await p.evaluate(async () => { const { markdown } = await import("./js/markdown.js"); let n = 0; const count = (src) => { n = 0; markdown(src, { list: [{ title: "x", digest: "0".repeat(32) }], mount: () => (n++, document.createElement("i")) }); return n }; return [count("```html-view A\n<p>a</p>\n```"), count("``` html-view A\n<p>a</p>\n```"), count("```html-views A\n<p>a</p>\n```"), count("```HTML-VIEW A\n<p>a</p>\n```"), count("```html-view\n<p>a</p>\n```"), count("```html-view A\n<p>a</p>")].join("") }), "100010", "only the exact word straight after the backticks, and only a closed fence")
   assert.deepEqual(p.errors, [])
 })
 
