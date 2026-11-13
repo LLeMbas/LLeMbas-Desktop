@@ -97,7 +97,8 @@ function blocks(lines, parent, pages = null) {
         continue
       }
       if (title !== null && closed && pages.mount && pages.list?.[pages.next]) {
-        parent.append(pages.mount(pages.list[pages.next++]))
+        // (With the fence as the code block it is, for where the server has no such page.)
+        parent.append(pages.mount(pages.list[pages.next++], () => codeBlock(body.join("\n"), fence[2])))
         continue
       }
       parent.append(codeBlock(body.join("\n"), fence[2]))

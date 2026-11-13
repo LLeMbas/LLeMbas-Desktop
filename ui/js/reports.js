@@ -17,7 +17,7 @@
 //                                       (Rust, watch.rs), handed here as the `reports` event
 //
 // item: { id, title, summary, importance: "normal" | "high", schedule: { id, title } | null,
-// created, unread }. A server without the routes answers 404: the page says so. Everything a
+// schedule_title, created, unread }. A server without the routes answers 404: the page says so. Everything a
 // report says is a model's words: set as text, its body through markdown.js.
 
 import { $, h, clear, icon, ICONS, when } from "./dom.js"
@@ -103,7 +103,7 @@ function row(r) {
       { type: "button", class: "rrow__open", onclick: () => showReports(r.id) },
       h("span", { class: "rrow__dot", role: "img", "aria-label": r.unread ? t("Unread") : null }),
       h("span", { class: "rrow__what" }, h("span", { class: "rrow__title", text: r.title || t("Report") }), h("span", { class: "rrow__summary", text: r.summary || "" })),
-      h("span", { class: "rrow__meta" }, r.importance === "high" ? h("span", { class: "schip is-failed", text: t("Important") }) : null, h("span", { class: "rrow__from", text: r.schedule?.title || "" }), h("span", { class: "rrow__when", title: stamp(r.created), text: when(r.created) })),
+      h("span", { class: "rrow__meta" }, r.importance === "high" ? h("span", { class: "schip is-failed", text: t("Important") }) : null, h("span", { class: "rrow__from", text: r.schedule?.title || r.schedule_title || "" }), h("span", { class: "rrow__when", title: stamp(r.created), text: when(r.created) })),
     ),
   )
 }
@@ -150,12 +150,13 @@ async function open(id) {
         "p",
         { class: "report__meta" },
         r.importance === "high" ? h("span", { class: "schip is-failed", text: t("Important") }) : null,
-        // The task that filed it, a press away -- where it is still there (the server says
-        // `schedule: null` once it is gone; one deleted since is found out when asked for).
-        r.schedule?.id ? h("button", { type: "button", class: "linkish", id: "report-schedule", text: r.schedule.title || t("Scheduled"), onclick: (e) => toSchedule(r.schedule, e.currentTarget) }) : r.schedule?.title ? h("span", { text: r.schedule.title }) : null,
+        // The task that filed it, a press away -- where it is still there. Once it is gone the
+        // server says `schedule: null` and keeps its name (`schedule_title`): said as text. One
+        // deleted since the report was read is found out when asked for.
+        r.schedule?.id ? h("button", { type: "button", class: "linkish", id: "report-schedule", text: r.schedule.title || t("Scheduled"), onclick: (e) => toSchedule(r.schedule, e.currentTarget) }) : r.schedule_title ? h("span", { id: "report-schedule-gone", title: t("This scheduled task is no longer there."), text: r.schedule_title }) : null,
         h("span", { title: when(r.created), text: stamp(r.created) }),
       ),
-      h("div", { class: "md report__body" }, markdown(r.body || r.text || "", pages.length ? { list: pages, mount: (pg) => pageMount({ kind: "r", owner: r.id, title: pg.title, digest: pg.digest }) } : null)),
+      h("div", { class: "md report__body" }, markdown(r.body || r.text || "", pages.length ? { list: pages, mount: (pg, source) => pageMount({ kind: "r", owner: r.id, title: pg.title, digest: pg.digest, source }) } : null)),
     ),
   )
   // Open here, it is read: said to the server. The count is the server's to say (its `reports`

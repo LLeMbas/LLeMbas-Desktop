@@ -437,7 +437,7 @@ function step(s, chat, live, owner) {
     case "text":
       // A page the model wrote (`pages`: the server names each) is a sealed frame in its place;
       // while the reply is written, its title only.
-      return h("div", { class: "step step--text md" }, markdown(s.markdown || "", live ? { writing: pageWriting } : s.pages?.length && owner ? { list: s.pages, mount: (pg) => pageMount({ kind: "m", owner, title: pg.title, digest: pg.digest }) } : null))
+      return h("div", { class: "step step--text md" }, markdown(s.markdown || "", live ? { writing: pageWriting } : s.pages?.length && owner ? { list: s.pages, mount: (pg, source) => pageMount({ kind: "m", owner, title: pg.title, digest: pg.digest, source }) } : null))
     case "tools":
       return h("div", { class: "step step--tools" }, (s.calls || []).map((c, i) => toolCall(c, chat, live, `call${s.index ?? ""}.${c.id || i}`)))
     case "steer":
@@ -1030,8 +1030,8 @@ function setTitle(title) {
 }
 
 /**
- * The report a chat continues: the server's own word on the chat (`report: { id, title }`), else
- * what this window remembers of where it opened the chat from.
+ * The report a chat continues: the server's own word on the chat (`report: { id, title }`). A
+ * server from before it said so leaves what this window remembers of where it opened the chat from.
  */
 function reportOf(chat) {
   if (chat?.kind !== "report") return null
@@ -1645,26 +1645,26 @@ export function statusChanged() {
 export function chatMenu(anchor, chat) {
   const base = ctx.status()?.server
   const mayDelete = ctx.me()?.permissions?.["chat.delete"] !== false
-  // The conversation that continues a report is in no list: it is not pinned, moved or
-  // archived. It can be renamed (its header stays the report's), opened on the web as the
-  // report it belongs to, and deleted -- which leads back to the report.
-  if (chat.kind === "report") {
-    const of = reportOf(chat)
-    const own = [{ label: t("Rename…"), run: () => renameChat(chat) }]
-    if (base && of?.id) own.push({ label: t("Open in the web interface"), run: () => openLink(`${base}/reports/${encodeURIComponent(of.id)}`) })
-    if (mayDelete) own.push(null, { label: t("Delete chat"), danger: true, run: () => deleteChat(chat) })
-    return menu(anchor, own)
-  }
-  const items = [{ label: t("Rename…"), run: () => renameChat(chat) }]
+  // What can be done with a chat is the server's to say (`controls`: rename, delete, archive,
+  // pin, folder). The conversation that continues a report is in no list, and has only rename
+  // and delete -- which is also the rule for a server that does not say.
+  const report = chat.kind === "report"
+  const can = (what) => (Array.isArray(chat.controls) ? chat.controls.includes(what) : !report || what === "rename" || what === "delete")
+  const items = []
+  if (can("rename")) items.push({ label: t("Rename…"), run: () => renameChat(chat) })
   if (!chat.archived) {
-    items.push({ label: chat.pinned ? t("Unpin chat") : t("Pin chat"), run: () => setChat(chat, { pinned: !chat.pinned }) })
-    items.push({ label: t("Move to folder…"), run: () => moveMenu(anchor, chat) })
+    if (can("pin")) items.push({ label: chat.pinned ? t("Unpin chat") : t("Pin chat"), run: () => setChat(chat, { pinned: !chat.pinned }) })
+    if (can("folder")) items.push({ label: t("Move to folder…"), run: () => moveMenu(anchor, chat) })
   }
-  if (!chat.archived) items.push({ label: t("Tools and skills…"), run: () => scopePopover(anchor, chat) })
+  if (!chat.archived && !report) items.push({ label: t("Tools and skills…"), run: () => scopePopover(anchor, chat) })
   if (chat.kind === "agent" && chat.device_session_id) items.push({ label: t("Continue in a terminal…"), run: () => continueInTerminal(chat) })
-  if (base) items.push({ label: t("Open in the web interface"), run: () => openLink(`${base}/chat/${encodeURIComponent(chat.id)}`) })
-  items.push(null, chat.archived ? { label: t("Restore chat"), run: () => unarchiveChat(chat) } : { label: t("Archive chat"), run: () => archiveChat(chat) })
-  if (mayDelete) items.push({ label: t("Delete chat"), danger: true, run: () => deleteChat(chat) })
+  // On the web a report's conversation is under its report.
+  const of = reportOf(chat)
+  if (base && (!report || of?.id)) items.push({ label: t("Open in the web interface"), run: () => openLink(report ? `${base}/reports/${encodeURIComponent(of.id)}` : `${base}/chat/${encodeURIComponent(chat.id)}`) })
+  const last = []
+  if (can("archive")) last.push(chat.archived ? { label: t("Restore chat"), run: () => unarchiveChat(chat) } : { label: t("Archive chat"), run: () => archiveChat(chat) })
+  if (mayDelete && can("delete")) last.push({ label: t("Delete chat"), danger: true, run: () => deleteChat(chat) })
+  if (last.length) items.push(null, ...last)
   menu(anchor, items)
 }
 

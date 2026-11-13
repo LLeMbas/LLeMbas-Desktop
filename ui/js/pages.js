@@ -77,6 +77,13 @@ async function show(m) {
     // Refused by the app itself (422: something in the document could run or reach somewhere):
     // said, and not offered again -- asking again would get the same document.
     if (err?.status === 422) return said(m, h("p", { class: "hpage__note is-error", text: t("This page could not be shown safely.") }))
+    // The server has no such page (404: the reply was written without pages offered, or the
+    // page is gone): the fence is the code block it is, in the page's place.
+    if (err?.status === 404 && m.page.source && m.el.isConnected) {
+      watcher?.unobserve(m.el)
+      mounts.delete(m.el)
+      return m.el.replaceWith(m.page.source())
+    }
     said(
       m,
       h("p", { class: "hpage__note is-error", text: t("This page could not be shown: %(why)s", { why: why(err) }) }),
@@ -126,15 +133,16 @@ function box(title, cls, ...tools) {
 
 /**
  * The place of one page: `kind` "m" (a reply's, `owner` the message's id) or "r" (a report's,
- * `owner` the report's id), its `title` and `digest` as the server names them.
+ * `owner` the report's id), its `title` and `digest` as the server names them; `source()` draws
+ * the fence as a code block, for where the server turns out to have no such page.
  */
-export function pageMount({ kind, owner, title, digest }) {
-  const page = { kind, owner: String(owner), digest: String(digest), title: String(title || "") || t("Page") }
+export function pageMount({ kind, owner, title, digest, source = null }) {
+  const page = { kind, owner: String(owner), digest: String(digest), title: String(title || "") || t("Page"), source }
   const body = h("div", { class: "hpage__body" })
   const el = box(page.title, "", h("button", { type: "button", class: "btn btn--sm hpage__larger", text: t("Open larger"), onclick: () => larger(page) }))
   el.dataset.digest = page.digest
   el.append(body)
-  const m = { page, body, shown: false }
+  const m = { page, body, el, shown: false }
   mounts.set(el, m)
   if (watcher) watcher.observe(el)
   else show(m)
