@@ -16,11 +16,28 @@ const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/
 const TABLE_RULE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
 const SAFE_LINK = /^(https?:|mailto:)/i
 
-/** The rendered fragment of `source`. */
-export function markdown(source) {
+/**
+ * The rendered fragment of `source`.
+ *
+ * `pages` (optional) is how a page a model wrote is drawn in its place (harness spec 3.8.0,
+ * pages.md: a fenced block whose info word is exactly `html-view`, then its title):
+ * `{ list, mount }` for a finished reply, `{ writing }` for one still being written. `list` is
+ * the step's own pages as the server names them (`[{title, digest}]`, in the order they are
+ * written): a closed fence is the next of them and is drawn by `mount(page)` -- never from the
+ * fence's own text, which this never looks at. In a reply being written every page fence,
+ * closed or not yet, is `writing(title)`: a placeholder until the reply is done. Without
+ * `pages`, or with no entry left for a fence, the fence is the code block it is.
+ */
+export function markdown(source, pages = null) {
   const out = document.createDocumentFragment()
-  blocks(String(source ?? "").replace(/\r\n?/g, "\n").split("\n"), out)
+  blocks(String(source ?? "").replace(/\r\n?/g, "\n").split("\n"), out, pages ? { ...pages, next: 0 } : null)
   return out
+}
+
+/** A page fence's title: the rest of its opening line, white space collapsed; "" for none. */
+function pageTitle(line) {
+  const m = /^ {0,3}(?:`{3,}|~{3,})html-view(?:[ \t]+(.*))?$/.exec(line)
+  return m ? (m[1] || "").replace(/\s+/g, " ").trim() : null
 }
 
 function indentOf(line) {
@@ -39,7 +56,7 @@ function startsBlock(line, next) {
   )
 }
 
-function blocks(lines, parent) {
+function blocks(lines, parent, pages = null) {
   let i = 0
   while (i < lines.length) {
     const line = lines[i]
@@ -56,7 +73,18 @@ function blocks(lines, parent) {
         body.push(lines[i])
         i += 1
       }
+      const closed = i < lines.length
       i += 1 // the closing fence (or the end)
+      // A page: drawn by what the server said of it, in order; one still being written, said so.
+      const title = pages ? pageTitle(line) : null
+      if (title !== null && pages.writing) {
+        parent.append(pages.writing(title))
+        continue
+      }
+      if (title !== null && closed && pages.mount && pages.list?.[pages.next]) {
+        parent.append(pages.mount(pages.list[pages.next++]))
+        continue
+      }
       parent.append(codeBlock(body.join("\n"), fence[2]))
       continue
     }
