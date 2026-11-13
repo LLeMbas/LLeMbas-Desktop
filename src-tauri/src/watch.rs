@@ -23,10 +23,19 @@
 //! without the stream answers 404, and nothing is said.
 //!
 //! **A result is told by its report** (server 2.0.0-beta.12, harness spec 3.8.0 `reports.md`): a
-//! run that has something to tell files a report, and the stream's `reports` frame
-//! (`{"unread", "newest": report | null}`) says so. The notification is the report's -- its title
-//! and its summary -- and is not shown while the window in front already shows that report. A
-//! run that finished without one is not news; a run that failed still is, as before.
+//! run that has something to tell files a report, and the stream's `reports` frame says so:
+//! `{"unread": n, "newest": report | null}`, where `newest` is the newest **unread** report --
+//! so when that one is read or deleted, the frame names an older unread one, which is not news.
+//! What is news is a report filed later than any this app has seen: the app keeps that
+//! high-water mark (the latest `created`), per account, across restarts (`Settings`). A report
+//! later than the mark is announced by its own title and summary -- not while the window in
+//! front already shows it. Reports filed while the app was not listening (closed, or the stream
+//! down) are said in one notification when it listens again: the one report where there is one,
+//! "N new reports" where there are more. An account's first frame ever only sets the mark.
+//!
+//! A server from before reports sends no such frame, and there a finished run is announced as
+//! it always was (`decide` with `reports: false`); with reports, a run that finished is not news
+//! and one that failed still is.
 //!
 //! Every notification shown is remembered by its id (`Notes`), so a click on it or on one of its
 //! actions knows which chat or which run it was about.
@@ -57,6 +66,13 @@ pub struct Words {
     /// A scheduled task failed three times in a row: pause it?
     #[serde(default = "scheduled_pause_word")]
     pub scheduled_pause: String,
+    /// Several reports were filed while the app was not listening; `%(n)s` is how many.
+    #[serde(default = "reports_new_word")]
+    pub reports_new: String,
+}
+
+fn reports_new_word() -> String {
+    "%(n)s new reports".into()
 }
 
 fn scheduled_word() -> String {
@@ -79,6 +95,7 @@ impl Default for Words {
             scheduled: scheduled_word(),
             scheduled_failed: scheduled_failed_word(),
             scheduled_pause: scheduled_pause_word(),
+            reports_new: reports_new_word(),
         }
     }
 }
@@ -103,8 +120,12 @@ pub struct Watch {
     runs: Mutex<Option<HashMap<String, (String, bool)>>>,
     /// The report the page shows, if any.
     pub open_report: Mutex<Option<String>>,
-    /// The newest report at the last look (None before the first look; "" for none yet).
-    newest: Mutex<Option<String>>,
+    /// The latest `created` of any report seen (the account's high-water mark; None for none).
+    mark: Mutex<Option<String>>,
+    /// Whether the next `reports` frame is the first since the stream was opened.
+    first: Mutex<bool>,
+    /// Whether this server sends `reports` frames at all (it has Reports).
+    reports: AtomicBool,
     /// Set to end the event stream that is followed now; `reset` sets it and puts a new one here.
     stop: Mutex<Arc<AtomicBool>>,
     /// The notifications shown, so a click on one knows what it was about.
@@ -114,6 +135,8 @@ pub struct Watch {
 /// How a scheduled task's run is told.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Told {
+    /// It has a result (a server from before reports).
+    Result,
     /// It failed.
     Failed,
     /// It failed for the third time in a row: pause it?
@@ -188,7 +211,7 @@ pub enum Note {
     Chat(String),
     /// A scheduled task's run.
     Run { schedule: String, run: String },
-    /// A report a scheduled run filed.
+    /// A report a scheduled run filed; "" for several at once (the Reports list).
     Report(String),
 }
 
@@ -198,6 +221,42 @@ pub struct Filed {
     pub id: String,
     pub title: String,
     pub summary: String,
+}
+
+/// What a `reports` frame is, as news.
+#[derive(Clone, Debug, PartialEq)]
+pub enum News {
+    /// Nothing to say.
+    None,
+    /// A report filed while the app was listening: said by itself.
+    One(Filed),
+    /// The first frame since the app began to listen names a report later than the mark:
+    /// something was filed meanwhile. How many is the list's to say (`since` with the mark as it
+    /// was); `newest` is the one to name where it is the only one.
+    Since { mark: String, newest: Filed },
+}
+
+/// How many of `reports` (a list's items) were filed after `mark`.
+pub fn since(reports: &Value, mark: &str) -> usize {
+    reports
+        .get("reports")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|r| {
+                    r.get("created")
+                        .and_then(Value::as_str)
+                        .is_some_and(|c| later(c, mark))
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Whether the stamp `a` is later than `b`. The server writes every stamp the same way (ISO
+/// 8601, UTC, to the second or finer), so they compare as text; an empty mark is before all.
+fn later(a: &str, b: &str) -> bool {
+    !a.is_empty() && a > b
 }
 
 /// The notifications shown, by id: the most recent `NOTES_KEPT`.
@@ -231,23 +290,40 @@ const FINISHED: [&str; 6] = ["ok", "silent", "unchanged", "failed", "skipped", "
 /// The failure in a row that asks whether to pause (`notify.PAUSE_AFTER`).
 const PAUSE_AFTER: i64 = 3;
 
-/// Whether a finished run is told, and how. Only a failure is: a result is told by the report
-/// the run filed (`look_reports`), and a run that filed none has nothing to tell. A failure is
-/// said when the server already told a device (`notified`), else by the schedule's policy as the
-/// server applies it: the first in a row, and the third, which asks whether to pause.
-pub fn decide(policy: &str, status: &str, notified: bool, streak: i64) -> Option<Told> {
-    if !matches!(status, "failed" | "skipped") {
+/// Whether a finished run is told, and how. A failure is said when the server already told a
+/// device (`notified`), else by the schedule's policy as the server applies it: the first in a
+/// row, and the third, which asks whether to pause. A result is told by the report the run filed
+/// (`look_reports`) where the server has reports (`reports`): there a run that merely finished
+/// is not news. On a server from before reports it is told as it always was: `notified`, else
+/// `always` -- a result, even "nothing to report"; anything but `never` -- a result that is not
+/// silent.
+pub fn decide(
+    policy: &str,
+    status: &str,
+    notified: bool,
+    streak: i64,
+    reports: bool,
+) -> Option<Told> {
+    let failed = matches!(status, "failed" | "skipped");
+    if !failed && reports {
         return None;
     }
-    let kind = if streak == PAUSE_AFTER {
+    let kind = if failed && streak == PAUSE_AFTER {
         Told::Pause
-    } else {
+    } else if failed {
         Told::Failed
+    } else {
+        Told::Result
     };
     if notified {
         return Some(kind);
     }
-    (policy != "never" && (streak <= 1 || streak == PAUSE_AFTER)).then_some(kind)
+    match (policy, status) {
+        ("never", _) => None,
+        (_, "ok") | ("always", "silent") => Some(Told::Result),
+        _ if failed && (streak <= 1 || streak == PAUSE_AFTER) => Some(kind),
+        _ => None,
+    }
 }
 
 impl Watch {
@@ -323,6 +399,7 @@ impl Watch {
                     row.get("failure_streak")
                         .and_then(Value::as_i64)
                         .unwrap_or(0),
+                    self.reports.load(Ordering::SeqCst),
                 );
                 if let Some(told) = told {
                     let (body, actions) = run_notification(run);
@@ -346,25 +423,34 @@ impl Watch {
         out
     }
 
-    /// Note the stream's `reports` frame (`{"unread", "newest": report | null}`); the report
-    /// that is newly the newest and unread. The first look only notes: a report filed before
-    /// the app looked is not news, and one is told once however often the frame comes again.
-    pub fn look_reports(&self, frame: &Value) -> Option<Filed> {
-        let newest = frame.get("newest").filter(|r| r.is_object());
-        let id = newest
-            .and_then(|r| r.get("id"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let mut seen = self.newest.lock().unwrap();
-        let before = seen.replace(id.clone());
-        let report = newest?;
-        if id.is_empty() || before.is_none() || before.as_deref() == Some(id.as_str()) {
-            return None;
+    /// The stream is opened (again): the mark as it was kept for this account, and the next
+    /// `reports` frame is the first. The mark in memory stands where it is later.
+    pub fn begin(&self, kept: Option<String>) {
+        let mut mark = self.mark.lock().unwrap();
+        if let Some(k) = kept {
+            if mark.as_deref().is_none_or(|m| later(&k, m)) {
+                *mark = Some(k);
+            }
         }
-        if report.get("unread").and_then(Value::as_bool) != Some(true) {
-            return None;
-        }
+        *self.first.lock().unwrap() = true;
+        self.reports.store(false, Ordering::SeqCst);
+    }
+
+    /// The mark as it stands: what to keep for the account.
+    pub fn mark(&self) -> Option<String> {
+        self.mark.lock().unwrap().clone()
+    }
+
+    /// Note the stream's `reports` frame (`{"unread", "newest": report | null}`, `newest` the
+    /// newest *unread* report); what it is as news. Only a report filed later than the mark is:
+    /// the frame naming an older unread one, because the newest was read or deleted, says
+    /// nothing. The mark moves to the newest seen and never back.
+    pub fn look_reports(&self, frame: &Value) -> News {
+        self.reports.store(true, Ordering::SeqCst);
+        let first = std::mem::replace(&mut *self.first.lock().unwrap(), false);
+        let Some(report) = frame.get("newest").filter(|r| r.is_object()) else {
+            return News::None;
+        };
         let text = |key: &str| {
             report
                 .get(key)
@@ -373,11 +459,27 @@ impl Watch {
                 .trim()
                 .to_string()
         };
-        Some(Filed {
+        let (id, created) = (text("id"), text("created"));
+        if id.is_empty() || created.is_empty() {
+            return News::None;
+        }
+        let mut mark = self.mark.lock().unwrap();
+        let before = mark.clone();
+        if before.as_deref().is_some_and(|m| !later(&created, m)) {
+            return News::None;
+        }
+        *mark = Some(created);
+        let newest = Filed {
             id,
             title: text("title"),
             summary: text("summary"),
-        })
+        };
+        match before {
+            // The account's first frame ever: what is there already is not news.
+            None => News::None,
+            Some(mark) if first => News::Since { mark, newest },
+            Some(_) => News::One(newest),
+        }
     }
 
     /// The flag that ends the event stream followed now.
@@ -389,7 +491,9 @@ impl Watch {
     pub fn reset(&self) {
         *self.running.lock().unwrap() = None;
         *self.runs.lock().unwrap() = None;
-        *self.newest.lock().unwrap() = None;
+        *self.mark.lock().unwrap() = None;
+        *self.first.lock().unwrap() = true;
+        self.reports.store(false, Ordering::SeqCst);
         let mut stop = self.stop.lock().unwrap();
         stop.store(true, Ordering::SeqCst);
         *stop = Arc::new(AtomicBool::new(false));
@@ -482,8 +586,10 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_run_is_not_news_and_a_failed_one_is_said_once() {
+    fn with_reports_a_finished_run_is_not_news_and_a_failed_one_is_said_once() {
         let w = Watch::default();
+        w.begin(None);
+        w.look_reports(&json!({ "unread": 0, "newest": null }));
         assert!(w
             .look_schedules(&schedules(&[
                 ("a", "when", 0, Some(("r1", "ok", false))),
@@ -510,52 +616,135 @@ mod tests {
     }
 
     #[test]
-    fn failures_are_said_the_first_time_and_the_third_asks_to_pause() {
-        assert_eq!(decide("when", "failed", false, 1), Some(Told::Failed));
-        assert_eq!(decide("when", "failed", false, 2), None);
-        assert_eq!(decide("always", "skipped", false, 3), Some(Told::Pause));
-        assert_eq!(decide("never", "failed", false, 1), None);
-        assert_eq!(decide("when", "missed", false, 0), None);
-        assert_eq!(decide("always", "ok", true, 0), None);
-        // The server's own word wins: it told a device.
-        assert_eq!(decide("when", "failed", true, 2), Some(Told::Failed));
+    fn on_a_server_from_before_reports_a_finished_run_is_said_by_its_policy_as_it_was() {
+        // No `reports` frame was ever heard on this stream.
+        let w = Watch::default();
+        w.begin(None);
+        assert!(w
+            .look_schedules(&schedules(&[(
+                "a",
+                "matters",
+                0,
+                Some(("r1", "ok", false))
+            )]))
+            .is_empty());
+        let out = w.look_schedules(&schedules(&[
+            ("a", "matters", 0, Some(("r2", "ok", false))),
+            ("b", "always", 0, Some(("r3", "silent", false))),
+            ("c", "matters", 0, Some(("r4", "silent", false))),
+            ("d", "never", 0, Some(("r5", "ok", false))),
+        ]));
+        assert_eq!(
+            out,
+            vec![ran("a", "r2", Told::Result), ran("b", "r3", Told::Result)]
+        );
+        assert_eq!(
+            decide("matters", "silent", true, 0, false),
+            Some(Told::Result)
+        );
+        assert_eq!(decide("matters", "ok", false, 0, true), None);
     }
 
     #[test]
-    fn a_report_is_told_when_it_is_newly_the_newest_and_unread() {
-        let frame = |id: Option<&str>, unread: bool| match id {
-            Some(id) => {
-                json!({ "unread": 1, "newest": { "id": id, "title": " Two cakes are unwrapped ", "summary": "Two of the twelve.", "unread": unread } })
-            }
-            None => json!({ "unread": 0, "newest": null }),
-        };
+    fn failures_are_said_the_first_time_and_the_third_asks_to_pause() {
+        for reports in [true, false] {
+            assert_eq!(
+                decide("when", "failed", false, 1, reports),
+                Some(Told::Failed)
+            );
+            assert_eq!(decide("when", "failed", false, 2, reports), None);
+            assert_eq!(
+                decide("always", "skipped", false, 3, reports),
+                Some(Told::Pause)
+            );
+            assert_eq!(decide("never", "failed", false, 1, reports), None);
+            assert_eq!(decide("when", "missed", false, 0, reports), None);
+            // The server's own word wins: it told a device.
+            assert_eq!(
+                decide("when", "failed", true, 2, reports),
+                Some(Told::Failed)
+            );
+        }
+    }
+
+    /// A `reports` frame as the server sends it (`api/v2/schedules.py` `reports_frame`): how many
+    /// are unread, and the newest *unread* report in the list's shape, or null.
+    fn frame(unread: usize, newest: Option<(&str, &str)>) -> Value {
+        json!({ "unread": unread, "newest": newest.map(|(id, created)| json!({
+            "id": id, "title": format!(" Report {id} "), "summary": "Two of the twelve.", "importance": "normal",
+            "schedule": { "id": "sched1", "title": "Waybread check" }, "created": created, "unread": true,
+        })) })
+    }
+    fn filed(id: &str) -> Filed {
+        Filed {
+            id: id.into(),
+            title: format!("Report {id}"),
+            summary: "Two of the twelve.".into(),
+        }
+    }
+    const T1: &str = "2026-01-02T03:04:05+00:00";
+    const T2: &str = "2026-01-03T03:04:05+00:00";
+    const T3: &str = "2026-01-04T03:04:05+00:00";
+    const T4: &str = "2026-01-05T03:04:05+00:00";
+
+    #[test]
+    fn a_report_is_news_only_when_it_was_filed_later_than_any_seen() {
+        // An account's first frame ever: three unread, the newest named. Not news; the mark is set.
         let w = Watch::default();
-        // The first look only notes.
-        assert_eq!(w.look_reports(&frame(Some("rep1"), true)), None);
-        assert_eq!(w.look_reports(&frame(Some("rep1"), true)), None);
+        w.begin(None);
+        assert_eq!(w.look_reports(&frame(3, Some(("rep3", T3)))), News::None);
+        assert_eq!(w.mark().as_deref(), Some(T3));
+        // The person reads the newest: the frame names the next older unread one. Not news --
+        // and again for the one after it, and when none is left.
+        assert_eq!(w.look_reports(&frame(2, Some(("rep2", T2)))), News::None);
+        assert_eq!(w.look_reports(&frame(1, Some(("rep1", T1)))), News::None);
+        assert_eq!(w.look_reports(&frame(0, None)), News::None);
+        assert_eq!(w.mark().as_deref(), Some(T3), "the mark never goes back");
+        // A report is filed while the app listens: said by itself, once.
         assert_eq!(
-            w.look_reports(&frame(Some("rep2"), true)),
-            Some(Filed {
-                id: "rep2".into(),
-                title: "Two cakes are unwrapped".into(),
-                summary: "Two of the twelve.".into()
-            })
+            w.look_reports(&frame(1, Some(("rep4", T4)))),
+            News::One(filed("rep4"))
         );
-        // Again, read meanwhile, deleted: nothing more.
-        assert_eq!(w.look_reports(&frame(Some("rep2"), false)), None);
-        assert_eq!(w.look_reports(&frame(None, false)), None);
+        assert_eq!(w.look_reports(&frame(1, Some(("rep4", T4)))), News::None);
+        // It is deleted, an older one marked unread again elsewhere: still nothing.
+        assert_eq!(w.look_reports(&frame(1, Some(("rep2", T2)))), News::None);
+    }
+
+    #[test]
+    fn what_was_filed_while_the_app_was_not_listening_is_said_once_when_it_listens_again() {
+        // Started again with the mark it kept: nothing new, nothing said.
+        let w = Watch::default();
+        w.begin(Some(T2.into()));
+        assert_eq!(w.look_reports(&frame(1, Some(("rep2", T2)))), News::None);
+        // Started again, and reports were filed meanwhile: the first frame says since when.
+        let w = Watch::default();
+        w.begin(Some(T2.into()));
         assert_eq!(
-            w.look_reports(&frame(Some("rep3"), false)),
-            None,
-            "already read elsewhere"
+            w.look_reports(&frame(3, Some(("rep4", T4)))),
+            News::Since {
+                mark: T2.into(),
+                newest: filed("rep4")
+            }
         );
-        // After a reset the first look only notes again.
+        assert_eq!(w.mark().as_deref(), Some(T4));
+        // How many: the unread list's items later than the mark as it was.
+        let list = json!({ "reports": [{ "id": "rep4", "created": T4 }, { "id": "rep3", "created": T3 }, { "id": "rep2", "created": T2 }, { "id": "rep1", "created": T1 }], "unread": 4 });
+        assert_eq!(since(&list, T2), 2);
+        assert_eq!(since(&list, T4), 0);
+        assert_eq!(since(&json!({}), T1), 0);
+        // The stream broke off and is followed again: the same, from the mark in memory.
+        w.begin(Some(T2.into()));
+        assert_eq!(
+            w.mark().as_deref(),
+            Some(T4),
+            "an older kept mark does not take it back"
+        );
+        assert_eq!(w.look_reports(&frame(3, Some(("rep4", T4)))), News::None);
+        // Another account (a reset): its first frame ever only sets the mark.
         w.reset();
-        assert_eq!(w.look_reports(&frame(Some("rep9"), true)), None);
-        // An account with none yet, then its first.
-        let fresh = Watch::default();
-        assert_eq!(fresh.look_reports(&frame(None, false)), None);
-        assert!(fresh.look_reports(&frame(Some("rep1"), true)).is_some());
+        w.begin(None);
+        assert_eq!(w.look_reports(&frame(1, Some(("rep9", T1)))), News::None);
+        assert_eq!(w.mark().as_deref(), Some(T1));
     }
 
     #[test]

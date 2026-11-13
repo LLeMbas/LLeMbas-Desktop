@@ -986,7 +986,11 @@ async fn python_prepare(handle: AppHandle) -> Result<PythonRunner, ApiError> {
         app.python.set(&version, dir, names);
         Ok(PythonRunner {
             enabled: true,
-            url: python::url(&version),
+            url: {
+                let url = python::url(&version);
+                arm(&url);
+                url
+            },
             version,
         })
     })
@@ -1001,7 +1005,9 @@ async fn python_prepare(handle: AppHandle) -> Result<PythonRunner, ApiError> {
 /// Hold HTML for the viewer's sealed frame; the address the frame loads.
 #[tauri::command]
 fn sealed_open(app: tauri::State<'_, App>, html: String) -> String {
-    sealed::url(&app.sealed.hold(html))
+    let url = sealed::url(&app.sealed.hold(html));
+    arm(&url);
+    url
 }
 
 #[tauri::command]
@@ -1019,7 +1025,12 @@ struct AnswerPage {
     title: String,
 }
 
-/// A name in a page's address: a message's or a report's id, a digest.
+/// A page's digest as the server makes one: 32 lower-case hex digits, nothing else.
+fn page_digest(s: &str) -> bool {
+    s.len() == 32 && s.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+/// A name in a page's address: a message's or a report's id.
 fn page_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 96
@@ -1044,7 +1055,7 @@ fn page_path(
     digest: &str,
     colours: &[(String, String)],
 ) -> Option<String> {
-    if !matches!(kind, "m" | "r") || !page_name(owner) || !page_name(digest) {
+    if !matches!(kind, "m" | "r") || !page_name(owner) || !page_digest(digest) {
         return None;
     }
     let mut query = String::new();
@@ -1077,11 +1088,14 @@ async fn page_open(
         return Err(ApiError::new(401, "Not signed in."));
     };
     if let Some(id) = handle.state::<App>().sealed.page(&path) {
+        let url = sealed::url(&id);
+        arm(&url);
         return Ok(AnswerPage {
-            url: sealed::url(&id),
+            url,
             title: String::new(),
         });
     }
+    let door = (app_url.clone(), token.clone());
     let asked = path.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         server::request(&app_url, &token, "GET", &asked, None)
@@ -1095,6 +1109,19 @@ async fn page_open(
     let Some(html) = said.get("html").and_then(Value::as_str) else {
         return Err(ApiError::new(0, "The server sent no page."));
     };
+    // Signed out, or another server, while it was fetched: the page is not this account's to hold.
+    if handle.state::<App>().door().as_ref() != Some(&door) {
+        return Err(ApiError::new(401, "Not signed in."));
+    }
+    if html.len() > sealed::PAGE_MAX {
+        return Err(ApiError::new(413, "The page is too large to show."));
+    }
+    // The server rebuilds the page; the app still looks for itself that nothing in what it is
+    // about to show could run or reach anywhere (`sealed::page_safe`), and shows nothing if so.
+    if let Err(why) = sealed::page_safe(html) {
+        log::write(&format!("a page of an answer was not shown: {why}"));
+        return Err(ApiError::new(422, "This page could not be shown safely."));
+    }
     let title = said
         .get("title")
         .and_then(Value::as_str)
@@ -1104,10 +1131,17 @@ async fn page_open(
         .state::<App>()
         .sealed
         .hold_page(&path, html.to_string());
-    Ok(AnswerPage {
-        url: sealed::url(&id),
-        title,
-    })
+    let url = sealed::url(&id);
+    arm(&url);
+    Ok(AnswerPage { url, title })
+}
+
+/// The pages of answers held are let go: the chat or the report shown is read again, so what
+/// is drawn next is asked of the server afresh (a page of a message deleted since is not shown
+/// from what was held).
+#[tauri::command]
+fn pages_clear(app: tauri::State<'_, App>) {
+    app.sealed.clear_pages();
 }
 
 // --- The page's own settings ---------------------------------------------------------------------
@@ -1533,35 +1567,67 @@ fn media_stream(window: &WebviewWindow) {
         use webkit2gtk::{SettingsExt, WebViewExt};
         if let Some(settings) = pv.inner().settings() {
             settings.set_enable_media_stream(true);
+            // No name is looked up ahead of a request: a link hint in a page a model wrote
+            // would otherwise have the webview resolve a name of the page's choosing.
+            settings.set_enable_dns_prefetching(false);
         }
     });
     #[cfg(not(target_os = "linux"))]
     let _ = window;
 }
 
+/// How long after the app's page was given a frame's address a navigation to it is let through.
+const ARMED_FOR: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The frame addresses the app's own page was just given (`sealed_open`, `page_open`,
+/// `python_prepare`), each with when: only these may be navigated to.
+static ARMED: std::sync::Mutex<Vec<(String, std::time::Instant)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// The app's page is about to load `url` in a frame.
+fn arm(url: &str) {
+    let mut armed = ARMED.lock().unwrap();
+    armed.retain(|(_, at)| at.elapsed() < ARMED_FOR);
+    armed.push((url.to_string(), std::time::Instant::now()));
+}
+
+/// Whether `url` (a frame's address on one of the app's own schemes) was just given to the
+/// app's page -- with or without a fragment of its own (a link inside the document to a place
+/// in it).
+fn armed(url: &Url) -> bool {
+    let mut bare = url.clone();
+    bare.set_fragment(None);
+    ARMED
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(u, at)| at.elapsed() < ARMED_FOR && Url::parse(u).is_ok_and(|u| u == bare))
+}
+
 /// The window shows the app's own page, and the frames it holds on schemes of their own -- the
-/// viewer's sealed pages and the `python` tool's runner; nothing else, ever.
+/// viewer's sealed pages, the pages of answers and the `python` tool's runner; nothing else, ever.
 /// A link the page wants followed goes to the system's browser through `open_external`; a
-/// navigation it did not ask for -- a link or a script in a sealed frame -- simply goes nowhere.
+/// navigation it did not ask for -- a link in a sealed frame -- simply goes nowhere.
+///
+/// The hook is told an address, not which frame goes there. So an address on the app's own
+/// schemes is let through only when the app's page was just given it for a frame (`arm`): a
+/// frame that tries to take itself to another held document, to the viewer's, or to the
+/// runner, names an address nobody armed, and stays where it is.
 fn allowed(url: &Url) -> bool {
     let local_app = url.scheme() == "tauri"
         || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"));
-    let sealed = url.scheme() == sealed::SCHEME
-        || (url.scheme() == "http"
-            && url
-                .host_str()
-                .is_some_and(|h| h == format!("{}.localhost", sealed::SCHEME)));
-    // The `python` tool's runner: a frame on its own scheme too, with no bridge (`python.rs`).
-    // This says the address may be gone to; it cannot tell a frame from the window itself, so
-    // that the window never shows the runner as its own page is held where it is served
+    let own = |scheme: &str| {
+        url.scheme() == scheme
+            || (url.scheme() == "http"
+                && url
+                    .host_str()
+                    .is_some_and(|h| h == format!("{scheme}.localhost")))
+    };
+    // That the window never shows the runner as its own page is held where it is served
     // (`python::respond` refuses a request for a document that is not a frame's) and by the
     // runner, which does nothing when it is not a frame.
-    let runner = url.scheme() == python::SCHEME
-        || (url.scheme() == "http"
-            && url
-                .host_str()
-                .is_some_and(|h| h == format!("{}.localhost", python::SCHEME)));
-    local_app || sealed || runner || url.as_str() == "about:blank"
+    let framed = (own(sealed::SCHEME) || own(python::SCHEME)) && armed(url);
+    local_app || framed || url.as_str() == "about:blank"
 }
 
 fn build_tray(handle: &AppHandle) -> tauri::Result<TrayItems> {
@@ -1915,20 +1981,59 @@ const EVENTS_NONE: std::time::Duration = std::time::Duration::from_secs(300);
 /// frame goes to the page as it is (the Scheduled page redraws from it), and a scheduled task's
 /// newly finished run is told by its notify decision (`watch::decide`). Said even with the window
 /// in front: it ran on its own. Signing out or another server ends the stream (`Watch::reset`).
-/// The stream's `reports` frame: handed to the page (its Reports row counts the unread), and a
-/// report newly filed is told -- by its own title and summary -- unless the window in front
-/// already shows it.
-fn report_filed(handle: &AppHandle, data: &str) {
+/// The account the reports' mark is kept for: `server|email`.
+fn reports_key(app: &App) -> Option<String> {
+    let account = app.account.lock().unwrap().clone()?;
+    Some(format!("{}|{}", account.server, account.email))
+}
+
+/// The stream's `reports` frame: handed to the page (its Reports row counts the unread), and
+/// what is news in it is told (`watch::look_reports`): a report filed while the app listened by
+/// its own title and summary -- unless the window in front already shows it -- and what was
+/// filed while it did not in one notification: that report where it is the only one, else how
+/// many there are. The mark is kept for the account whenever it moves.
+fn report_filed(handle: &AppHandle, data: &str, door: &(String, String)) {
     let Ok(frame) = serde_json::from_str::<Value>(data) else {
         return;
     };
     let app = handle.state::<App>();
-    let filed = app.watch.look_reports(&frame);
+    let before = app.watch.mark();
+    let news = app.watch.look_reports(&frame);
     let _ = handle.emit("reports", &frame);
-    let Some(report) = filed else {
-        return;
+    let mark = app.watch.mark();
+    if mark != before {
+        if let (Some(key), Some(mark)) = (reports_key(&app), mark) {
+            let _ = app.update(|s| {
+                s.reports_seen.insert(key, mark);
+            });
+        }
+    }
+    let (report, n) = match news {
+        watch::News::None => return,
+        watch::News::One(report) => (report, 1),
+        watch::News::Since { mark, newest } => {
+            // How many were filed meanwhile: the unread ones later than the mark as it was.
+            let n = server::request(&door.0, &door.1, "GET", "/reports?unread=1", None)
+                .map(|list| watch::since(&list, &mark))
+                .unwrap_or(1)
+                .max(1);
+            (newest, n)
+        }
     };
     if !app.settings().notify {
+        return;
+    }
+    let words = app.watch.words.lock().unwrap().clone();
+    if n > 1 {
+        // One notification for all of them; a click opens the list.
+        let id = app.watch.notes.add(watch::Note::Report(String::new()));
+        let _ = handle
+            .notification()
+            .builder()
+            .id(id)
+            .title("LLeMbas")
+            .body(words.reports_new.replace("%(n)s", &n.to_string()))
+            .show();
         return;
     }
     let in_front = main_window(handle)
@@ -1936,7 +2041,6 @@ fn report_filed(handle: &AppHandle, data: &str) {
     if in_front && app.watch.open_report.lock().unwrap().as_deref() == Some(report.id.as_str()) {
         return;
     }
-    let words = app.watch.words.lock().unwrap().clone();
     let id = app.watch.notes.add(watch::Note::Report(report.id));
     let _ = handle
         .notification()
@@ -1948,7 +2052,7 @@ fn report_filed(handle: &AppHandle, data: &str) {
             report.title
         })
         .body(if report.summary.is_empty() {
-            words.scheduled
+            words.scheduled.clone()
         } else {
             report.summary
         })
@@ -1963,9 +2067,13 @@ fn watch_events(handle: AppHandle) {
             continue;
         };
         let stop = app.watch.stop_flag();
+        // The mark kept for this account: a report later than it is news.
+        let kept = reports_key(&app).and_then(|k| app.settings().reports_seen.get(&k).cloned());
+        app.watch.begin(kept);
+        let door = (app_url.clone(), token.clone());
         let result = server::stream(&app_url, &token, "/events", &stop, |event, data| {
             if event == "reports" {
-                report_filed(&handle, data);
+                report_filed(&handle, data, &door);
                 return true;
             }
             if event != "schedules" {
@@ -1989,6 +2097,7 @@ fn watch_events(handle: AppHandle) {
                 };
                 let body = r.body.clone().unwrap_or_else(|| {
                     match r.told {
+                        watch::Told::Result => &words.scheduled,
                         watch::Told::Failed => &words.scheduled_failed,
                         watch::Told::Pause => &words.scheduled_pause,
                     }
@@ -2147,6 +2256,7 @@ pub fn run() {
             sealed_open,
             sealed_close,
             page_open,
+            pages_clear,
             set_open_report,
             python_prepare,
             attach_pick,
@@ -2300,38 +2410,45 @@ pub fn run() {
 mod tests {
     #[test]
     fn a_page_of_an_answer_is_asked_for_by_names_and_colours_only() {
+        const D: &str = "526b3a6b58f09769d9f81f628942cc7f";
         let c = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let colours = [
+            c("ink", "#E2E8EC"),
+            c("bg", "#101418"),
+            c("line", "red"),
+            c("x", "#fff"),
+        ];
         assert_eq!(
-            super::page_path(
-                "m",
-                "msg-1",
-                "526b3a6b",
-                &[
-                    c("ink", "#E2E8EC"),
-                    c("bg", "#101418"),
-                    c("line", "red"),
-                    c("x", "#fff")
-                ]
-            )
-            .as_deref(),
-            Some("/pages/m/msg-1/526b3a6b?bg=%23101418&ink=%23E2E8EC")
+            super::page_path("m", "msg-1", D, &colours).as_deref(),
+            Some("/pages/m/msg-1/526b3a6b58f09769d9f81f628942cc7f?bg=%23101418&ink=%23E2E8EC")
         );
         assert_eq!(
-            super::page_path("r", "rep1", "d", &[]).as_deref(),
-            Some("/pages/r/rep1/d")
+            super::page_path("r", "rep1", D, &[]).as_deref(),
+            Some("/pages/r/rep1/526b3a6b58f09769d9f81f628942cc7f")
         );
-        for (kind, owner, digest) in [
-            ("x", "a", "b"),
-            ("m", "../a", "b"),
-            ("m", "a", "b?c=d"),
-            ("m", "", "b"),
-            ("m", "a/b", "c"),
-            ("r", "a", "b#c"),
+        // A digest is 32 lower-case hex digits and nothing else.
+        for digest in [
+            "d",
+            "526B3A6B58F09769D9F81F628942CC7F",
+            "526b3a6b58f09769d9f81f628942cc7",
+            "526b3a6b58f09769d9f81f628942cc7f0",
+            "526b3a6b58f09769d9f81f628942cc7g",
+            "../6b3a6b58f09769d9f81f628942cc7f",
+        ] {
+            assert_eq!(super::page_path("m", "msg1", digest, &[]), None, "{digest}");
+        }
+        for (kind, owner) in [
+            ("x", "a"),
+            ("m", "../a"),
+            ("m", "a?c=d"),
+            ("m", ""),
+            ("m", "a/b"),
+            ("r", "a#c"),
         ] {
             assert_eq!(
-                super::page_path(kind, owner, digest, &[]),
+                super::page_path(kind, owner, D, &[]),
                 None,
-                "{kind} {owner} {digest}"
+                "{kind} {owner}"
             );
         }
         assert!(
@@ -2366,13 +2483,38 @@ mod tests {
         for ok in [
             "tauri://localhost/index.html",
             "http://tauri.localhost/index.html",
-            "llembas-sealed://localhost/p1",
-            "http://llembas-sealed.localhost/p1",
-            "llembas-python://localhost/runner.html?v=314.0.7",
-            "http://llembas-python.localhost/runner.html?v=314.0.7",
             "about:blank",
         ] {
             assert!(allowed(&Url::parse(ok).unwrap()), "{ok}");
+        }
+        // A frame's address on the app's own schemes: only one the app's page was just given.
+        for framed in [
+            "llembas-sealed://localhost/p1",
+            "http://llembas-sealed.localhost/p1",
+            "llembas-sealed://localhost/s7",
+            "llembas-python://localhost/runner.html?v=314.0.7",
+            "http://llembas-python.localhost/runner.html?v=314.0.7",
+        ] {
+            assert!(
+                !allowed(&Url::parse(framed).unwrap()),
+                "{framed}, not given"
+            );
+            arm(framed);
+            assert!(allowed(&Url::parse(framed).unwrap()), "{framed}, given");
+        }
+        // A link inside a page to a place in it; never to another held document, the viewer's
+        // or the runner with other words.
+        assert!(allowed(
+            &Url::parse("llembas-sealed://localhost/s7#totals").unwrap()
+        ));
+        for other in [
+            "llembas-sealed://localhost/s8",
+            "llembas-sealed://localhost/p2",
+            "llembas-sealed://localhost/s7/x",
+            "llembas-python://localhost/runner.html?v=0",
+            "llembas-python://localhost/pyodide/314.0.7/pyodide.mjs",
+        ] {
+            assert!(!allowed(&Url::parse(other).unwrap()), "{other}");
         }
         for no in [
             "https://ai.example/",

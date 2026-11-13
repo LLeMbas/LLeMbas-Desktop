@@ -37,10 +37,15 @@ pub const POLICY: &str = "sandbox allow-scripts allow-forms; default-src 'none';
 /// fetched again when they are wanted.
 const KEEP_PAGES: usize = 48;
 
+/// The most one page of an answer may weigh; a larger one is not shown.
+pub const PAGE_MAX: usize = 2 * 1024 * 1024;
+/// The most all the pages of answers held may weigh together; the least recently asked for go.
+const PAGES_BYTES: usize = 24 * 1024 * 1024;
+
 /// The policy a page of an answer is served under -- the server's `sealed.page_policy()`, minus
 /// `frame-ancestors`, which would have to name the app's own scheme. Nothing runs and nothing is
 /// asked for: the document is static, and this holds it to that.
-pub const PAGE_POLICY: &str = "sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src 'none'; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'; webrtc 'block'";
+pub const PAGE_POLICY: &str = "sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src 'none'; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'; webrtc 'block'";
 
 #[derive(Default)]
 pub struct Pages {
@@ -87,7 +92,12 @@ impl Pages {
             format!("s{}", *n)
         };
         let mut pages = self.pages.lock().unwrap();
-        while pages.len() >= KEEP_PAGES {
+        let weight = |pages: &VecDeque<(String, String, String)>| -> usize {
+            pages.iter().map(|(_, _, h)| h.len()).sum()
+        };
+        while !pages.is_empty()
+            && (pages.len() >= KEEP_PAGES || weight(&pages) + html.len() > PAGES_BYTES)
+        {
             pages.pop_front();
         }
         pages.push_back((key.to_string(), id.clone(), html));
@@ -124,6 +134,218 @@ impl Pages {
             .find(|(i, _)| i == id)
             .map(|(_, h)| h.clone())
     }
+}
+
+// --- A page of an answer, looked at before it is shown ---------------------------------------
+//
+// The server rebuilds a page as a static document and is the one place a model's markup is
+// cleaned. The app does not clean anything -- but it does not take the server's word alone
+// either: before a document is held it is read as bytes for anything that could run or reach
+// somewhere, and if any is found the page is not shown at all. This is a refusal, not a
+// repair, and it errs on the side of refusing: a page that merely writes "javascript:" in a
+// sentence is not shown. What is looked for is what the frame's policy and its empty sandbox
+// would have to stop if it were there; this way it is not there.
+
+/// `data:image/(png|jpeg|gif|webp);base64,` at the start of `s` (lower case), and how long the
+/// whole inline image is (the prefix and its base64 letters).
+fn data_image(s: &str) -> Option<usize> {
+    let rest = s.strip_prefix("data:image/")?;
+    let kind = ["png", "jpeg", "gif", "webp"]
+        .into_iter()
+        .find(|k| rest.starts_with(k))?;
+    let rest = rest[kind.len()..].strip_prefix(";base64,")?;
+    let letters = rest
+        .bytes()
+        .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+        .count();
+    Some(s.len() - rest.len() + letters)
+}
+
+/// `text` without its inline images: their base64 may hold `//`, which is no address.
+fn without_images(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("data:image/") {
+        out.push_str(&rest[..at]);
+        match data_image(&rest[at..]) {
+            Some(n) => rest = &rest[at + n..],
+            None => {
+                out.push_str("data:image/");
+                rest = &rest[at + "data:image/".len()..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Every `url(` in `text` (lower case) names a place in the document (`#…`) or an inline image.
+fn urls_stay(text: &str) -> bool {
+    let mut rest = text;
+    while let Some(at) = rest.find("url(") {
+        let inside = rest[at + 4..].trim_start_matches([' ', '\t', '\n', '\r', '\x0c']);
+        let inside = inside
+            .strip_prefix('"')
+            .or_else(|| inside.strip_prefix('\''))
+            .unwrap_or(inside);
+        if !(inside.starts_with('#') || data_image(inside).is_some()) {
+            return false;
+        }
+        rest = &rest[at + 4..];
+    }
+    true
+}
+
+/// Text that is CSS (a style block, a `style` value) or any attribute's value: nothing in it
+/// names an address, and nothing in it is written so that it would only become one when read
+/// (an escape, a character reference).
+fn value_stays(text: &str, css: bool) -> Result<(), &'static str> {
+    if text.contains('\\') {
+        return Err("a backslash in a style or an attribute");
+    }
+    let plain = without_images(text);
+    if plain.contains("http:") || plain.contains("https:") || plain.contains("//") {
+        return Err("an address in a style or an attribute");
+    }
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        let after = &rest[at..];
+        let named = ["&amp;", "&quot;", "&lt;", "&gt;", "&apos;", "&nbsp;"];
+        if css || !named.iter().any(|n| after.starts_with(n)) {
+            return Err("a character reference in a style or an attribute");
+        }
+        rest = &after[1..];
+    }
+    Ok(())
+}
+
+/// Whether a page of an answer may be shown as it is: `Err` says what was found. See above.
+pub fn page_safe(html: &str) -> Result<(), &'static str> {
+    let d = html.to_ascii_lowercase();
+    for (found, what) in [
+        ("<script", "a script"),
+        ("<link", "a link element"),
+        ("<base", "a base element"),
+        ("<iframe", "a frame"),
+        ("<frame", "a frame"),
+        ("<object", "an object"),
+        ("<embed", "an embedded object"),
+        ("<form", "a form"),
+        ("javascript:", "a javascript: address"),
+        ("@import", "a style sheet import"),
+        ("image-set(", "an image set"),
+    ] {
+        if d.contains(found) {
+            return Err(what);
+        }
+    }
+    // One `meta`, the wrapper's own, before any other.
+    const CHARSET: &str = "<meta charset=\"utf-8\">";
+    if d.matches("<meta").count() > 1
+        || d.find("<meta") != d.find(CHARSET).filter(|_| d.contains("<meta"))
+    {
+        return Err("a meta element");
+    }
+    if !urls_stay(&d) {
+        return Err("an address in url()");
+    }
+    let b = d.as_bytes();
+    let space = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0c);
+    let mut i = 0;
+    while i < b.len() {
+        if !(b[i] == b'<' && i + 1 < b.len() && b[i + 1].is_ascii_alphabetic()) {
+            i += 1;
+            continue;
+        }
+        // A tag: its name, then its attributes up to `>`.
+        let mut j = i + 1;
+        while j < b.len() && !space(b[j]) && b[j] != b'>' && b[j] != b'/' {
+            j += 1;
+        }
+        let tag = &d[i + 1..j];
+        loop {
+            while j < b.len() && (space(b[j]) || b[j] == b'/') {
+                j += 1;
+            }
+            if j >= b.len() {
+                return Err("a tag that does not end");
+            }
+            if b[j] == b'>' {
+                j += 1;
+                break;
+            }
+            let start = j;
+            while j < b.len() && !space(b[j]) && !matches!(b[j], b'=' | b'>' | b'/') {
+                j += 1;
+            }
+            let name = &d[start..j];
+            while j < b.len() && space(b[j]) {
+                j += 1;
+            }
+            let mut value = "";
+            if j < b.len() && b[j] == b'=' {
+                j += 1;
+                while j < b.len() && space(b[j]) {
+                    j += 1;
+                }
+                if j < b.len() && (b[j] == b'"' || b[j] == b'\'') {
+                    let quote = b[j];
+                    let from = j + 1;
+                    j = from;
+                    while j < b.len() && b[j] != quote {
+                        j += 1;
+                    }
+                    if j >= b.len() {
+                        return Err("a value that does not end");
+                    }
+                    value = &d[from..j];
+                    j += 1;
+                } else {
+                    let from = j;
+                    while j < b.len() && !space(b[j]) && b[j] != b'>' {
+                        j += 1;
+                    }
+                    value = &d[from..j];
+                }
+            }
+            if name.len() > 2 && name.starts_with("on") {
+                return Err("an event handler");
+            }
+            if name.starts_with("xmlns") {
+                // A namespace's name: it is not fetched, and is one of the web's own.
+                if !value.starts_with("http://www.w3.org/") || value.contains(['\\', '&']) {
+                    return Err("a namespace that is not the web's own");
+                }
+                continue;
+            }
+            value_stays(value, name == "style")?;
+            if matches!(
+                name,
+                "href"
+                    | "src"
+                    | "xlink:href"
+                    | "srcset"
+                    | "action"
+                    | "formaction"
+                    | "poster"
+                    | "background"
+                    | "data"
+            ) {
+                let v = value.trim();
+                if !(v.starts_with('#') || data_image(v) == Some(v.len())) {
+                    return Err("an address that leads out of the page");
+                }
+            }
+        }
+        if tag == "style" {
+            // The sheet itself, up to where it ends.
+            let end = d[j..].find("</style").map_or(b.len(), |e| j + e);
+            value_stays(&d[j..end], true)?;
+            j = end;
+        }
+        i = j;
+    }
+    Ok(())
 }
 
 /// Where a held page is served: the address form differs by platform, as Tauri's own does.
@@ -199,6 +421,95 @@ mod tests {
         assert_eq!(id_of("/p7?x=1"), "p7");
     }
 
+    /// The server's own rebuilt document (its fixture `page.json`), and pages like it.
+    const WRAP: &str = "<!doctype html>\n<meta charset=\"utf-8\"><title>Cakes</title><style>:root{--page-bg:#101418;--page-ink:#E2E8EC;color-scheme:light dark}html{background:var(--page-bg,Canvas);color:var(--page-ink,CanvasText);font-family:system-ui,sans-serif}</style>\n";
+
+    #[test]
+    fn a_static_page_is_shown() {
+        for body in [
+            "<p>10 wrapped, 2 not</p>",
+            "<table><tr><th scope=\"col\">Day</th></tr><tr><td style=\"color:var(--page-accent, #36c)\">12</td></tr></table>",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#fff\"/></linearGradient></defs><rect width=\"10\" height=\"10\" fill=\"url(#g)\"/><text x=\"1\" y=\"5\">once = 3 &amp; on = 2</text></svg>",
+            "<a href=\"#totals\">Totals</a><h2 id=\"totals\">Totals</h2><p>Tom &amp; Sam turned it on = fine; see http://example.org in the text.</p>",
+            "<img alt=\"dot\" src=\"data:image/png;base64,iVBORw0KGgo//AAAA+/8=\"><div style=\"background:url('data:image/gif;base64,R0lGODlh//8=')\"></div>",
+            "<style>td{border:1px solid var(--page-line,#ccc)} .a>.b{background:url(#g)}</style><details open><summary>More</summary></details>",
+        ] {
+            assert_eq!(page_safe(&format!("{WRAP}{body}")), Ok(()), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_page_with_anything_that_could_run_or_reach_somewhere_is_not_shown() {
+        for body in [
+            // What must never be there at all.
+            "<script>alert(1)</script>",
+            "<SCRIPT src=x></SCRIPT>",
+            "<link rel=\"dns-prefetch\" href=\"//a.example\">",
+            "<base href=\"https://a.example/\">",
+            "<iframe src=\"#\"></iframe>",
+            "<frameset><frame></frameset>",
+            "<object data=\"x\"></object>",
+            "<embed src=\"x\">",
+            "<form action=\"#\"><input></form>",
+            "<meta http-equiv=\"refresh\" content=\"0;url=https://a.example\">",
+            "<p onclick=\"x()\">a</p>",
+            "<svg onload=x()></svg>",
+            "<p\nONMOUSEOVER = \"x\">a</p>",
+            "<a href=\"javascript:alert(1)\">a</a>",
+            "<a href=\"https://a.example/\">a</a>",
+            "<a href=\"//a.example/\">a</a>",
+            "<a href=\"page2.html\">a</a>",
+            "<img src=\"http://a.example/p.png\">",
+            "<img src=\"data:image/svg+xml;base64,PHN2Zz4=\">",
+            "<img src=\"data:text/html;base64,PHA+\">",
+            // The style sheet's ways out, and the same written so they only become that when read.
+            "<style>@import 'x.css';</style>",
+            "<style>p{background:url(https://a.example/x)}</style>",
+            "<style>p{background:url( \"//a.example/x\" )}</style>",
+            "<style>p{background:image-set(\"https://a.example/x\" 1x)}</style>",
+            "<style>p{background:u\\72l(https://a.example/x)}</style>",
+            "<style>@\\69mport 'x.css';</style>",
+            "<style>p{background:\\75 rl(x)}</style>",
+            "<svg><style>p{background:&#117;rl(https://a.example/x)}</style></svg>",
+            "<svg><style>p{background:url&lpar;x)}</style></svg>",
+            "<p style=\"background:url(https://a.example/x)\">a</p>",
+            "<p style=\"background:u\\72l(x)\">a</p>",
+            "<p style=\"background:&#117;rl(x)\">a</p>",
+            "<p style=\"background:url&lpar;x&rpar;\">a</p>",
+            "<svg><rect fill=\"url(http://a.example/x)\"/></svg>",
+            "<svg><rect fill=\"url(//a.example/x)\"/></svg>",
+            "<svg><rect fill=\"u\\72l(x)\"/></svg>",
+            "<svg><rect fill=\"url&#40;x)\"/></svg>",
+            "<svg><use xlink:href=\"https://a.example/x.svg#a\"/></svg>",
+            "<svg xmlns=\"http://a.example/ns\"></svg>",
+            "<p style=\"background:url(x.png)\">a</p>",
+            // What does not end is not guessed at.
+            "<p title=\"a",
+            "<p ",
+        ] {
+            assert!(page_safe(&format!("{WRAP}{body}")).is_err(), "{body}");
+        }
+        // A second meta, or one that is not the wrapper's.
+        assert!(page_safe("<meta charset=\"utf-8\"><meta charset=\"utf-8\"><p>a</p>").is_err());
+        assert!(page_safe("<meta name=\"referrer\" content=\"unsafe-url\"><p>a</p>").is_err());
+        assert_eq!(page_safe("<p>no wrapper, nothing in it</p>"), Ok(()));
+    }
+
+    #[test]
+    fn the_pages_held_are_bounded_by_what_they_weigh() {
+        let p = Pages::default();
+        let big = "x".repeat(PAGES_BYTES / 4);
+        let first = p.hold_page("m/a/1/", big.clone());
+        for i in 2..=4 {
+            p.hold_page(&format!("m/a/{i}/"), big.clone());
+        }
+        assert_eq!(respond(&p, &format!("/{first}")).status(), 200);
+        // A fifth does not fit beside the four: the least recently asked for goes.
+        p.hold_page("m/a/5/", big);
+        assert_eq!(respond(&p, &format!("/{first}")).status(), 404);
+        assert!(p.page("m/a/5/").is_some() && p.page("m/a/2/").is_some());
+    }
+
     #[test]
     fn a_page_of_an_answer_is_static_held_by_what_it_is_and_asked_for_again_when_it_went() {
         let p = Pages::default();
@@ -210,7 +521,7 @@ mod tests {
         let csp = res.headers()["Content-Security-Policy"].to_str().unwrap();
         assert!(csp.starts_with("sandbox;"), "an empty sandbox: {csp}");
         assert!(csp.contains("script-src 'none'") && csp.contains("default-src 'none'"));
-        assert!(!csp.contains("allow-") && !csp.contains("unsafe-eval"));
+        assert!(!csp.contains("allow-") && !csp.contains("unsafe-eval") && !csp.contains("blob:"));
         assert!(!csp.contains("frame-ancestors"));
         // The least recently asked for goes first; one asked for again stays.
         for i in 0..KEEP_PAGES - 1 {

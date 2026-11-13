@@ -19,6 +19,10 @@ pub struct Settings {
     pub theme: Option<String>,
     /// Say with a notification when a reply or an agent's work finishes out of sight.
     pub notify: bool,
+    /// For each account (`server|email`), when the latest report it has seen was filed: a
+    /// report later than that is news, also after a restart (`watch.rs`). Nothing of a report
+    /// itself is kept.
+    pub reports_seen: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -28,6 +32,7 @@ impl Default for Settings {
             agent: false,
             theme: None,
             notify: true,
+            reports_seen: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -112,6 +117,11 @@ mod tests {
             agent: true,
             theme: Some("shire".into()),
             notify: false,
+            reports_seen: [(
+                "https://ai.example|ada@example.org".to_string(),
+                "2026-01-02T03:04:05+00:00".to_string(),
+            )]
+            .into(),
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), s);
