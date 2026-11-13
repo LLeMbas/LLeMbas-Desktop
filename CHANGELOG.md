@@ -16,7 +16,12 @@ All notable changes to LLeMbas Desktop. The format follows
   without reports has no Reports row.
 - **A notification comes from a report**, with the report's own title and summary, and opens it.
   A run that merely finished is no longer announced; one that failed still is. A report being
-  read in the window in front is not announced.
+  read in the window in front is not announced. Only a report filed later than any the app has
+  seen is news -- reading or deleting the newest does not announce the one before it -- and the
+  app remembers that across restarts: what was filed while it was closed is said in one
+  notification when it starts, the report itself where it is one, "N new reports" where there
+  are more. With a server from before reports (2.0.0-beta.11 and older) a finished run is
+  announced as it always was.
 - **Scheduled: Notify when.** Every run, When… (with your own condition; the server's default
   stands where you write none) or Never, in place of "Tell me". A task's history says each run's
   own line -- what it found, or that it filed a report -- with the report a press away, what the
@@ -27,7 +32,12 @@ All notable changes to LLeMbas Desktop. The format follows
   place in a sealed frame: a box of one height with the page scrolling inside, and Open larger.
   A page is static everywhere: the server rebuilds it without anything that runs or leads
   anywhere, the app shows exactly that document, in a frame that allows nothing, and never
-  draws a model's markup itself. While a reply is still being written a page is only its title.
+  draws a model's markup itself. It does look at the document for itself before showing it: one
+  in which anything could run or reach somewhere (a script, a link element, an event handler,
+  an address in a style, anything written so that it only becomes one when read) is not shown
+  at all -- "This page could not be shown safely." -- and neither is one over 2 MiB. A frame can
+  go nowhere but to its own document. While a reply is still being written a page is only its
+  title. A page inside a list item or a quotation is drawn there like any other.
   In a long chat frames are made as their place comes into view and let go when it is far. A
   chat's settings have the switch, "Pages in answers", where the server offers it for that chat
   and model. Pages are shown in reports too.

@@ -4090,6 +4090,11 @@ function r1(over = {}) {
       [`POST /reports/${REPORT.id}/read`]: null,
       [`POST /reports/${REPORT.id}/reply`]: fixture("report_reply"),
       [`DELETE /reports/${REPORT.id}`]: null,
+      [`GET /schedules/${REPORT.schedule.id}`]: fixture("schedule"),
+      [`GET /schedules/${REPORT.schedule.id}/runs`]: { runs: [], more: false },
+      "GET /schedules/models": { models: [], instance: [], mine: [] },
+      [`DELETE /chats/${chat.id}`]: null,
+      [`PATCH /chats/${chat.id}`]: { chat: { ...chat, title: "Cakes, again" } },
       [`GET /chats/${chat.id}`]: { chat, messages: [{ ...userMessage("m1", "Here is the report this conversation continues."), machine: true }, { ...reply({ id: "m2", steps: [{ index: 0, kind: "text", open: true, markdown: "Two of the twelve cakes have lost their leaves." }] }) }], more: false, live: null },
       [`GET /models?chat=${chat.id}`]: models(),
       [`POST /chats/${chat.id}/messages`]: { message: userMessage("m3", "Which two?"), reply: null },
@@ -4134,8 +4139,11 @@ test("R1: Reports in the sidebar with its unread count; a report is read as a pa
   assert.deepEqual([asked.kind, asked.owner, asked.digest], ["r", REPORT.id, REPORT.pages[0].digest])
   assert.ok(Object.keys(asked.colours).length >= 3 && Object.values(asked.colours).every((c) => /^#[0-9a-f]{6}$/i.test(c)), `the theme's colours, plainly colours: ${JSON.stringify(asked.colours)}`)
   assert.equal(await p.textContent("#reports-body .hpage__title"), REPORT.pages[0].title)
-  // Read here: said to the server, and the count goes.
+  // Read here: said to the server. The count is the server's to say: it stays until its frame
+  // comes (not counted down here, which would race it), then goes.
   await p.waitForFunction((id) => window.__mock.api("POST", `/reports/${id}/read`).length === 1, REPORT.id)
+  assert.equal(await p.textContent("#reports-count"), "1")
+  await p.evaluate(() => window.__mock.emit("reports", { unread: 0, newest: null }))
   await p.waitForSelector("#reports-count", { state: "hidden" })
   assert.deepEqual(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "set_open_report").map((c) => c.args.report).slice(-1)), [REPORT.id], "Rust knows which report is being read")
   await shot(p, "r1-report-1280")
@@ -4173,6 +4181,19 @@ test("R1: Reply opens the report's conversation as a chat that is in no list: it
   await p.waitForFunction((c) => window.__mock.api("POST", `/chats/${c}/messages`).length === 1, chat)
   assert.equal(await p.getAttribute("#nav-reports", "aria-current"), "true")
   await shot(p, "r1-reply-1280")
+  // Its menu has what makes sense for it: no pinning, moving or archiving of a chat that is in no list.
+  await p.click('#chat-tools [aria-label="More"]')
+  await p.waitForSelector(".menu .menu__item")
+  assert.deepEqual(await p.$$eval(".menu .menu__item", (l) => l.map((x) => x.textContent.trim())), ["Rename…", "Open in the web interface", "Delete chat"])
+  await p.locator(".menu .menu__item", { hasText: "Open in the web interface" }).click()
+  assert.deepEqual(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "open_external").map((c) => c.args.url)), [`https://ai.example/reports/${REPORT.id}`], "the report's page, on the web")
+  // Renamed, the chat keeps the report in its header.
+  await p.click('#chat-tools [aria-label="More"]')
+  await p.locator(".menu .menu__item", { hasText: "Rename…" }).click()
+  await p.fill("dialog[open] input", "Cakes, again")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction((c) => window.__mock.api("PATCH", `/chats/${c}`).length === 1, chat)
+  assert.equal(await p.textContent("#chat-title"), `Report: ${REPORT.title}`)
   // Back to Reports: the report it continues.
   await p.click("#chat-report-back")
   await p.waitForSelector("#reports-body .report")
@@ -4184,6 +4205,50 @@ test("R1: Reply opens the report's conversation as a chat that is in no list: it
   await p.click("dialog[open] .btn--danger")
   await p.waitForFunction((id) => window.__mock.api("DELETE", `/reports/${id}`).length === 1, REPORT.id)
   await p.waitForSelector("#reports-body .rlist, #reports-body .arch__empty")
+  assert.deepEqual(p.errors, [])
+})
+
+test("R1: a report's conversation: only its very first line is the server's and hidden -- also among earlier messages -- its header is the server's word for the report, and deleting it leads back to the report", async () => {
+  const chat = { ...reportChat(), report: { id: REPORT.id, title: REPORT.title } }
+  const seed = { ...userMessage("m1", "Here is the report this conversation continues."), machine: true }
+  const woke = { ...userMessage("m4", "A background job finished: the oven is hot."), machine: true }
+  const said = (id, text) => reply({ id, steps: [{ index: 0, kind: "text", open: true, markdown: text }] })
+  const p = await page(r1({
+    // The newest page, and the one before it that reaches the start.
+    [`GET /chats/${chat.id}`]: { chat, messages: [userMessage("m3", "Which two?"), woke, said("m5", "The third and the ninth.")], more: true, live: null },
+    [`GET /chats/${chat.id}/messages?before=m3`]: { messages: [seed, said("m2", "Two of the twelve cakes have lost their leaves.")], more: false },
+  }))
+  await p.waitForSelector("#nav-reports:not([hidden])")
+  // Opened by its id alone (after a restart, nothing remembered here): the header is still the report's.
+  await p.evaluate((c) => window.__mock.emit("open-chat", c), chat.id)
+  await p.waitForSelector("#messages .msg--assistant")
+  assert.equal(await p.textContent("#chat-title"), `Report: ${REPORT.title}`, "from the chat's own `report`")
+  // A machine line later in the conversation is shown as the machine's; only the seed is hidden.
+  assert.deepEqual(await p.$$eval("#messages .msg--user", (l) => l.map((x) => [x.dataset.id, x.classList.contains("is-machine")])), [["m3", false], ["m4", true]])
+  await p.click("#messages .thread__earlier")
+  await p.waitForSelector('.msg[data-id="m2"]')
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((x) => x.dataset.id)), ["m2", "m3", "m4", "m5"], "the seed is not among the earlier messages either")
+  // Deleted (asked first): back to the report it continued.
+  await p.click('#chat-tools [aria-label="More"]')
+  await p.locator(".menu .menu__item", { hasText: "Delete chat" }).click()
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction((c) => window.__mock.api("DELETE", `/chats/${c}`).length === 1, chat.id)
+  await p.waitForSelector("#reports-body .report")
+  assert.match(await p.textContent("#reports-title"), new RegExp(REPORT.title))
+  // A report whose task is gone: the server says so (`schedule: null`) and there is no link; one
+  // deleted since is found out when asked for, and said in the link's place.
+  await p.evaluate((r) => window.__mock.answer(`GET /reports/${r.id}`, { report: { ...r, schedule: null } }), REPORT)
+  await p.evaluate((id) => window.__mock.emit("open-report", id), REPORT.id)
+  await p.waitForFunction(() => !document.getElementById("report-schedule") && !!document.querySelector("#reports-body .report"))
+  await p.evaluate((r) => { window.__mock.answer(`GET /reports/${r.id}`, { report: r }); window.__mock.answer(`GET /schedules/${r.schedule.id}`, { __error: { status: 404, detail: "Not found" } }) }, REPORT)
+  await p.evaluate(() => document.getElementById("reports-back").click())
+  await p.waitForSelector("#reports-body .rrow")
+  await p.click("#reports-body .rrow__open")
+  await p.waitForSelector("#report-schedule")
+  await p.click("#report-schedule")
+  await p.waitForSelector("#report-schedule-gone")
+  assert.ok(await p.isVisible("#reports-body .report"), "still on the report, not on a page that is not there")
+  assert.equal(await p.locator("#report-schedule").count(), 0)
   assert.deepEqual(p.errors, [])
 })
 
@@ -4201,10 +4266,31 @@ test("R1: the server's reports frame moves the count and the open list; a server
   await p.waitForSelector("#reports-body .rrow.is-unread")
   assert.deepEqual(p.errors, [])
   await p.context().close()
-  // An older server: 404, and no row.
-  p = await page({ status: status(), routes: baseRoutes(), streams: {} })
-  await p.waitForTimeout(200)
+  // An older server: it is asked once signed in, answers 404, and there is no row; a server that
+  // refuses (401) or fails is not one that has reports either.
+  for (const refusal of [null, { __error: { status: 401, detail: "Not signed in." } }, { __error: { status: 500, detail: "Internal error" } }]) {
+    p = await page({ status: status(), routes: baseRoutes(refusal ? { "GET /reports": refusal } : {}), streams: {} })
+    await p.waitForFunction(() => window.__mock.api("GET", "/reports?unread=1").length === 1)
+    await p.waitForTimeout(100)
+    assert.ok(await p.isHidden("#nav-reports"), `no Reports row (${refusal?.__error.status || 404})`)
+    assert.ok(!(await p.evaluate(() => window.__mock.calls.findIndex((c) => c.cmd === "api" && c.args.path === "/me") > window.__mock.calls.findIndex((c) => c.cmd === "api" && c.args.path === "/reports?unread=1"))), "asked once signed in, after /me")
+    await p.context().close()
+  }
+  // Signed out and in as another account: nothing of the first one's reports is left.
+  p = await page(r1())
+  await p.waitForSelector("#nav-reports:not([hidden]) #reports-count:not([hidden])")
+  await p.click("#nav-reports")
+  await p.waitForSelector("#reports-body .rrow")
+  await p.evaluate((st) => { window.__mockConfig.status = st; window.__mock.answer("GET /reports", { __error: { status: 404, detail: "Not found" } }); window.__mock.emit("status", st) }, status({ account: null, linked: false }))
+  await p.waitForSelector("#setup:not([hidden])")
+  assert.equal(await p.locator("#reports-body .rrow").count(), 0, "the list is gone with the account")
   assert.ok(await p.isHidden("#nav-reports"))
+  await p.evaluate((st) => { window.__mockConfig.status = st; window.__mock.emit("status", st) }, status())
+  await p.waitForSelector("#shell:not([hidden])")
+  await p.waitForFunction(() => window.__mock.api("GET", "/reports?unread=1").length >= 2)
+  await p.waitForTimeout(100)
+  assert.ok(await p.isHidden("#nav-reports"), "the next account's server has none")
+  assert.equal(await p.locator("#reports-body .rrow").count(), 0)
   await p.context().close()
   // Narrow.
   p = await page(r1(), { width: 390, height: 844 })
@@ -4259,6 +4345,40 @@ test("H1: a page a model wrote into a reply is a sealed frame in its place once 
   // Done: the frame.
   await p.evaluate(([path, m]) => window.__mock.frame(path, "done", { message: m, chat: null, next: null }), [STREAM2, message])
   await p.waitForSelector('.msg[data-id="m2"]:not(.is-live) .hpage__frame')
+  assert.deepEqual(p.errors, [])
+})
+
+test("H1: each page is its own fence's, wherever the fence is: two in one reply, one inside a list item and one after it; where the server and the page count differently, none is drawn as another's", async () => {
+  const d = (n) => String(n).repeat(32)
+  const two = "First:\n\n```html-view One\n<p>1</p>\n```\n\nthen:\n\n~~~~html-view Two\n<p>2</p>\n```\nstill two\n~~~~\n"
+  const nested = "Steps:\n\n- the first step\n\n  ```html-view In the list\n  <p>a</p>\n  ```\n\n- the second\n\n> quoted:\n>\n> ```html-view In the quote\n> <p>b</p>\n> ```\n\nAnd:\n\n```html-view At the end\n<p>c</p>\n```\n"
+  const text = (id, markdown, pages) => reply({ id, steps: [{ index: 0, kind: "text", open: true, markdown, pages, text: "" }] })
+  const p = await page(agentChatOpen([], {
+    "GET /chats/chat1": { chat: chatRow(), messages: [
+      userMessage("m5", "Pages"),
+      text("two", two, [{ title: "One", digest: d(1) }, { title: "Two", digest: d(2) }]),
+      text("nest", nested, [{ title: "In the list", digest: d(3) }, { title: "In the quote", digest: d(4) }, { title: "At the end", digest: d(5) }]),
+      // The server names two pages where this page finds three fences: nothing is matched by guess.
+      text("odd", nested, [{ title: "In the list", digest: d(3) }, { title: "At the end", digest: d(5) }]),
+    ], more: false, live: null },
+    "GET /models?chat=chat1": models(),
+  }), { width: 1280, height: 3000 })
+  await openChatRow(p, "chat1")
+  await p.waitForSelector('.msg[data-id="nest"] .hpage')
+  const pagesOf = (id) => p.$$eval(`.msg[data-id="${id}"] .hpage`, (l) => l.map((x) => [x.querySelector(".hpage__title").textContent, x.dataset.digest, x.parentElement.closest("li, blockquote")?.tagName || ""]))
+  assert.deepEqual(await pagesOf("two"), [["One", d(1), ""], ["Two", d(2), ""]])
+  assert.deepEqual(await pagesOf("nest"), [["In the list", d(3), "LI"], ["In the quote", d(4), "BLOCKQUOTE"], ["At the end", d(5), ""]], "each where its fence is, with its own title and digest")
+  assert.ok(!(await p.textContent('.msg[data-id="nest"]')).includes("<p>"), "no page's source is drawn")
+  assert.equal((await p.textContent('.msg[data-id="two"]')).includes("still two"), false, "a shorter run of backticks inside a longer fence is the page's own text")
+  assert.deepEqual(await pagesOf("odd"), [], "counts differ: no fence is given a page")
+  assert.equal(await p.locator('.msg[data-id="odd"] .md-code').count(), 3, "each stays the code block it is")
+  // A document the app itself will not show (Rust's 422): said so, without Try again.
+  await p.evaluate(() => (window.__mockConfig.pages = { __error: { status: 422, detail: "This page could not be shown safely." } }))
+  await p.evaluate(() => window.__mock.emit("open-chat", "chat1"))
+  await p.waitForSelector('.msg[data-id="two"] .hpage__note.is-error')
+  assert.equal(await p.textContent('.msg[data-id="two"] .hpage__body'), "This page could not be shown safely.")
+  assert.equal(await p.locator('.msg[data-id="two"] .hpage__body .btn').count(), 0)
+  assert.ok(await p.evaluate(() => window.__mock.calls.some((c) => c.cmd === "pages_clear")), "what was held is let go when a chat is read again")
   assert.deepEqual(p.errors, [])
 })
 
@@ -4363,7 +4483,7 @@ test("R1: Scheduled as the server has it now: Notify when with the person's own 
   await p.click("#scheduled-body .run__report-open")
   await p.waitForSelector("#reports-body .report")
   assert.equal(await p.getAttribute("#nav-reports", "aria-current"), "true")
-  assert.ok(tops.length === 2)
+  assert.ok(tops.length === 2 && tops[0] === tops[1], `the choice and its condition are on one line: ${tops}`)
   assert.deepEqual(p.errors, [])
 })
 
