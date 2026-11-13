@@ -1023,8 +1023,31 @@ function questionOptions(item, answers) {
 // --- Opening a chat --------------------------------------------------------------------------------
 
 function setTitle(title) {
+  // The conversation that continues a report is headed by the report, whatever the chat is called.
+  if (open?.chat?.kind === "report") title = `${t("Report")}: ${reportOf(open.chat)?.title || title || ""}`
   $("chat-title").textContent = title || t("New chat")
   $("chat-title").title = title || ""
+}
+
+/**
+ * The report a chat continues: the server's own word on the chat (`report: { id, title }`), else
+ * what this window remembers of where it opened the chat from.
+ */
+function reportOf(chat) {
+  if (chat?.kind !== "report") return null
+  const said = chat.report
+  return said && typeof said === "object" && said.id ? { id: String(said.id), title: String(said.title || "") } : ctx.reportOf?.(chat.id) || null
+}
+
+/**
+ * The line a report's conversation opens with: written by the server in the person's place, so
+ * that the report can be the first thing said. It is the conversation's very first message --
+ * only that one, and only where the page of messages reaches the start (`more` false). Its id,
+ * or "".
+ */
+function seedOf(chat, messages, more) {
+  const first = messages[0]
+  return chat?.kind === "report" && !more && first?.role === "user" && first.machine ? first.id : ""
 }
 
 /** The chat's header: its title, where it works (an agent chat's folder and device), and its tools. */
@@ -1035,8 +1058,7 @@ function renderHead(chat) {
   // The conversation that continues a report says which report, with the way back to Reports:
   // it is in no list of chats.
   if (chat.kind === "report") {
-    const of = ctx.reportOf?.(chat.id)
-    setTitle(`${t("Report")}: ${of?.title || chat.title || ""}`)
+    const of = reportOf(chat)
     place.append(h("button", { type: "button", class: "place place--back", id: "chat-report-back", title: t("Back to Reports"), onclick: () => ctx.nav?.reports?.(of?.id || "") }, icon(ICONS.back), h("span", { class: "place__name", text: t("Back to Reports") })))
   }
   if (chat.kind === "agent" && chat.device) {
@@ -1623,6 +1645,16 @@ export function statusChanged() {
 export function chatMenu(anchor, chat) {
   const base = ctx.status()?.server
   const mayDelete = ctx.me()?.permissions?.["chat.delete"] !== false
+  // The conversation that continues a report is in no list: it is not pinned, moved or
+  // archived. It can be renamed (its header stays the report's), opened on the web as the
+  // report it belongs to, and deleted -- which leads back to the report.
+  if (chat.kind === "report") {
+    const of = reportOf(chat)
+    const own = [{ label: t("Rename…"), run: () => renameChat(chat) }]
+    if (base && of?.id) own.push({ label: t("Open in the web interface"), run: () => openLink(`${base}/reports/${encodeURIComponent(of.id)}`) })
+    if (mayDelete) own.push(null, { label: t("Delete chat"), danger: true, run: () => deleteChat(chat) })
+    return menu(anchor, own)
+  }
   const items = [{ label: t("Rename…"), run: () => renameChat(chat) }]
   if (!chat.archived) {
     items.push({ label: chat.pinned ? t("Unpin chat") : t("Pin chat"), run: () => setChat(chat, { pinned: !chat.pinned }) })
@@ -1736,6 +1768,8 @@ async function deleteChat(chat) {
   if (!yes) return
   try {
     await del(`/chats/${encodeURIComponent(chat.id)}`)
+    // A report's conversation: back to the report it continued.
+    if (chat.kind === "report") return ctx.nav?.reports?.(reportOf(chat)?.id || "")
     ctx.gone(chat)
   } catch (err) {
     alertIn(why(err))
@@ -1770,6 +1804,8 @@ export async function openChat(id) {
   closePopover()
   closeComposerMenu()
   invoke("set_open_chat", { chat: id })
+  // What is drawn next is asked of the server afresh: no page of an answer from what was held.
+  invoke("pages_clear")
   showComposer(true)
   $("new-chat").hidden = true
   $("main").dataset.new = "false"
@@ -1798,11 +1834,11 @@ export async function openChat(id) {
   renderNotice()
   clear(list)
   if (r.more) list.append(earlier())
+  const seed = seedOf(r.chat, r.messages, r.more)
   for (const m of r.messages) {
     if (m.id === r.live) continue
-    // A report's conversation opens with a line the server wrote in the person's place (so the
-    // report can be the first thing said): not theirs, and not shown.
-    if (r.chat.kind === "report" && m.role === "user" && m.machine) continue
+    // A report's conversation opens with a line the server wrote in the person's place: not shown.
+    if (m.id === seed) continue
     list.append(m.role === "user" ? userMessage(m) : assistantMessage(m, r.chat))
   }
   ctx.opened(r.chat)
@@ -1827,7 +1863,8 @@ function earlier() {
         const from = th.scrollHeight
         const frag = document.createDocumentFragment()
         if (r.more) frag.append(earlier())
-        for (const m of r.messages) frag.append(m.role === "user" ? userMessage(m) : assistantMessage(m, open.chat))
+        const seed = seedOf(open.chat, r.messages, r.more)
+        for (const m of r.messages) if (m.id !== seed) frag.append(m.role === "user" ? userMessage(m) : assistantMessage(m, open.chat))
         e.target.replaceWith(frag)
         th.scrollTop += th.scrollHeight - from
       } catch (err) {

@@ -5,7 +5,8 @@
 // static document -- HTML, CSS and inline SVG; no script, no address that leads anywhere -- and
 // is the one place a model's markup is cleaned. Rust fetches that document through the app's
 // own door (`page_open`: GET /pages/m/{message}/{digest} or /pages/r/{report}/{digest}, with the
-// theme's colours), holds it, and serves it on the sealed scheme under a policy with an empty
+// theme's colours), looks at it for itself -- a document in which anything could run or reach
+// somewhere is not shown at all (`sealed::page_safe`) -- holds it, and serves it on the sealed scheme under a policy with an empty
 // sandbox and `script-src 'none'` (src-tauri/src/sealed.rs `PAGE_POLICY`). What this file makes
 // is the frame's place: a titled box of one known height with the page scrolling inside it, a
 // frame with `sandbox=""` whose address is the held document, and Open larger. The document's
@@ -73,6 +74,9 @@ async function show(m) {
   } catch (err) {
     if (!m.shown || asked !== m.asked) return
     m.shown = false
+    // Refused by the app itself (422: something in the document could run or reach somewhere):
+    // said, and not offered again -- asking again would get the same document.
+    if (err?.status === 422) return said(m, h("p", { class: "hpage__note is-error", text: t("This page could not be shown safely.") }))
     said(
       m,
       h("p", { class: "hpage__note is-error", text: t("This page could not be shown: %(why)s", { why: why(err) }) }),

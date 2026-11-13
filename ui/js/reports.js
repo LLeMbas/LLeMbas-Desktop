@@ -32,7 +32,7 @@ let rows = []
 let unread = 0
 let loading = false
 let error = ""
-let missing = false // the server has no reports routes
+let missing = true // the server has no reports routes (or it is not known yet that it has)
 let answering = new Map() // the chat a report continues in -> { id, title } of the report
 
 const enc = encodeURIComponent
@@ -73,6 +73,7 @@ async function read() {
 /** The Reports page: the list, or one report (`id`). */
 export async function showReports(id = "") {
   view = id ? { name: "report", id } : { name: "list" }
+  invoke("pages_clear")
   if (view.name === "list") {
     invoke("set_open_report", { report: null })
     return read()
@@ -149,20 +150,40 @@ async function open(id) {
         "p",
         { class: "report__meta" },
         r.importance === "high" ? h("span", { class: "schip is-failed", text: t("Important") }) : null,
-        r.schedule?.id ? h("button", { type: "button", class: "linkish", id: "report-schedule", text: r.schedule.title || t("Scheduled"), onclick: () => ctx.openSchedule(r.schedule.id) }) : r.schedule?.title ? h("span", { text: r.schedule.title }) : null,
+        // The task that filed it, a press away -- where it is still there (the server says
+        // `schedule: null` once it is gone; one deleted since is found out when asked for).
+        r.schedule?.id ? h("button", { type: "button", class: "linkish", id: "report-schedule", text: r.schedule.title || t("Scheduled"), onclick: (e) => toSchedule(r.schedule, e.currentTarget) }) : r.schedule?.title ? h("span", { text: r.schedule.title }) : null,
         h("span", { title: when(r.created), text: stamp(r.created) }),
       ),
       h("div", { class: "md report__body" }, markdown(r.body || r.text || "", pages.length ? { list: pages, mount: (pg) => pageMount({ kind: "r", owner: r.id, title: pg.title, digest: pg.digest }) } : null)),
     ),
   )
-  // Open here, it is read: said to the server, and the count follows.
+  // Open here, it is read: said to the server. The count is the server's to say (its `reports`
+  // frame follows); where no frame comes it is asked for once.
   if (r.unread) {
     post(`/reports/${enc(id)}/read`)
       .then(() => {
         rows = rows.map((x) => (x.id === id ? { ...x, unread: false } : x))
-        counted(unread - 1)
+        const heard = frames
+        setTimeout(() => heard === frames && recount(), 3000)
       })
       .catch(() => {})
+  }
+}
+
+/** The unread count, asked of the server. */
+function recount() {
+  return get("/reports?unread=1").then((r) => counted(r?.unread))
+}
+
+/** To the task that filed a report -- unless it is gone, which is then said in the link's place. */
+async function toSchedule(schedule, link) {
+  try {
+    await get(`/schedules/${enc(schedule.id)}`)
+    ctx.openSchedule(schedule.id)
+  } catch (err) {
+    if (err?.status !== 404) return ctx.openSchedule(schedule.id)
+    link.replaceWith(h("span", { id: "report-schedule-gone", title: t("This scheduled task is no longer there."), text: schedule.title || t("Scheduled") }))
   }
 }
 
@@ -197,22 +218,56 @@ export function reportsCommands() {
   return missing ? [] : [{ label: unread ? `${t("Reports")} · ${t("%(n)s unread", { n: unread })}` : t("Reports"), run: () => (ctx.show(), showReports()) }]
 }
 
+let frames = 0 // how many `reports` frames were heard
+
 export function initReports(context) {
   ctx = context
   // The server's `reports` frame: the count beside Reports; the list too, where it is shown.
+  // A server that sends one has reports.
   listen("reports", (e) => {
     const frame = e.payload || {}
+    frames += 1
+    missing = false
     counted(frame.unread)
     if (!$("page-reports").hidden && view.name === "list" && !loading) read()
   })
-  // Once at the start, for the count (a server without reports answers 404: no row is shown).
-  get("/reports?unread=1")
+}
+
+/**
+ * Signed in: whether this server has reports, and how many are unread. Only an answer says it
+ * has: a server without the routes (404) has no Reports row, and neither has one that refuses
+ * or fails -- until it answers, or sends a `reports` frame.
+ */
+export function startReports() {
+  const account = ++signedIn
+  ctx.count(0, true)
+  return get("/reports?unread=1")
     .then((r) => {
+      if (account !== signedIn) return
       missing = false
       counted(r?.unread)
     })
-    .catch((err) => {
-      missing = err?.status === 404
-      ctx.count(0, missing)
+    .catch(() => {
+      if (account !== signedIn) return
+      missing = true
+      ctx.count(0, true)
     })
+}
+
+let signedIn = 0 // which sign-in the answers are for
+
+/** Signed out: nothing of this account's reports stays for the next one. */
+export function stopReports() {
+  signedIn += 1
+  view = { name: "list" }
+  rows = []
+  unread = 0
+  loading = false
+  error = ""
+  missing = true
+  answering = new Map()
+  ctx.count(0, true)
+  clear($("reports-body"))
+  $("reports-tools").replaceChildren()
+  invoke("set_open_report", { report: null })
 }

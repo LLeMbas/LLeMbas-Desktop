@@ -22,7 +22,7 @@ import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
 import { initAgent, link } from "./agent.js"
 import { initScheduled, showScheduled, scheduledCommands } from "./scheduled.js"
-import { initReports, showReports, reportsCommands, reportOf } from "./reports.js"
+import { initReports, showReports, reportsCommands, reportOf, startReports, stopReports } from "./reports.js"
 import { initArchived, showArchived } from "./archived.js"
 import { showMemory } from "./memory.js"
 import { initVoice, voiceFor } from "./voice.js"
@@ -109,6 +109,7 @@ async function startApp() {
   allowAttach(me?.permissions?.["files.upload"] !== false)
   accountButton()
   refreshList()
+  startReports()
   if (!openChatId()) startNew()
   invoke("remote_refresh")
 }
@@ -117,6 +118,8 @@ function stopApp() {
   started = false
   closeChat()
   closeViewer()
+  stopReports()
+  if (page === "reports") showPage("chat")
 }
 
 let modelsAt = 0 // when /models was last read
@@ -449,7 +452,7 @@ async function boot() {
     }
   })
 
-  invoke("set_words", { words: { reply: t("The reply is ready."), agent: t("The agent has finished."), scheduled: t("A scheduled task has a result."), scheduled_failed: t("A scheduled task failed."), scheduled_pause: t("A scheduled task failed 3 times in a row. Pause it?") } })
+  invoke("set_words", { words: { reply: t("The reply is ready."), agent: t("The agent has finished."), scheduled: t("A scheduled task has a result."), reports_new: t("%(n)s new reports"), scheduled_failed: t("A scheduled task failed."), scheduled_pause: t("A scheduled task failed 3 times in a row. Pause it?") } })
   listen("status", (e) => {
     const before = status
     status = e.payload
