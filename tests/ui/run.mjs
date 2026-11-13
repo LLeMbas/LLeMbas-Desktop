@@ -1101,6 +1101,27 @@ test("D4: the computer menu's rows say a name and, apart from it, what the name 
   }
 })
 
+test("D4: a folder's path beside its name is cut in its middle, never at its end: the last name stays whole at 1280 and 390 px", async () => {
+  const deep = "/srv/projects/customers/a-long-standing-one/websites/the-lembas-recipe-and-its-variants/site"
+  for (const [width, height] of [[1280, 860], [390, 844]]) {
+    const cfg = d4()
+    cfg.status = status({ remote: { enabled: true, roots: [deep, "/home/dev/project"], terminal: true } })
+    const p = await page(cfg, { width, height })
+    await p.evaluate(() => document.getElementById("new-chat-btn").click())
+    await targetChips(p)
+    await p.click("#target-chips .cchip--folder")
+    await p.waitForSelector(".menu .menu__hint--path")
+    const rows = await p.$$eval(".menu .menu__hint--path", (l) => l.map((x) => { const [head, tail] = x.children; const m = x.closest(".menu").getBoundingClientRect(); const r = x.getBoundingClientRect(); return { title: x.title, said: x.textContent, tail: tail.textContent, tailWhole: tail.scrollWidth <= tail.clientWidth && tail.getBoundingClientRect().right <= x.getBoundingClientRect().right + 0.5, headCut: head.scrollWidth > head.clientWidth + 1, in: r.right <= m.right + 0.5 && r.left >= m.left } }))
+    const long = rows.find((r) => r.title === deep)
+    assert.deepEqual([long.said, long.tail, long.tailWhole, long.headCut, long.in], [deep, "/site", true, true, true], `${width}: ${JSON.stringify(long)}`)
+    const short = rows.find((r) => r.title === "/home/dev/project")
+    assert.deepEqual([short.tail, short.tailWhole, short.in], ["/project", true, true], `${width}: a path that fits is whole`)
+    await shot(p, `d4-folder-menu-${width}`)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
 test("D4: a menu by the keyboard: arrows, Home and End move, Tab and Escape close it with the focus back on its button, a window that changes size closes it", async () => {
   const p = await page(d4())
   await p.evaluate(() => document.getElementById("new-chat-btn").click())

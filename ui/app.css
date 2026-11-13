@@ -1226,6 +1226,11 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .menu__label--two { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(65%); column-gap: var(--sp-3); align-items: baseline; }
 .menu__label--two > * { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .menu__hint { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); text-align: right; }
+/* A path: where it is gives first, with an ellipsis; its last name gives only when it alone is
+   wider than the hint's track. */
+.menu__label--two > .menu__hint--path { display: flex; justify-content: end; overflow: hidden; }
+.menu__hint-head { flex: 0 1000 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.menu__hint-tail { flex: none; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .menu__check { color: var(--accent); }
 .menu__sep { height: var(--border-w); margin: var(--sp-1) 0; background: var(--border); }
 

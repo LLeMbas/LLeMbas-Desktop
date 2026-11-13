@@ -31,6 +31,19 @@ function escMenu(e) {
 }
 
 /**
+ * A row's hint. One that is a path is two parts -- where it is, and its last name -- so that
+ * where it does not fit it is the middle that gives (`/srv/proj…/site`): a path cut at its end
+ * says the part every path shares and loses the part that tells them apart.
+ */
+function hintOf(hint) {
+  const text = String(hint)
+  const path = /^(?:[~/]|[A-Za-z]:[\\/])/.test(text) && !/\s·\s/.test(text)
+  const cut = path ? Math.max(text.replace(/[\\/]+$/, "").lastIndexOf("/"), text.replace(/[\\/]+$/, "").lastIndexOf("\\")) : -1
+  if (cut <= 0) return h("span", { class: "menu__hint", title: path ? text : null, text })
+  return h("span", { class: "menu__hint menu__hint--path", title: text }, h("span", { class: "menu__hint-head", text: text.slice(0, cut) }), h("span", { class: "menu__hint-tail", text: text.slice(cut) }))
+}
+
+/**
  * A menu of `items` ({ label, hint?, run, lead?, checked?, danger?, disabled? }, or null for a separator), under
  * `anchor` (an element) or at `{ x, y }` (page pixels). Arrow keys move, Enter chooses.
  */
@@ -62,7 +75,7 @@ export function menu(anchor, items) {
         },
         h("span", { class: "menu__lead" }, item.lead || null),
         item.hint
-          ? h("span", { class: "menu__label menu__label--two" }, h("span", { text: item.label }), h("span", { class: "menu__hint", text: item.hint }))
+          ? h("span", { class: "menu__label menu__label--two" }, h("span", { text: item.label }), hintOf(item.hint))
           : h("span", { class: "menu__label", text: item.label }),
         h("span", { class: "menu__check", "aria-hidden": "true", text: item.checked ? "✓" : "" }),
       ),

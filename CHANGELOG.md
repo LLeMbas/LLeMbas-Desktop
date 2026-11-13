@@ -27,6 +27,10 @@ All notable changes to LLeMbas Desktop. The format follows
   `scripts/check-ui.sh`, so by CI) reads every class the page gives an element and fails for one
   no style sheet has a rule for, unless `scripts/class-hooks.txt` lists it with its reason.
 
+- **A path beside a menu row is cut in its middle, not at its end.** Where a folder's whole path
+  does not fit, it is where it is that gives (`/srv/projects/customers…/site`): the last name,
+  the part that tells one path from another, stays whole. The whole path is in the tooltip.
+
 ### Removed
 
 - Two controls nothing drew any more (the model picker and the effort control from before the
