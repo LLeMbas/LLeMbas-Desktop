@@ -28,6 +28,12 @@ const RUNNER = "http://runner.test"
 // The policy the runner's files are served under: Rust's own (src-tauri/src/python.rs `POLICY`),
 // read out of the source, so the frame is tested under exactly what the app sends.
 const RUNNER_POLICY = /pub const POLICY: &str = "([^"]+)";/.exec(readFileSync(join(HERE, "..", "..", "src-tauri", "src", "python.rs"), "utf8"))[1]
+// A page of an answer: served to its sealed frame as Rust serves it -- the server's rebuilt
+// document (fixture page.json) under Rust's own policy for such a page (sealed.rs `PAGE_POLICY`),
+// read out of the source. A script is added to the document here, which the server's never has:
+// what the frame and the policy must hold to is that it does not run.
+const SEALED = "http://sealed.test"
+const PAGE_POLICY = /pub const PAGE_POLICY: &str = "([^"]+)";/.exec(readFileSync(join(HERE, "..", "..", "src-tauri", "src", "sealed.rs"), "utf8"))[1]
 const RUNNER_TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".wasm": "application/wasm", ".zip": "application/zip", ".json": "application/json" }
 
 function playwright() {
@@ -219,6 +225,10 @@ async function page(config, { width = 1280, height = 860, clock = false, wait = 
     const file = own || real || stub
     if (!file || !existsSync(file)) return route.fulfill({ status: 404, headers, body: "" })
     return route.fulfill({ status: 200, headers, contentType: RUNNER_TYPES[extname(file)] || "application/octet-stream", body: readFileSync(file) })
+  })
+  await context.route(`${SEALED}/**`, (route) => {
+    const html = `${fixture("page").html}<script>document.title = "a script ran"; document.body.append("a script ran")</script>`
+    return route.fulfill({ status: 200, headers: { "Content-Security-Policy": PAGE_POLICY, "X-Content-Type-Options": "nosniff" }, contentType: "text/html; charset=utf-8", body: html })
   })
   await context.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname
@@ -4062,6 +4072,300 @@ test("V4: a scheduled task's status in the list and a run's note use the room th
   }
 })
 
+// --- R1: Reports, and a page a model wrote ---------------------------------------------------------
+//
+// The server's own fixtures: reports.json, report.json, report_reply.json, event_reports.json
+// (the `reports` frame the app hands on), page.json (the rebuilt static document, served to the
+// sealed frame by this harness as Rust serves it), step_text_page.json, chat_html_pages.json.
+
+const REPORT = fixture("report").report
+const reportChat = () => ({ ...chatRow({ id: fixture("report_reply").chat, title: REPORT.title }), kind: "report" })
+function r1(over = {}) {
+  const chat = reportChat()
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /reports": fixture("reports"),
+      [`GET /reports/${REPORT.id}`]: fixture("report"),
+      [`POST /reports/${REPORT.id}/read`]: null,
+      [`POST /reports/${REPORT.id}/reply`]: fixture("report_reply"),
+      [`DELETE /reports/${REPORT.id}`]: null,
+      [`GET /chats/${chat.id}`]: { chat, messages: [{ ...userMessage("m1", "Here is the report this conversation continues."), machine: true }, { ...reply({ id: "m2", steps: [{ index: 0, kind: "text", open: true, markdown: "Two of the twelve cakes have lost their leaves." }] }) }], more: false, live: null },
+      [`GET /models?chat=${chat.id}`]: models(),
+      [`POST /chats/${chat.id}/messages`]: { message: userMessage("m3", "Which two?"), reply: null },
+      ...over,
+    }),
+    streams: {},
+  }
+}
+const pageOpens = (p) => p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "page_open").map((c) => c.args))
+/** The sealed frame inside a page's box: its attributes, and what its document shows. */
+async function sealedFrame(p, scope = "") {
+  const el = await p.waitForSelector(`${scope} .hpage__frame`)
+  const frame = await el.contentFrame()
+  await frame.waitForLoadState()
+  // What is drawn (a script's own text is not): had the added script run, "a script ran" would be drawn and the title changed.
+  return { sandbox: await el.getAttribute("sandbox"), src: await el.getAttribute("src"), text: await frame.locator("body").innerText(), title: await frame.title() }
+}
+
+test("R1: Reports in the sidebar with its unread count; a report is read as a page, with the page a model wrote in a sealed frame that runs nothing; read, it is marked so", async () => {
+  const p = await page(r1())
+  await p.waitForSelector("#nav-reports:not([hidden]) #reports-count:not([hidden])")
+  assert.equal(await p.textContent("#reports-count"), "1")
+  await p.click("#nav-reports")
+  await p.waitForSelector("#reports-body .rrow")
+  assert.equal(await p.getAttribute("#nav-reports", "aria-current"), "true")
+  const row = await p.$eval("#reports-body .rrow", (x) => ({ unread: x.classList.contains("is-unread"), title: x.querySelector(".rrow__title").textContent, summary: x.querySelector(".rrow__summary").textContent, from: x.querySelector(".rrow__from").textContent, important: !!x.querySelector(".schip") }))
+  assert.deepEqual(row, { unread: true, title: REPORT.title, summary: REPORT.summary, from: REPORT.schedule.title, important: true })
+  await shot(p, "r1-reports-1280")
+  await p.click("#reports-body .rrow__open")
+  await p.waitForSelector("#reports-body .report .hpage")
+  assert.match(await p.textContent("#reports-title"), new RegExp(`Reports.*${REPORT.title}`))
+  assert.equal(await p.textContent("#reports-body .report__body h2"), "What")
+  // The page: asked of the server by Rust (the report, the digest, the theme's colours), its
+  // source never drawn here; a frame with an empty sandbox, and the script in it did not run.
+  assert.ok(!(await p.textContent("#reports-body .report__body")).includes("<p>"), "the fence's source is not shown as the answer")
+  const frame = await sealedFrame(p, "#reports-body")
+  assert.equal(frame.sandbox, "", "sandbox, allowing nothing")
+  assert.equal(frame.src, `${SEALED}/r/${REPORT.id}/${REPORT.pages[0].digest}`)
+  assert.match(frame.text, /10 wrapped, 2 not/)
+  assert.ok(!/a script ran/.test(frame.text) && frame.title !== "a script ran", "nothing in the page runs")
+  const [asked] = await pageOpens(p)
+  assert.deepEqual([asked.kind, asked.owner, asked.digest], ["r", REPORT.id, REPORT.pages[0].digest])
+  assert.ok(Object.keys(asked.colours).length >= 3 && Object.values(asked.colours).every((c) => /^#[0-9a-f]{6}$/i.test(c)), `the theme's colours, plainly colours: ${JSON.stringify(asked.colours)}`)
+  assert.equal(await p.textContent("#reports-body .hpage__title"), REPORT.pages[0].title)
+  // Read here: said to the server, and the count goes.
+  await p.waitForFunction((id) => window.__mock.api("POST", `/reports/${id}/read`).length === 1, REPORT.id)
+  await p.waitForSelector("#reports-count", { state: "hidden" })
+  assert.deepEqual(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "set_open_report").map((c) => c.args.report).slice(-1)), [REPORT.id], "Rust knows which report is being read")
+  await shot(p, "r1-report-1280")
+  // Open larger: the same document in a dialog; Escape closes it.
+  await p.click("#reports-body .hpage__larger")
+  await p.waitForSelector("dialog.hpage-dialog[open] .hpage__frame")
+  assert.equal(await p.getAttribute("dialog.hpage-dialog .hpage__frame", "sandbox"), "")
+  const big = await p.$eval("dialog.hpage-dialog .hpage__frame", (x) => { const f = x.getBoundingClientRect(); return [f.height > innerHeight * 0.7, f.width > innerWidth * 0.5, f.bottom <= innerHeight, f.right <= innerWidth] })
+  assert.deepEqual(big, [true, true, true, true], "larger, and inside the window")
+  await shot(p, "r1-larger-1280")
+  await p.keyboard.press("Escape")
+  await p.waitForSelector("dialog.hpage-dialog", { state: "detached" })
+  // The schedule it came from is a press away.
+  await p.click("#report-schedule")
+  await p.waitForSelector("#page-scheduled:not([hidden])")
+  assert.deepEqual(p.errors, [])
+})
+
+test("R1: Reply opens the report's conversation as a chat that is in no list: its header says the report with the way back, the sidebar stays on Reports, and the server's opening line is not shown as the person's", async () => {
+  const p = await page(r1())
+  await p.waitForSelector("#nav-reports:not([hidden])")
+  await p.evaluate((id) => window.__mock.emit("open-report", id), REPORT.id)
+  await p.waitForSelector("#report-reply")
+  await p.click("#report-reply")
+  const chat = fixture("report_reply").chat
+  await p.waitForSelector("#messages .msg--assistant")
+  assert.equal(await p.textContent("#chat-title"), `Report: ${REPORT.title}`)
+  assert.equal(await p.getAttribute("#nav-reports", "aria-current"), "true", "the sidebar is still on Reports")
+  assert.equal(await p.locator(`.chatrow[data-id="${chat}"]`).count(), 0, "in no list of chats")
+  assert.equal(await p.locator("#messages .msg--user").count(), 0, "the line the server wrote in the person's place is not shown")
+  assert.match(await p.textContent("#messages .msg--assistant"), /Two of the twelve cakes/)
+  // Written into like any chat.
+  await p.fill("#composer-text", "Which two?")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction((c) => window.__mock.api("POST", `/chats/${c}/messages`).length === 1, chat)
+  assert.equal(await p.getAttribute("#nav-reports", "aria-current"), "true")
+  await shot(p, "r1-reply-1280")
+  // Back to Reports: the report it continues.
+  await p.click("#chat-report-back")
+  await p.waitForSelector("#reports-body .report")
+  assert.match(await p.textContent("#reports-title"), new RegExp(REPORT.title))
+  // Delete asks first; then the list.
+  await p.click("#report-delete")
+  await p.waitForSelector("dialog[open] .btn--danger")
+  assert.match(await p.textContent("dialog[open]"), /The conversation that continued it goes with it/)
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction((id) => window.__mock.api("DELETE", `/reports/${id}`).length === 1, REPORT.id)
+  await p.waitForSelector("#reports-body .rlist, #reports-body .arch__empty")
+  assert.deepEqual(p.errors, [])
+})
+
+test("R1: the server's reports frame moves the count and the open list; a server without reports has no Reports row; at 390 px the list and a report stay inside the window", async () => {
+  let p = await page(r1({ "GET /reports": { reports: [], unread: 0 } }))
+  await p.waitForSelector("#nav-reports:not([hidden])")
+  assert.ok(await p.isHidden("#reports-count"))
+  await p.click("#nav-reports")
+  await p.waitForSelector("#reports-body .arch__empty")
+  assert.match(await p.textContent("#reports-body"), /No reports yet\. A scheduled task files one when it has something to tell you\./)
+  // A report is filed: the frame (event_reports.json), as the app hands it on.
+  await p.evaluate((f) => { window.__mock.answer("GET /reports", f.list); window.__mock.emit("reports", f.frame) }, { list: fixture("reports"), frame: fixture("event_reports") })
+  await p.waitForSelector("#reports-count:not([hidden])")
+  assert.equal(await p.textContent("#reports-count"), String(fixture("event_reports").unread))
+  await p.waitForSelector("#reports-body .rrow.is-unread")
+  assert.deepEqual(p.errors, [])
+  await p.context().close()
+  // An older server: 404, and no row.
+  p = await page({ status: status(), routes: baseRoutes(), streams: {} })
+  await p.waitForTimeout(200)
+  assert.ok(await p.isHidden("#nav-reports"))
+  await p.context().close()
+  // Narrow.
+  p = await page(r1(), { width: 390, height: 844 })
+  await p.evaluate((id) => window.__mock.emit("open-report", id), REPORT.id)
+  await p.waitForSelector("#reports-body .report .hpage__frame")
+  assert.ok(await noSideways(p, 390))
+  assert.deepEqual(await controlsOut(p, 390), [])
+  const box = await p.$eval("#reports-body .hpage", (x) => { const r = x.getBoundingClientRect(); return [r.left >= 0, r.right <= innerWidth, Math.round(r.height)] })
+  assert.ok(box[0] && box[1], "the page's box inside the window")
+  await shot(p, "r1-report-390")
+  await p.evaluate(() => document.getElementById("reports-back").click())
+  await p.waitForSelector("#reports-body .rrow")
+  assert.ok(await noSideways(p, 390))
+  assert.deepEqual(await controlsOut(p, 390), [])
+  await shot(p, "r1-reports-390")
+  assert.deepEqual(p.errors, [])
+})
+
+test("H1: a page a model wrote into a reply is a sealed frame in its place once the reply is finished, only its title while it is written; without the server's word a fence is the code block it is", async () => {
+  const step = fixture("step_text_page")
+  const message = reply({ id: "m2", steps: [step] })
+  const p = await page(agentChatOpen([["steps", { steps: [step], tail: { thinking: "", text: "And then:\n\n```html-view Still coming\n<p>half", label: "" } }]], {
+    "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How many?"), { ...message, id: "m6" }, reply({ id: "m7", steps: [{ index: 0, kind: "text", open: true, markdown: step.markdown }] })], more: false, live: null },
+    "GET /models?chat=chat1": models(),
+  }))
+  // Finished (chat1): the frame; the same Markdown without `pages` (the feature is off) is a code block.
+  await openChatRow(p, "chat1")
+  await p.waitForSelector('.msg[data-id="m6"] .hpage')
+  const frame = await sealedFrame(p, '.msg[data-id="m6"]')
+  assert.equal(frame.sandbox, "")
+  assert.equal(frame.src, `${SEALED}/m/m6/${step.pages[0].digest}`)
+  assert.match(frame.text, /10 wrapped, 2 not/)
+  assert.ok(!/a script ran/.test(frame.text), "nothing in the page runs")
+  assert.equal(await p.textContent('.msg[data-id="m6"] .hpage__title'), step.pages[0].title)
+  assert.match(await p.textContent('.msg[data-id="m6"] .step--text'), /Two are unwrapped\./, "the answer's own words stay")
+  assert.equal(await p.locator('.msg[data-id="m7"] .hpage').count(), 0)
+  assert.match(await p.textContent('.msg[data-id="m7"] .md-code pre'), /<p>10 wrapped, 2 not<\/p>/, "as text, in a code block")
+  // One known height, the page scrolling inside it.
+  const [h, vh, rem] = await p.evaluate(() => [document.querySelector('.msg[data-id="m6"] .hpage__body').getBoundingClientRect().height, innerHeight, parseFloat(getComputedStyle(document.documentElement).fontSize)])
+  assert.ok(Math.abs(h - Math.min(28 * rem, 0.7 * vh)) < 1.5, `min(28rem, 70vh): ${h}`)
+  const fills = await p.$eval('.msg[data-id="m6"] .hpage__frame', (x) => { const f = x.getBoundingClientRect(); const b = x.parentElement.getBoundingClientRect(); return [Math.abs(f.top - b.top) < 1, Math.abs(f.height - b.height) < 1.5, Math.abs(f.width - b.width) < 1] })
+  assert.deepEqual(fills, [true, true, true], "the frame is the whole of its box")
+  await shot(p, "h1-page-1280")
+  // Being written (chat2): the closed page and the one still open are both only their titles.
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live .hpage.is-writing")
+  assert.deepEqual(await p.$$eval(".msg.is-live .hpage.is-writing .hpage__title", (l) => l.map((x) => x.textContent)), [step.pages[0].title, "Still coming"])
+  assert.equal(await p.locator(".msg.is-live iframe").count(), 0)
+  assert.ok(!(await p.textContent(".msg.is-live")).includes("<p>"), "no source of a page while it is written")
+  assert.equal((await pageOpens(p)).filter((a) => a.owner === "m2").length, 0, "nothing is asked for a reply still being written")
+  // Done: the frame.
+  await p.evaluate(([path, m]) => window.__mock.frame(path, "done", { message: m, chat: null, next: null }), [STREAM2, message])
+  await p.waitForSelector('.msg[data-id="m2"]:not(.is-live) .hpage__frame')
+  assert.deepEqual(p.errors, [])
+})
+
+test("H1: a long chat's pages are held by need: frames only near the window, made when their place comes into view and taken away when it is far; one that cannot be had says so, with Try again", async () => {
+  const step = fixture("step_text_page")
+  const many = Array.from({ length: 30 }, (_, i) => reply({ id: `p${i}`, steps: [{ ...step, pages: [{ title: `Page ${i}`, digest: `d${i}` }] }] }))
+  const p = await page(agentChatOpen([], { "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "Thirty pages"), ...many], more: false, live: null }, "GET /models?chat=chat1": models() }))
+  await openChatRow(p, "chat1")
+  await p.waitForSelector("#messages .hpage__frame")
+  assert.equal(await p.locator("#messages .hpage").count(), 30)
+  await p.waitForTimeout(300)
+  const near = await p.locator("#messages .hpage__frame").count()
+  assert.ok(near >= 1 && near <= 8, `only those near the window (${near} of 30)`)
+  const first = (await pageOpens(p)).map((a) => a.owner)
+  assert.ok(first.length <= 8 && first.includes("p29"), `the newest, at the end, is among them: ${first}`)
+  // To the start: the first ones are made, the last ones let go.
+  await p.evaluate(() => document.querySelector('.msg[data-id="p0"]').scrollIntoView())
+  await p.waitForSelector('.msg[data-id="p0"] .hpage__frame')
+  await p.waitForFunction(() => !document.querySelector('.msg[data-id="p29"] .hpage__frame'))
+  assert.ok((await p.locator("#messages .hpage__frame").count()) <= 8)
+  // Back: asked for again.
+  await p.evaluate(() => document.querySelector('.msg[data-id="p29"]').scrollIntoView())
+  await p.waitForSelector('.msg[data-id="p29"] .hpage__frame')
+  assert.equal((await pageOpens(p)).filter((a) => a.owner === "p29").length, 2, "asked of Rust again, which holds it or fetches it")
+  // The server has it no more (a grant taken away, the message gone): said in its place.
+  await p.evaluate(() => (window.__mockConfig.pages = { __error: { status: 404, detail: "The page is not there." } }))
+  await p.evaluate(() => document.querySelector('.msg[data-id="p15"]').scrollIntoView({ block: "center" }))
+  await p.waitForSelector('.msg[data-id="p15"] .hpage__note.is-error')
+  assert.match(await p.textContent('.msg[data-id="p15"] .hpage__body'), /This page could not be shown: The page is not there\./)
+  await p.evaluate(() => (window.__mockConfig.pages = {}))
+  await p.click('.msg[data-id="p15"] .hpage__body .btn')
+  await p.waitForSelector('.msg[data-id="p15"] .hpage__frame')
+  assert.deepEqual(p.errors, [])
+})
+
+test("H1: the chat's switch for pages in answers is shown only where the server offers it, and a press switches it", async () => {
+  const offered = fixture("chat_html_pages")
+  const cfg = agentChatOpen([], { "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?")], more: false, live: null }, "GET /models?chat=chat1": models(), "GET /chats/chat1/html-pages": offered, "POST /chats/chat1/html-pages": { offered: true, on: true } })
+  const p = await page(cfg)
+  await openChatRow(p, "chat1")
+  await p.waitForSelector("#chat-settings .cchip--pages")
+  assert.equal((await p.textContent("#chat-settings .cchip--pages")).trim(), "Pages in answers: off")
+  await p.evaluate(() => window.__mock.answer("GET /chats/chat1/html-pages", { offered: true, on: true }))
+  await p.click("#chat-settings .cchip--pages")
+  await p.waitForFunction(() => /Pages in answers: on/.test(document.getElementById("chat-settings").textContent))
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("POST", "/chats/chat1/html-pages")))[0].args.body, { on: true })
+  assert.deepEqual(await reachable(p, 1280), [], "every control of the header reachable")
+  // Not offered (the instance's switch, the model's flag, an agent chat), or an older server: no switch.
+  await p.evaluate(() => window.__mock.answer("GET /chats/chat1/html-pages", { offered: false, on: false }))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#chat-settings .cchip--model")
+  await p.waitForTimeout(150)
+  assert.equal(await p.locator("#chat-settings .cchip--pages").count(), 0, "an agent chat")
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/chats/chat2/html-pages").length), 0, "not even asked")
+  await openChatRow(p, "chat1")
+  await p.waitForSelector("#chat-settings .cchip--model")
+  await p.waitForTimeout(150)
+  assert.equal(await p.locator("#chat-settings .cchip--pages").count(), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("R1: Scheduled as the server has it now: Notify when with the person's own condition, a run that changed nothing, a run's line with the report it filed", async () => {
+  const one = fixture("schedule")
+  const id = one.schedule.id
+  const run = fixture("schedule_run").run
+  const cfg = r1({
+    "GET /schedules": { schedules: [one.schedule] },
+    [`GET /schedules/${id}`]: one,
+    [`GET /schedules/${id}/runs`]: { runs: [run, { ...run, id: "run0", status: "unchanged", report: null, note: "The page has not changed.", message_id: null, preview: "", report_path: null }], more: false },
+    "GET /schedules/models": { models: [], instance: [], mine: [] },
+    "POST /schedules/preview": { rule: one.schedule.rule, description: one.schedule.description, next_runs: one.schedule.next_runs, timezone: "UTC" },
+    [`PATCH /schedules/${id}`]: one,
+  })
+  const p = await page(cfg)
+  await p.evaluate((x) => window.__mock.emit("open-schedule", { schedule: x, run: "" }), id)
+  await p.waitForSelector("#scheduled-body .run")
+  // `when` with no words of the person's: the server's default is what is said.
+  assert.equal(await p.textContent("#sched-notify-said"), one.schedule.notify_default)
+  const rows = await p.$$eval("#scheduled-body .run", (l) => l.map((x) => ({ status: x.querySelector(".schip").textContent, note: x.querySelector(".run__error")?.textContent || "", report: !!x.querySelector(".run__report-open") })))
+  assert.deepEqual(rows, [{ status: "Done", note: run.note, report: true }, { status: "Unchanged", note: "The page has not changed.", report: false }])
+  assert.deepEqual(await controlsOut(p, 1280), [])
+  await shot(p, "r1-runs-1280")
+  // The form: Every run / When… / Never; the condition is a field of its own, there for When….
+  await p.locator("#scheduled-tools .btn", { hasText: "Edit" }).click()
+  await p.waitForSelector("#sched-notify")
+  assert.deepEqual(await p.$$eval("#sched-notify option", (l) => l.map((x) => [x.value, x.textContent, x.selected])), [["always", "Every run", false], ["when", "When…", true], ["never", "Never", false]])
+  assert.equal(await p.getAttribute("#sched-notify-when", "placeholder"), one.schedule.notify_default)
+  await p.fill("#sched-notify-when", "a cake is unwrapped")
+  // The two fields' parts on shared lines (label, control, hint).
+  const tops = await p.$$eval("#sched-notify, #sched-notify-when", (l) => l.map((x) => Math.round(x.getBoundingClientRect().top)))
+  await shot(p, "r1-form-1280")
+  await p.selectOption("#sched-notify", "never")
+  assert.ok(await p.isHidden("#sched-notify-when"))
+  await p.selectOption("#sched-notify", "when")
+  assert.ok(await p.isVisible("#sched-notify-when"))
+  await p.locator("#scheduled-body .btn--primary", { hasText: /Save/ }).click()
+  await p.waitForFunction((x) => window.__mock.api("PATCH", `/schedules/${x}`).length === 1, id)
+  const sent = (await p.evaluate((x) => window.__mock.api("PATCH", `/schedules/${x}`), id))[0].args.body
+  assert.deepEqual([sent.notify, sent.notify_when], ["when", "a cake is unwrapped"])
+  // A run's report is opened in Reports.
+  await p.waitForSelector("#scheduled-body .run__report-open")
+  await p.click("#scheduled-body .run__report-open")
+  await p.waitForSelector("#reports-body .report")
+  assert.equal(await p.getAttribute("#nav-reports", "aria-current"), "true")
+  assert.ok(tops.length === 2)
+  assert.deepEqual(p.errors, [])
+})
+
 // Every screen, at the five widths, in both looks. What must hold on all of them is asserted --
 // the window never scrolls sideways, every control is inside the window and not cut off by what
 // holds it, no two controls of a row are drawn over each other -- and with $SHOTS each is left
@@ -4069,7 +4373,7 @@ test("V4: a scheduled task's status in the list and a run's note use the room th
 
 function gallery(theme) {
   const cfg = { status: status({ theme }), routes: {}, streams: {}, commands: {}, terminal: [READY, ["output", "dev@workbench:~/project$ ls\r\nbuild  src  README.md\r\ndev@workbench:~/project$ "]] }
-  for (const part of [fx(), g8(), c4(), archivedRoutes(), i8(), p2calls(), l8([bagEnd()])]) {
+  for (const part of [r1(), fx(), g8(), c4(), archivedRoutes(), i8(), p2calls(), l8([bagEnd()])]) {
     Object.assign(cfg.routes, part.routes)
     Object.assign(cfg.commands, part.commands || {})
   }
@@ -4105,6 +4409,8 @@ const SCREENS = [
   ["files-server", async (p) => { await openServerTab(p); await p.waitForSelector('#server-list .frow[data-path="/home"]') }],
   ["scheduled", async (p) => { await p.evaluate(() => document.getElementById("nav-scheduled").click()); await p.waitForSelector("#scheduled-body .task, #scheduled-body button") }],
   ["scheduled-task", async (p) => { await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" })); await p.waitForSelector("#scheduled-body .fact") }],
+  ["reports", async (p) => { await p.evaluate(() => document.getElementById("nav-reports").click()); await p.waitForSelector("#reports-body .rrow") }],
+  ["report", async (p) => { await p.evaluate((id) => window.__mock.emit("open-report", id), REPORT.id); await p.waitForSelector("#reports-body .report .hpage__frame") }],
   ["memory", async (p) => { await p.evaluate(() => document.getElementById("nav-memory").click()); await p.waitForSelector("#memory-body .memory, #memory-body textarea, #memory-body button") }],
   ["archived", async (p) => { await p.evaluate(() => document.getElementById("nav-archived").click()); await p.waitForSelector("#archived-body .chatrow, #archived-body button") }],
   ["settings", async (p) => { await p.evaluate(() => document.getElementById("settings-btn").click()); await p.waitForSelector("#set-look") }],

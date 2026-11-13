@@ -8,6 +8,29 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ### Added
 
+- **Reports.** A scheduled task that has something to tell files a report (LLeMbas server
+  2.0.0-beta.12), and Reports is where they are read: a row in the sidebar with the number
+  unread, the list (the unread first), and a report as a page. Open, it is marked read; it can
+  be deleted; **Reply** opens the conversation that continues it -- an ordinary chat, with
+  "Report: …" as its title and the way back to Reports, that is in no list of chats. A server
+  without reports has no Reports row.
+- **A notification comes from a report**, with the report's own title and summary, and opens it.
+  A run that merely finished is no longer announced; one that failed still is. A report being
+  read in the window in front is not announced.
+- **Scheduled: Notify when.** Every run, When… (with your own condition; the server's default
+  stands where you write none) or Never, in place of "Tell me". A task's history says each run's
+  own line -- what it found, or that it filed a report -- with the report a press away, what the
+  run cost where the server keeps that, and the new state Unchanged (what the task watches is
+  as it was: nothing ran).
+- **Pages in answers (experimental; off unless the server's administrator switched it on).**
+  Where a model adds a page to an answer -- a table, a chart, a layout -- it is shown in its
+  place in a sealed frame: a box of one height with the page scrolling inside, and Open larger.
+  A page is static everywhere: the server rebuilds it without anything that runs or leads
+  anywhere, the app shows exactly that document, in a frame that allows nothing, and never
+  draws a model's markup itself. While a reply is still being written a page is only its title.
+  In a long chat frames are made as their place comes into view and let go when it is far. A
+  chat's settings have the switch, "Pages in answers", where the server offers it for that chat
+  and model. Pages are shown in reports too.
 - **A chat says when its Python runs in this window.** Beside the title of a chat on the server:
   "Python runs in this window", once the window really is the chat's page for the `python`
   tool. Where the runner's files could not be made ready it says "Python cannot run in this

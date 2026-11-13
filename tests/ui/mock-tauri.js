@@ -149,6 +149,15 @@
         if (py && py.__error) return Promise.reject(py.__error)
         return py ? { enabled: true, version: py.version, url: py.url } : { enabled: false, version: "", url: "" }
       }
+      case "page_open": {
+        // A page of an answer, as Rust would hold it: the address of its sealed frame (tests/ui
+        // serves the server's rebuilt document there, under Rust's own policy for it).
+        // `pages: { __error }` refuses; `pages: { slow: ms }` takes that long.
+        const pg = config.pages || {}
+        if (pg.slow) await new Promise((done) => setTimeout(done, pg.slow))
+        if (pg.__error) return Promise.reject(pg.__error)
+        return { url: `http://sealed.test/${args.kind}/${args.owner}/${args.digest}`, title: "" }
+      }
       case "model_image":
         return ""
       case "terminal_word":
