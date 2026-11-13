@@ -29,8 +29,19 @@ const SAFE_LINK = /^(https?:|mailto:)/i
  * `pages`, or with no entry left for a fence, the fence is the code block it is.
  */
 export function markdown(source, pages = null) {
+  const lines = String(source ?? "").replace(/\r\n?/g, "\n").split("\n")
   const out = document.createDocumentFragment()
-  blocks(String(source ?? "").replace(/\r\n?/g, "\n").split("\n"), out, pages ? { ...pages, next: 0 } : null)
+  let how = pages ? { ...pages, next: 0 } : null
+  if (how?.mount) {
+    // The pages are the server's, the fences this renderer's: each page is drawn where its
+    // fence is only if both count the same -- wherever the fences are, also inside a list item
+    // or a quotation. If they do not (the two read some fence differently), no fence is given a
+    // page that may be another's: every one of them stays the code block it is.
+    const found = { count: true, next: 0 }
+    blocks(lines, document.createDocumentFragment(), found)
+    if (found.next !== (how.list || []).length) how = null
+  }
+  blocks(lines, out, how)
   return out
 }
 
@@ -77,6 +88,10 @@ function blocks(lines, parent, pages = null) {
       i += 1 // the closing fence (or the end)
       // A page: drawn by what the server said of it, in order; one still being written, said so.
       const title = pages ? pageTitle(line) : null
+      if (title !== null && closed && pages.count) {
+        pages.next += 1
+        continue
+      }
       if (title !== null && pages.writing) {
         parent.append(pages.writing(title))
         continue
@@ -106,12 +121,12 @@ function blocks(lines, parent, pages = null) {
         i += 1
       }
       const quote = h("blockquote")
-      blocks(inner, quote)
+      blocks(inner, quote, pages)
       parent.append(quote)
       continue
     }
     if (ITEM.test(line)) {
-      i = list(lines, i, parent)
+      i = list(lines, i, parent, pages)
       continue
     }
     if (line.includes("|") && TABLE_RULE.test(lines[i + 1] || "") && (lines[i + 1] || "").includes("-")) {
@@ -139,7 +154,7 @@ function codeBlock(text, lang) {
   return h("div", { class: "md-code" }, lang ? h("span", { class: "md-lang", text: lang }) : null, copy, h("pre", null, code))
 }
 
-function list(lines, start, parent) {
+function list(lines, start, parent, pages = null) {
   const first = ITEM.exec(lines[start])
   const base = indentOf(first[1])
   const ordered = /\d/.test(first[2])
@@ -182,7 +197,7 @@ function list(lines, start, parent) {
     // A tight item is its text; one with blocks in it is blocks.
     if (content.length === 1 || !content.slice(1).some((c) => startsBlock(c) || !c.trim())) {
       li.append(...inline(content.join("\n")))
-    } else blocks(content, li)
+    } else blocks(content, li, pages)
     el.append(li)
     while (i < lines.length && !lines[i].trim()) {
       const next = ITEM.exec(lines[i + 1] || "")
