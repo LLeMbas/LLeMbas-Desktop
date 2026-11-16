@@ -25,8 +25,11 @@ All notable changes to LLeMbas Desktop. The format follows
 - What is written while another page is open (Settings, Files) is followed too: back in the
   chat, the thread is at its end if it was. A card or a longer message in the dock, a block
   opened, a picture that arrives late no longer push the end out of sight.
-- The thread's place no longer depends on an engine's scroll anchoring, which not every engine
-  the app runs on has: it is switched off, and the page keeps the place itself.
+- **A finished reply no longer throws the thread back to the last prompt.** The moment a reply
+  ended, what was written was replaced by the finished reply, and the engine's scroll anchoring
+  -- seen under WebKit, where the same page in Chromium stood still -- moved the thread to the
+  nearest thing left standing: the person's last message. Anchoring is off for the thread
+  (`overflow-anchor: none`), and the page keeps the place itself, the same in every engine.
 
 ### Changed
 

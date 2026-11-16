@@ -100,20 +100,6 @@ jobs:
           NODE_PATH: ${{ runner.temp }}/pw/node_modules
           ENGINE: webkit
         run: node tests/ui/run.mjs "W1:"
-      # For this one run only: the same tests on the page as it was released (1.0.0-beta.10),
-      # every check printed, to read how that page's thread moved in WebKit. Not a gate.
-      - name: (once) The released page under WebKit, traced
-        if: always()
-        continue-on-error: true
-        env:
-          NODE_PATH: ${{ runner.temp }}/pw/node_modules
-          ENGINE: webkit
-          W1_TRACE: "1"
-        run: |
-          git fetch --depth 1 origin 53402f3b984cf0d08e3503c33436b58838f4437d
-          mkdir -p "$RUNNER_TEMP/released"
-          git archive 53402f3b984cf0d08e3503c33436b58838f4437d ui | tar -x -C "$RUNNER_TEMP/released"
-          UI_DIR="$RUNNER_TEMP/released/ui" node tests/ui/run.mjs "W1:" || true
 
   # The app started for real: it must still be running after 25 seconds (timeout's 124), and its
   # log must not say it stopped. Once under Xvfb (X11) and once under a headless Weston (Wayland,

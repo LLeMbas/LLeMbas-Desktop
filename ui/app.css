@@ -556,7 +556,8 @@ button.place--python { cursor: pointer; }
 .place--python.is-warn, .place--python.is-warn .place__where { color: var(--warning); }
 
 /* Where the thread stands as it changes is the page's own doing (chat.js, "Following the newest
-   words"), the same in every engine: not all of them anchor a scroller. */
+   words"), the same in every engine. An engine's own anchoring is off: WebKit's moved the thread
+   back to the last prompt when a written reply was replaced by the finished one. */
 .thread { overflow: auto; overflow-anchor: none; min-height: 0; padding: var(--sp-6) var(--sp-4) var(--sp-4); scroll-behavior: auto; }
 .thread > * { max-width: var(--column); margin-left: auto; margin-right: auto; }
 .thread__note { font-size: var(--text-sm); }
