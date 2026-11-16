@@ -237,14 +237,78 @@ export function intoComposer(text) {
   box.focus()
 }
 
-function nearBottom() {
-  const th = $("thread")
-  return th.scrollHeight - th.scrollTop - th.clientHeight < 80
+// --- Following the newest words ------------------------------------------------------------------
+//
+// Whether the thread keeps to its end as it grows is a state of its own, set by the person's
+// scrolling and by nothing else: up, and it stays where they are; back at the end, and it follows
+// again. It is never worked out from the distance to the end after the page's own changes -- one
+// frame of a reply can add more than any such distance, and the thread was then left behind at
+// the reply's first line. No engine's scroll anchoring is relied on either (`overflow-anchor:
+// none` in app.css): what is drawn anew keeps its place because `settle` puts it back.
+
+let following = true
+/** The thread as it last was: where it stood, and the sizes that stood for. */
+const seen = { top: 0, height: 0, client: 0 }
+/** How near the end (px) scrolling down has to come for following to begin again. */
+const NEAR = 80
+
+function remember(th) {
+  seen.top = th.scrollTop
+  seen.height = th.scrollHeight
+  seen.client = th.clientHeight
 }
 
-function toBottom(force) {
+/**
+ * The thread moved, or is about to be changed: was that the person? Only a move with the sizes
+ * as they were is theirs -- one that comes with a change of size is the layout's (the end came
+ * nearer, the box grew), and says nothing of what they want.
+ */
+function noticed() {
   const th = $("thread")
-  if (force || nearBottom()) th.scrollTop = th.scrollHeight
+  if (!th.clientHeight) return // not on the screen: nothing to read
+  const gap = th.scrollHeight - th.scrollTop - th.clientHeight
+  const moved = th.scrollTop - seen.top
+  if (gap <= 2) following = true
+  else if (th.scrollHeight === seen.height && th.clientHeight === seen.client) {
+    if (moved < -1) following = false
+    else if (moved > 1 && gap < NEAR) following = true
+  } else if (following) th.scrollTop = th.scrollHeight
+  remember(th)
+}
+
+/** Before the page changes the thread: what the person did meanwhile, and where the thread stands. */
+function mark() {
+  noticed()
+  return $("thread").scrollTop
+}
+
+/** After the page changed the thread: its end when followed, else exactly where it stood (`top`). */
+function settle(top) {
+  const th = $("thread")
+  if (!th.clientHeight) return
+  if (following) th.scrollTop = th.scrollHeight
+  else if (top !== undefined && Math.abs(th.scrollTop - top) > 0.5) th.scrollTop = top
+  remember(th)
+}
+
+/** To the end, and following from here on: a chat opened, a message sent. */
+function toBottom() {
+  following = true
+  settle()
+}
+
+function initFollowing() {
+  const th = $("thread")
+  th.addEventListener("scroll", noticed, { passive: true })
+  // What changes a size without a frame of a reply: a picture that arrived, a block opened, the
+  // dock grown by a card or a longer message, the window; and the thread back on the screen
+  // after another page, with what was written meanwhile.
+  const sized = new ResizeObserver(() => {
+    if (!th.clientHeight) return
+    if (following) th.scrollTop = th.scrollHeight
+    remember(th)
+  })
+  for (const el of [th, $("messages"), $("new-chat")]) sized.observe(el)
 }
 
 /** A small icon button under a message. */
@@ -588,7 +652,7 @@ async function openShown(call, chat) {
 // --- The reply being written ---------------------------------------------------------------------
 
 class Live {
-  constructor(chat, messageId) {
+  constructor(chat, messageId, from = null) {
     this.chat = chat
     this.id = messageId
     this.steps = h("div", { class: "msg__steps" })
@@ -603,6 +667,17 @@ class Live {
     this.progress = null // the stream's `progress` (spec 3.4.0), drawn in place of `status` when it comes
     this.said = "" // the last `status` text, for a server that sends no progress
     this.clock = 0
+    // The same reply, followed again (its stream ended and the chat was read anew): what was
+    // drawn of it stays until the new stream's frames draw over it, so the thread keeps its height.
+    if (from && from.id === messageId) {
+      for (const part of ["steps", "tail", "calls", "jobs"]) {
+        this[part].append(...from[part].childNodes)
+        this[part].hidden = from[part].hidden
+      }
+      this.thinking.textContent = from.thinking.textContent
+      this.thinking.hidden = from.thinking.hidden
+      if (!from.status.classList.contains("is-error")) this.status.textContent = from.status.textContent
+    }
   }
 
   /** The status line: the progress object's line where the server sends one, else its text. */
@@ -644,6 +719,7 @@ class Live {
     // 2.0.0-beta.11: the reply ends when it is saved, the naming a moment later).
     if (event === "title") return this.named(data?.chat)
     if (this.done) return
+    const top = mark()
     this.frames = (this.frames || 0) + 1
     // Any frame that carries `progress` (the status frame does, from server 2.0.0-beta.8 on):
     // the object, or null for nothing running -- then the status text again.
@@ -699,16 +775,18 @@ class Live {
       default:
         break
     }
-    toBottom(false)
+    settle(top)
   }
 
   named(chat) {
     if (!chat?.title || chat.id !== this.chat.id) return
+    const top = mark()
     if (open?.chat?.id === chat.id) {
       open.chat = { ...open.chat, title: chat.title }
       setTitle(chat.title)
     }
     ctx.changed(this.chat)
+    settle(top)
   }
 
   tailed(tail) {
@@ -766,14 +844,17 @@ let ended = { id: "", n: 0 }
 /** A stream that ends sooner than this (ms) after it was opened gave nothing worth the name. */
 const QUICK_END = 5000
 
-function follower(chat, messageId) {
+/** The reply last followed, its stream ended or not: what is drawn of it, for when it is followed again. */
+let lastLive = null
+
+function follower(chat, messageId, from = null) {
   if (open?.live) open.live.stop()
-  const live = new Live(chat, messageId)
+  const live = new Live(chat, messageId, from)
   open.live = live
+  lastLive = live
   $("messages").append(live.el)
   setRunning(true)
   live.start()
-  toBottom(true)
 }
 
 // --- Cards ----------------------------------------------------------------------------------------
@@ -1796,6 +1877,11 @@ const note = (text) => alertIn(text, true)
 
 /** Open a chat by id: its newest page, and the reply being written, if one is. */
 export async function openChat(id) {
+  // The chat that is open, read again (a reply's stream ended, a message was edited, the summary
+  // was made): what is on the screen stays there until the answer has come, and the thread stays
+  // where the person has it. Cleared first, it shrank to one line and stood at its top.
+  const again = open?.chat?.id === id && !!$("messages").querySelector(".msg")
+  const was = again ? lastLive : null
   if (open?.chat?.id !== id) discard()
   if (open?.live) open.live.stop()
   if (open?.chat?.id !== id) pythonFor(null)
@@ -1811,10 +1897,10 @@ export async function openChat(id) {
   $("main").dataset.new = "false"
   clear($("composer-chips"))
   renderNotice()
-  const list = clear($("messages"))
+  const list = $("messages")
   renderCards({ id }, [])
   alertIn("")
-  list.append(h("p", { class: "muted thread__loading", text: t("Loading…") }))
+  if (!again) clear(list).append(h("p", { class: "muted thread__loading", text: t("Loading…") }))
   let r
   try {
     r = await get(`/chats/${encodeURIComponent(id)}`)
@@ -1832,6 +1918,7 @@ export async function openChat(id) {
   renderHead(r.chat)
   renderChips()
   renderNotice()
+  const top = mark()
   clear(list)
   if (r.more) list.append(earlier())
   const seed = seedOf(r.chat, r.messages, r.more)
@@ -1842,10 +1929,13 @@ export async function openChat(id) {
     list.append(m.role === "user" ? userMessage(m) : assistantMessage(m, r.chat))
   }
   ctx.opened(r.chat)
-  if (r.live) follower(r.chat, r.live)
+  if (r.live) follower(r.chat, r.live, was)
   else setRunning(false)
-  toBottom(true)
-  $("composer-text").focus()
+  // A chat opened is at its end and followed (what the reply's first frames bring included);
+  // one read again is where it was.
+  if (again) settle(top)
+  else toBottom()
+  $("composer-text").focus({ preventScroll: true })
 }
 
 function earlier() {
@@ -1867,6 +1957,7 @@ function earlier() {
         for (const m of r.messages) if (m.id !== seed) frag.append(m.role === "user" ? userMessage(m) : assistantMessage(m, open.chat))
         e.target.replaceWith(frag)
         th.scrollTop += th.scrollHeight - from
+        remember(th)
       } catch (err) {
         e.target.disabled = false
         alertIn(why(err))
@@ -1881,6 +1972,7 @@ function reload() {
 
 export function closeChat() {
   if (open?.live) open.live.stop()
+  lastLive = null
   open = null
   pythonFor(null)
   watchActivity(null)
@@ -2069,7 +2161,7 @@ async function submit() {
     sent()
     box.value = ""
     grow()
-    toBottom(true)
+    toBottom()
   } catch (err) {
     alertIn(why(err))
   } finally {
@@ -2170,7 +2262,7 @@ async function continueReply() {
     if (openChatId() !== id) return
     if (r.message) $("messages").append(userMessage(r.message))
     if (r.reply) follower(open.chat, r.reply.id)
-    toBottom(true)
+    toBottom()
   } catch (err) {
     alertIn(why(err))
   }
@@ -2307,8 +2399,12 @@ function menuContext() {
 
 function grow() {
   const box = $("composer-text")
+  // Measuring the box takes its height away for a moment, and the thread above it is laid out
+  // taller meanwhile: it is put back where it stood.
+  const top = mark()
   box.style.height = "auto"
   box.style.height = `${Math.min(box.scrollHeight, window.innerHeight * 0.4)}px`
+  settle(top)
 }
 
 export function initChat(context) {
@@ -2341,5 +2437,6 @@ export function initChat(context) {
   onAgentChange(renderNotice)
   initSlash(menuContext())
   initHead()
+  initFollowing()
   showComposer(false)
 }

@@ -555,7 +555,9 @@ button.place--back:hover { border-color: var(--border-strong); }
 button.place--python { cursor: pointer; }
 .place--python.is-warn, .place--python.is-warn .place__where { color: var(--warning); }
 
-.thread { overflow: auto; min-height: 0; padding: var(--sp-6) var(--sp-4) var(--sp-4); scroll-behavior: auto; }
+/* Where the thread stands as it changes is the page's own doing (chat.js, "Following the newest
+   words"), the same in every engine: not all of them anchor a scroller. */
+.thread { overflow: auto; overflow-anchor: none; min-height: 0; padding: var(--sp-6) var(--sp-4) var(--sp-4); scroll-behavior: auto; }
 .thread > * { max-width: var(--column); margin-left: auto; margin-right: auto; }
 .thread__note { font-size: var(--text-sm); }
 .thread__loading { padding: var(--sp-4) 0; }

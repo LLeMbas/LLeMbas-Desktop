@@ -215,6 +215,8 @@
     /** The calls of one command, or of `api` with one method and path prefix. */
     api: (method, prefix) => calls.filter((c) => c.cmd === "api" && c.args.method === method && c.args.path.startsWith(prefix)),
     streams: () => [...streams.values()].map((s) => s.path),
+    /** Whether a followed reply's first frames (the table's) have gone out: what a test sends now is drawn now. */
+    started: (path) => [...streams.values()].some((s) => s.path === path && s.started),
     shell,
     /** The terminals opened so far: [{ id, target, open }]. */
     terminals: () => [...terminals].map(([id, t]) => ({ id, ...t })),

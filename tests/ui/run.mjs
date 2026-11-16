@@ -6,7 +6,8 @@
 //
 // Needs Playwright (`playwright` or `playwright-core`, from NODE_PATH or a node_modules beside
 // the repository) and a Chromium: Playwright's own, or the one in $CHROMIUM (/usr/bin/chromium
-// is tried when Playwright has none). Nothing is built and no server is started: the page's
+// is tried when Playwright has none). With $ENGINE=webkit it is Playwright's WebKit instead:
+// nearer the engine the app has on Linux and macOS, for the tests that turn on what an engine does. Nothing is built and no server is started: the page's
 // files are handed to the browser from ui/ as they are in the repository. With $SHOTS set to a
 // directory, some tests leave a screenshot there.
 //
@@ -21,7 +22,8 @@ import { fileURLToPath } from "node:url"
 import assert from "node:assert/strict"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const UI = join(HERE, "..", "..", "ui")
+// The page's files: the repository's, or another copy of them ($UI_DIR) to see what a test says of it.
+const UI = process.env.UI_DIR || join(HERE, "..", "..", "ui")
 const ORIGIN = "http://app.test"
 const require = createRequire(join(process.cwd(), "noop.js"))
 const RUNNER = "http://runner.test"
@@ -50,6 +52,8 @@ function playwright() {
 }
 
 async function launch() {
+  const engine = process.env.ENGINE || "chromium"
+  if (engine !== "chromium") return playwright()[engine].launch()
   const { chromium } = playwright()
   const paths = [process.env.CHROMIUM, "/usr/bin/chromium", "/usr/bin/chromium-browser"].filter(Boolean)
   if (!process.env.CHROMIUM) {
@@ -756,6 +760,10 @@ test("B1: a reply being written draws the stream's progress, its clock moving, a
   const p = await page(agentChatOpen([["status", { text: "Writing…" }]]))
   await openChatRow(p, "chat2")
   await p.waitForSelector(".msg.is-live .msg__status")
+  // The stream's own first frame goes out a moment after it is opened, and a frame sent before
+  // that waits behind it: read at once, the line was now and then still the reply's first
+  // "Writing…" (the test failed so on a loaded machine, and passed when run again).
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
   // An older server sends no progress at all: its status text, as before.
   await p.evaluate((path) => window.__mock.frame(path, "status", { text: "Running bake --slow" }), STREAM2)
   assert.equal(await p.textContent(".msg.is-live .msg__status"), "Running bake --slow")
@@ -4638,6 +4646,303 @@ test("V4: every screen at 1920, 1280, 1024, 800 and 390 px, dark and light: noth
     }
   }
   assert.equal(problems.length, 0, `\n${problems.join("\n")}`)
+})
+
+// --- W1: the thread while a reply is written -----------------------------------------------------
+//
+// Following the reply is a state the person's scrolling sets, not the distance to the end after a
+// frame was drawn: a frame adds more than any such distance. The thread's scroll anchoring is off
+// (app.css), so what holds here holds without it -- the app's own engine on Linux has none.
+
+const W1_PARAS = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i}: ${"lembas ".repeat(40)}`).join("\n\n")
+const W1_CALL = () => fixture("event_steps").steps.find((x) => x.kind === "tools").calls[0]
+const W1_THOUGHT = { index: 0, kind: "thinking", open: false, text: "Thought. ".repeat(200), label: "for 3 seconds" }
+
+/** A long chat with a reply being written: twelve long questions before it, `frames` as the stream opens. */
+function w1Chat(frames = [["status", { text: "Writing…" }]], over = {}) {
+  const history = Array.from({ length: 12 }, (_, i) => userMessage(`h${i}`, `Question ${i}\n\n${"word ".repeat(120)}`))
+  return agentChatOpen(frames, { "GET /chats/chat2": { chat: agentChat(), messages: [...history, userMessage("m1", "What is in build?")], more: false, live: "m2" }, ...over })
+}
+
+/** The thread after the page has drawn: where it stands, and how far from its end. */
+async function w1At(p) {
+  await p.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+  const at = await p.evaluate(() => {
+    const th = document.getElementById("thread")
+    return { top: th.scrollTop, gap: th.scrollHeight - th.scrollTop - th.clientHeight, height: th.scrollHeight }
+  })
+  if (process.env.W1_TRACE) console.log(`     at ${at.top} of ${at.height}, ${at.gap} px from the end`)
+  return at
+}
+
+// With $W1_TRACE set, every check of where the thread stands is printed and a failed one does
+// not stop the test: how the thread moved from start to end, then the failure.
+const w1Missed = []
+function w1Ok(ok, what) {
+  if (!process.env.W1_TRACE) return assert.ok(ok, what)
+  console.log(`     ${ok ? "ok  " : "NOT "} ${what}`)
+  if (!ok) w1Missed.push(what)
+}
+function w1End(p) {
+  assert.deepEqual(w1Missed.splice(0), [], "where the thread stood")
+  assert.deepEqual(p.errors, [])
+}
+
+const w1Send = (p, event, data) => p.evaluate(([path, e, d]) => window.__mock.frame(path, e, d), [STREAM2, event, data])
+
+/** The person's own wheel over the thread, and the page having heard of it. */
+async function w1Wheel(p, dy) {
+  const box = await p.locator("#thread").boundingBox()
+  await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  const from = await p.evaluate(() => document.getElementById("thread").scrollTop)
+  await p.mouse.wheel(0, dy)
+  await p.waitForFunction((was) => document.getElementById("thread").scrollTop !== was, from)
+  await w1At(p)
+}
+
+test("W1: at its end, the thread follows a long reply through reasoning, tool calls, a card and done", async () => {
+  const p = await page(w1Chat())
+  await openChatRow(p, "chat2")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  // Where the engine has scroll anchoring at all (Playwright's WebKit has not), it is off.
+  const anchoring = await p.evaluate(() => getComputedStyle(document.getElementById("thread")).overflowAnchor)
+  w1Ok(anchoring === undefined || anchoring === "none", `no engine's scroll anchoring is relied on (${anchoring})`)
+  const followed = async (what) => {
+    const at = await w1At(p)
+    w1Ok(at.gap <= 1, `${what}: the thread is at its end (${at.gap} px from it, at ${at.top})`)
+    return at
+  }
+  const first = await followed("opened")
+  w1Ok(first.top > 1000, "the chat is long enough to scroll")
+  const steps = []
+  await w1Send(p, "tail", { thinking: "Let me think. ".repeat(60), text: "", label: "1s" })
+  await followed("reasoning")
+  steps.push(W1_THOUGHT)
+  // Every frame adds more than the 80 px that used to count as "near the end".
+  for (let i = 1; i <= 5; i++) {
+    await w1Send(p, "tail", { thinking: "", text: W1_PARAS(i * 2), label: "" })
+    await followed(`text ${i}`)
+  }
+  steps.push({ index: 1, kind: "text", open: false, markdown: W1_PARAS(10) })
+  await w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: "", label: "", calls: [fixture("event_tail").calls[0]] } })
+  await followed("a call running")
+  steps.push({ index: 2, kind: "tools", open: false, calls: [W1_CALL(), { ...W1_CALL(), id: "c2" }, { ...W1_CALL(), id: "c3" }] })
+  await w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: W1_PARAS(3), label: "", calls: [] } })
+  const grown = await followed("calls finished")
+  w1Ok(grown.height > first.height + 1500, "the reply grew by far more than a screen")
+  // The dock grows by a card: the thread is shorter, and still at its end.
+  await w1Send(p, "ask", { cards: [deviceBashCard()] })
+  await p.waitForSelector("#cards:not([hidden]) .ask")
+  await followed("a card in the dock")
+  await w1Send(p, "ask", { cards: [] })
+  // A block the person opens at the end grows the thread without any frame.
+  await p.click(".msg.is-live .step--thinking summary")
+  await followed("a block opened")
+  steps.push({ index: 3, kind: "text", open: false, markdown: W1_PARAS(3) })
+  await w1Send(p, "done", { message: { ...fixture("event_done").message, id: "m2", steps }, chat: { id: "chat2", title: "Tidy the build" } })
+  await p.waitForSelector(".msg.is-live", { state: "detached" })
+  await followed("done")
+  await w1Send(p, "title", { chat: { id: "chat2", title: "The build, tidied" } })
+  await followed("named")
+  w1End(p)
+})
+
+test("W1: scrolled up, the thread stays exactly there through frames, tool calls, done and a new title; back at the end it follows again", async () => {
+  const p = await page(w1Chat())
+  await openChatRow(p, "chat2")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(6), label: "" })
+  w1Ok((await w1At(p)).gap <= 1, "followed to begin with")
+  await w1Wheel(p, -400)
+  const up = await w1At(p)
+  w1Ok(up.gap > 300, `the person scrolled up (${up.gap} px from the end)`)
+  const stays = async (what, where = up) => {
+    const at = await w1At(p)
+    w1Ok(Math.abs(at.top - where.top) <= 1, `${what}: the thread stayed (${where.top} -> ${at.top})`)
+    return at
+  }
+  const steps = [W1_THOUGHT]
+  for (let i = 7; i <= 9; i++) {
+    await w1Send(p, "tail", { thinking: "", text: W1_PARAS(i), label: "" })
+    await stays(`text ${i}`)
+  }
+  // The reasoning that was open text above folds into one closed row: the reply is drawn anew.
+  steps.push({ index: 1, kind: "text", open: false, markdown: W1_PARAS(9) })
+  await w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: "", label: "", calls: [fixture("event_tail").calls[0]] } })
+  await stays("a call running")
+  steps.push({ index: 2, kind: "tools", open: false, calls: [W1_CALL(), { ...W1_CALL(), id: "c2" }] })
+  await w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: "", label: "", calls: [] } })
+  await stays("calls finished")
+  await w1Send(p, "status", { text: "Running bake --slow" })
+  await w1Send(p, "ask", { cards: [deviceBashCard()] })
+  await p.waitForSelector("#cards:not([hidden]) .ask")
+  await stays("a card in the dock")
+  await w1Send(p, "ask", { cards: [] })
+  await stays("the card gone")
+  // A message typed meanwhile, over several lines: the box is measured at every key.
+  await p.fill("#composer-text", "one\ntwo\nthree\nfour")
+  await stays("typing")
+  await p.fill("#composer-text", "")
+  await stays("typing undone")
+  // A short way up is as good as a long one: a few pixels from the end is not the end.
+  await w1Wheel(p, 5000)
+  w1Ok((await w1At(p)).gap <= 1, "the person scrolled back to the end")
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(4), label: "" })
+  w1Ok((await w1At(p)).gap <= 1, "at the end again, the reply is followed again")
+  await w1Wheel(p, -30)
+  const near = await w1At(p)
+  w1Ok(near.gap > 2 && near.gap < 80, `a small step up (${near.gap} px from the end)`)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(8), label: "" })
+  await stays("a small step up is not dragged down", near)
+  await w1Wheel(p, -600)
+  const again = await w1At(p)
+  steps.push({ index: 3, kind: "text", open: false, markdown: W1_PARAS(8) })
+  await w1Send(p, "done", { message: { ...fixture("event_done").message, id: "m2", steps }, chat: { id: "chat2", title: "Tidy the build" } })
+  await p.waitForSelector(".msg.is-live", { state: "detached" })
+  await stays("done", again)
+  await w1Send(p, "title", { chat: { id: "chat2", title: "The build, tidied" } })
+  await p.waitForFunction(() => document.getElementById("chat-title").textContent === "The build, tidied")
+  await stays("named", again)
+  w1End(p)
+})
+
+test("W1: a chat opened while its reply is written lands at the end of what is written; read again, it stays where it was", async () => {
+  // The stream's first frame brings everything written so far: far more than a screen.
+  const sofar = ["steps", { steps: [W1_THOUGHT, { index: 1, kind: "text", open: false, markdown: W1_PARAS(12) }, { index: 2, kind: "tools", open: false, calls: [W1_CALL()] }], tail: { thinking: "", text: W1_PARAS(2), label: "", calls: [] } }]
+  const p = await page(w1Chat([sofar, ["status", { text: "Writing…" }]]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live .msg__steps .step--tools")
+  const opened = await w1At(p)
+  w1Ok(opened.gap <= 1, `opened at the end of the reply so far (${opened.gap} px from it)`)
+  w1Ok(opened.top > 2500, "with the reply's text drawn")
+  // Another page and back, the reply written on meanwhile: still at its end.
+  await p.click("#settings-btn")
+  await p.waitForSelector("#settings:not([hidden])")
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(6), label: "" })
+  await p.click("#settings-close")
+  await p.waitForSelector("#main:not([hidden])")
+  w1Ok((await w1At(p)).gap <= 1, "back from another page, at the end of what was written meanwhile")
+  // The stream ends without `done` (a proxy's limit on a long reply): the chat is read again,
+  // slowly. Nothing is cleared meanwhile, and the thread is where it was -- at the end here.
+  const endStream = async () => {
+    await p.evaluate(() => {
+      document.querySelector(".msg.is-live").dataset.old = "true"
+      window.__mockConfig.hold = ["GET /chats/chat2"]
+    })
+    await w1Send(p, "end", null)
+    await p.waitForFunction(() => window.__mock.api("GET", "/chats/chat2").length > 1)
+  }
+  const readAgain = async () => {
+    await p.evaluate(() => window.__mock.release("GET /chats/chat2"))
+    await p.waitForSelector(".msg.is-live:not([data-old]) .msg__steps .step--tools")
+  }
+  await endStream()
+  const held = await w1At(p)
+  assert.equal(await p.locator(".thread__loading").count(), 0, "the thread is not cleared while it is read again")
+  w1Ok(held.gap <= 1 && held.top > 2500, `still at the end while it is read (${held.top})`)
+  await readAgain()
+  const read = await w1At(p)
+  w1Ok(read.gap <= 1 && read.top > 2500, `at the end once it is read again (${read.top}, ${read.gap} px from the end)`)
+  // The same, scrolled up: exactly where the person was, while it is read and after.
+  await w1Wheel(p, -700)
+  const up = await w1At(p)
+  await endStream()
+  w1Ok(Math.abs((await w1At(p)).top - up.top) <= 1, "scrolled up: not moved while it is read again")
+  await readAgain()
+  const after = await w1At(p)
+  w1Ok(Math.abs(after.top - up.top) <= 1, `scrolled up: not moved once it is read again (${up.top} -> ${after.top})`)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(9), label: "" })
+  w1Ok(Math.abs((await w1At(p)).top - up.top) <= 1, "nor by the frames that follow")
+  w1End(p)
+})
+
+
+test("W1: the first reply of a new chat is followed from a thread shorter than the window, through what shrinks it, to its end", async () => {
+  const cfg = i8()
+  const P = "/chats/chat7/messages/m2/stream"
+  Object.assign(cfg.routes, {
+    "POST /chats": { chat: chatRow({ id: "chat7", title: "" }), message: userMessage("m1", "a lembas loaf"), reply: { id: "m2" } },
+    "GET /chats/chat7": { chat: chatRow({ id: "chat7", title: "" }), messages: [userMessage("m1", "a lembas loaf")], more: false, live: "m2" },
+  })
+  cfg.streams = { [P]: [["status", { text: "Writing…" }]] }
+  const p = await page(cfg)
+  await p.waitForFunction(() => window.__mock.api("GET", "/me").length === 1)
+  await p.click(".kind__tab >> text=Chat")
+  await p.fill("#composer-text", "a lembas loaf")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction((path) => window.__mock.started(path), P)
+  const send = (event, data) => p.evaluate(([path, e, d]) => window.__mock.frame(path, e, d), [P, event, data])
+  const followed = async (what) => {
+    const at = await w1At(p)
+    w1Ok(at.gap <= 1, `${what}: the thread is at its end (${at.gap} px from it, at ${at.top})`)
+    return at
+  }
+  const start = await followed("sent")
+  assert.equal(start.top, 0, "one short message: nothing to scroll yet")
+  // The first part outgrows the window in one frame.
+  await send("tail", { thinking: "", text: W1_PARAS(10), label: "", calls: [fixture("event_tail").calls[0]] })
+  w1Ok((await followed("the first part")).top > 500, "taller than the window now")
+  // What was drawn is drawn shorter (the part became one closed row): the thread is short
+  // again and stands at its top, which is also its end.
+  await send("steps", { steps: [{ index: 0, kind: "tools", open: false, calls: [W1_CALL()] }], tail: { thinking: "", text: "", label: "", calls: [] } })
+  assert.equal((await followed("drawn shorter")).top, 0, "short again")
+  // Then the text, a screen and more at a time: followed all the same.
+  for (let i = 1; i <= 3; i++) {
+    await send("tail", { thinking: "", text: W1_PARAS(i * 6), label: "" })
+    await followed(`text ${i}`)
+  }
+  const steps = [W1_THOUGHT, { index: 0, kind: "tools", open: false, calls: [W1_CALL()] }, { index: 1, kind: "text", open: false, markdown: W1_PARAS(18) }]
+  await send("steps", { steps, tail: { thinking: "", text: "", label: "", calls: [] } })
+  const written = await followed("the steps")
+  w1Ok(written.top > 1000, "a long reply")
+  await send("done", { message: { ...fixture("event_done").message, id: "m2", steps }, chat: { id: "chat7", title: "" } })
+  await p.waitForSelector(".msg.is-live", { state: "detached" })
+  await followed("done")
+  // The chat's name from a model, a moment after the reply.
+  await send("title", { chat: { id: "chat7", title: "A lembas loaf" } })
+  await p.waitForFunction(() => document.getElementById("chat-title").textContent === "A lembas loaf")
+  w1Ok((await followed("named")).top > 1000, "still at the reply's end, not at its beginning")
+  w1End(p)
+})
+
+test("W1: the moment a reply is finished the thread is still at its end: a finished reply far shorter than the written one, and a chat read again for the next", async () => {
+  const p = await page(w1Chat())
+  await openChatRow(p, "chat2")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  const followed = async (what) => {
+    const at = await w1At(p)
+    w1Ok(at.gap <= 1, `${what}: the thread is at its end (${at.gap} px from it, at ${at.top})`)
+    return at
+  }
+  const before = await followed("opened")
+  // Written: screens of text, and a call running.
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(30), label: "", calls: [fixture("event_tail").calls[0]] })
+  const written = await followed("written")
+  w1Ok(written.height > before.height + 2000, "the reply being written is long")
+  // Finished far shorter than it was written. The last prompt is not what the person is shown.
+  const steps = [W1_THOUGHT, { index: 0, kind: "tools", open: false, calls: [W1_CALL()] }, { index: 1, kind: "text", open: false, markdown: W1_PARAS(7) }]
+  const message = { ...fixture("event_done").message, id: "m2", steps }
+  // A message was queued behind the reply (`next`): the chat is read again, slowly.
+  await p.evaluate(([m, q]) => {
+    const was = window.__mockConfig.routes["GET /chats/chat2"]
+    window.__mock.answer("GET /chats/chat2", { ...was, messages: [...was.messages, m, q], live: "m4" })
+    window.__mockConfig.hold = ["GET /chats/chat2"]
+  }, [message, userMessage("m3", "and wrap it")])
+  await w1Send(p, "done", { message, chat: { id: "chat2", title: "Tidy the build" }, next: true })
+  await p.waitForSelector('.msg--assistant[data-id="m2"]:not(.is-live)')
+  const done = await followed("done")
+  w1Ok(done.height < written.height - 1000, "the finished reply is far shorter than the written one")
+  const prompt = await p.locator('.msg--user[data-id="m1"]').boundingBox()
+  const reply = await p.locator('.msg--assistant[data-id="m2"] .msg__foot').boundingBox()
+  const view = await p.locator("#thread").boundingBox()
+  w1Ok(reply.y + reply.height <= view.y + view.height + 1 && reply.y > view.y, "the reply's last line is in the window")
+  w1Ok(prompt.y < view.y, "the last prompt is above the window, not what the thread went back to")
+  assert.equal(await p.locator(".thread__loading").count(), 0, "not cleared while it is read again")
+  await p.evaluate(() => window.__mock.release("GET /chats/chat2"))
+  await p.waitForSelector('.msg.is-live[data-id="m4"]')
+  await followed("read again, the next reply begun")
+  assert.equal(await p.locator('.msg--user[data-id="m3"]').count(), 1, "the queued message is in the thread")
+  w1End(p)
 })
 
 // --- Run ----------------------------------------------------------------------------------------

@@ -4,6 +4,37 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A reply can be followed as it is written.** The thread kept to its end only while the last
+  frame had left it within 80 px of it -- measured after the frame was drawn, so one part of a
+  reply taller than that (a long paragraph, a code block, a finished tool call, everything
+  written so far when a chat is opened) left the thread behind at the reply's beginning, for
+  good. In a new chat, where the first reply is nearly all there is, that beginning is the top.
+  Whether the thread follows is now a state the person's own scrolling sets and nothing else:
+  at the end it follows, whatever a frame adds or takes away; scrolled up -- by however little
+  -- it stays exactly where it is through every frame, tool call, card, the reply's end and the
+  chat's new name; back at the end it follows again.
+- **The end of a reply leaves the thread where it was.** A reply that ends, a message queued
+  behind it, a stream cut off by a proxy's time limit, a message edited, a summary made: the
+  chat is read again, and the thread used to be emptied first -- one line of "Loading…", at its
+  top -- and drawn anew. What is on the screen now stays until the answer has come, and the
+  thread stands where it stood, at its end or wherever the person had it.
+- What is written while another page is open (Settings, Files) is followed too: back in the
+  chat, the thread is at its end if it was. A card or a longer message in the dock, a block
+  opened, a picture that arrives late no longer push the end out of sight.
+- The thread's place no longer depends on an engine's scroll anchoring, which not every engine
+  the app runs on has: it is switched off, and the page keeps the place itself.
+
+### Changed
+
+- tests/ui: five tests of the thread's place while a reply is written (W1), run under
+  Playwright's WebKit as well as Chromium in CI (`ENGINE=webkit`); `UI_DIR` and `W1_TRACE` to
+  see what they say of another copy of the page. The test of a reply's progress line (B1) no
+  longer reads the line before the stream's first frame has gone out, which failed now and then.
+
 ## [1.0.0-beta.10] — 2026-11-13
 
 LLeMbas CLI 2.0.0-beta.10 inside, the look and words of LLeMbas 2.0.0-beta.12.
