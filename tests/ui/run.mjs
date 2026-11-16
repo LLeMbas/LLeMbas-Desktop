@@ -4697,6 +4697,15 @@ async function w1Wheel(p, dy) {
   const from = await p.evaluate(() => document.getElementById("thread").scrollTop)
   await p.mouse.wheel(0, dy)
   await p.waitForFunction((was) => document.getElementById("thread").scrollTop !== was, from)
+  // An engine may take the wheel's way in steps over some frames: until it has come to rest.
+  await p.evaluate(async () => {
+    const th = document.getElementById("thread")
+    const frame = () => new Promise((r) => requestAnimationFrame(r))
+    for (let still = 0, at = th.scrollTop; still < 12; at = th.scrollTop) {
+      await frame()
+      still = th.scrollTop === at ? still + 1 : 0
+    }
+  })
   await w1At(p)
 }
 
@@ -4736,7 +4745,10 @@ test("W1: at its end, the thread follows a long reply through reasoning, tool ca
   await followed("a card in the dock")
   await w1Send(p, "ask", { cards: [] })
   // A block the person opens at the end grows the thread without any frame.
-  await p.click(".msg.is-live .step--thinking summary")
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(3), label: "", calls: [fixture("event_tail").calls[0]] })
+  await followed("a call running at the end")
+  await p.click(".msg.is-live .msg__running summary")
+  await p.waitForSelector(".msg.is-live .msg__running details[open]")
   await followed("a block opened")
   steps.push({ index: 3, kind: "text", open: false, markdown: W1_PARAS(3) })
   await w1Send(p, "done", { message: { ...fixture("event_done").message, id: "m2", steps }, chat: { id: "chat2", title: "Tidy the build" } })
@@ -4847,7 +4859,8 @@ test("W1: a chat opened while its reply is written lands at the end of what is w
   await w1Wheel(p, -700)
   const up = await w1At(p)
   await endStream()
-  w1Ok(Math.abs((await w1At(p)).top - up.top) <= 1, "scrolled up: not moved while it is read again")
+  const waiting = await w1At(p)
+  w1Ok(Math.abs(waiting.top - up.top) <= 1, `scrolled up: not moved while it is read again (${up.top} -> ${waiting.top})`)
   await readAgain()
   const after = await w1At(p)
   w1Ok(Math.abs(after.top - up.top) <= 1, `scrolled up: not moved once it is read again (${up.top} -> ${after.top})`)

@@ -103,6 +103,7 @@ jobs:
       # For this one run only: the same tests on the page as it was released (1.0.0-beta.10),
       # every check printed, to read how that page's thread moved in WebKit. Not a gate.
       - name: (once) The released page under WebKit, traced
+        if: always()
         continue-on-error: true
         env:
           NODE_PATH: ${{ runner.temp }}/pw/node_modules
