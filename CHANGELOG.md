@@ -6,6 +6,8 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.11] — 2026-11-18
+
 For LLeMbas server 2.0.0-beta.14 and a LLeMbas CLI with harness spec 3.9.0 on the linked
 computers; an older one of either leaves things as they were.
 

@@ -1,4 +1,4 @@
-/* LLeMbas v2.0.0-beta.12 (dc2b9d3b55d0) static/css/tokens.css, copied by scripts/fetch-tokens.sh: do not edit.
+/* LLeMbas v2.0.0-beta.14 (ce6b992c7d12) static/css/tokens.css, copied by scripts/fetch-tokens.sh: do not edit.
    The font-face rules are left out; the app bundles no font. */
 /*
   Design tokens.
@@ -125,6 +125,11 @@
   --h-list: 22rem;         /* a scrolling list or menu */
   --h-block: 24rem;        /* a scrolling block inside a card */
   --h-block-lg: 26rem;     /* a reasoning body, a preview */
+  /* A page drawn in a conversation: the height of its frame, and the least
+     and the most a page that says its own height is given. */
+  --h-page: min(28rem, 70vh);
+  --h-page-min: 8rem;
+  --h-page-max: min(44rem, 80vh);
   --h-media: 20rem;        /* a picture in the transcript */
 
   /* The live reply's two one-line rows -- the waiting row and the metrics --
