@@ -215,7 +215,7 @@ async function page(config, { width = 1280, height = 860, clock = false, wait = 
   // The page's own timers, moved on by the test (`p.clock.fastForward`) rather than waited for.
   if (clock) await p.clock.install()
   const errors = []
-  p.on("pageerror", (e) => errors.push(String(e)))
+  p.on("pageerror", (e) => (errors.push(String(e)), process.env.DEBUG_UI && console.log("pageerror", String(e.stack || e))))
   // The `python` tool's runner, on an origin of its own as in the app: the frame's three files
   // from src-tauri/python/ under the policy Rust serves them with, and Pyodide -- the stand-in
   // (tests/ui/pyodide-stub.mjs), or a real verified release from $PYODIDE_DIR.
@@ -5221,7 +5221,7 @@ test("DM: a new agent chat's model is its folder's usual one, read again when th
   await p.click("#send")
   await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 2)
   const second = (await p.evaluate(() => window.__mock.api("POST", "/chats")))[1].args.body
-  assert.equal(second.model, "vision-small")
+  assert.equal(second.model, "local/vision-small", "by its ref")
   assert.equal(second.directory, "/home/user")
   // Nothing of a folder's model is kept by the app.
   assert.deepEqual(await p.evaluate(() => Object.keys(localStorage).filter((k) => /model|director|folder/i.test(k))), [])
@@ -5278,7 +5278,7 @@ test("ST: the form asks the type first; Agentic has its computer, a folder brows
   await p.waitForSelector("#sched-device")
   assert.deepEqual(await p.$$eval("#sched-device option", (l) => l.map((o) => [o.textContent, o.selected])), [["workstation", true]])
   // The models are the scheduling ones, the empty choice the folder's usual model.
-  assert.deepEqual(await p.$$eval("#sched-model option", (l) => l.map((o) => [o.value, o.textContent, o.selected])), [["", "The folder's usual model", true], ["gpt-oss", "gpt-oss · busy", false], ["qwen", "Qwen", false]])
+  assert.deepEqual(await p.$$eval("#sched-model option", (l) => l.map((o) => [o.value, o.textContent, o.selected])), [["", "The folder's usual model", true], ["local/gpt-oss", "gpt-oss · busy", false], ["local/qwen", "Qwen", false]])
   assert.match(await p.textContent(".field:has(#sched-model) .hint"), /A run never changes the folder's model\./)
   // The folder: typed, or browsed on the computer.
   assert.equal(await p.inputValue("#sched-cwd"), "")
@@ -5396,6 +5396,380 @@ test("RR: a chat read again and not had keeps the thread that is drawn, and the 
   assert.equal(await p.locator(".thread__loading").count(), 0)
   // The chat is still the open one: a message can be sent to it.
   assert.match(await p.textContent("#chat-title"), /Tidy the build/)
+  assert.deepEqual(p.errors, [])
+})
+
+// --- Review round: the thread's place by a message, readings that overlap, and what a server may send ---
+
+test("W1: a slow scroll up, a pixel at a time while frames arrive, and a frame that comes while the wheel is still moving, are the person's: the thread is not taken back to its end", async () => {
+  const p = await page(w1Chat())
+  await openChatRow(p, "chat2")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(4), label: "" })
+  const start = await w1At(p)
+  w1Ok(start.gap <= 1, "followed to begin with")
+  // One pixel up, and a frame before the engine has said anything of it; five times.
+  for (let i = 1; i <= 5; i++) {
+    await p.evaluate(([path, text]) => {
+      document.getElementById("thread").scrollTop -= 1
+      window.__mock.frame(path, "tail", { thinking: "", text, label: "" })
+    }, [STREAM2, W1_PARAS(4 + i)])
+  }
+  const crept = await w1At(p)
+  w1Ok(Math.abs(crept.top - (start.top - 5)) <= 1, `five pixels up, and there it is (${start.top} -> ${crept.top})`)
+  w1Ok(crept.gap > 100, `the reply went on below (${crept.gap} px from the end)`)
+  // Back at the end it follows again.
+  await p.evaluate(() => document.getElementById("thread").scrollTo(0, 1e9))
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(10), label: "" })
+  const back = await w1At(p)
+  w1Ok(back.gap <= 1, `at the end again, followed (${back.gap})`)
+  // The wheel, and frames while it may still be on its way.
+  const box = await p.locator("#thread").boundingBox()
+  await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await p.mouse.wheel(0, -300)
+  for (let i = 11; i <= 13; i++) await w1Send(p, "tail", { thinking: "", text: W1_PARAS(i), label: "" })
+  await p.evaluate(async () => {
+    const th = document.getElementById("thread")
+    const frame = () => new Promise((r) => requestAnimationFrame(r))
+    for (let still = 0, at = th.scrollTop; still < 12; at = th.scrollTop) {
+      await frame()
+      still = th.scrollTop === at ? still + 1 : 0
+    }
+  })
+  const wheeled = await w1At(p)
+  // (Whether a frame was drawn before the wheel's first step or between two of them is the engine's: either way the thread is not at its end.)
+  w1Ok(wheeled.gap > 200, `the wheel's way up was kept (${back.top} -> ${wheeled.top}, ${wheeled.gap} px from the end)`)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(16), label: "" })
+  const after = await w1At(p)
+  w1Ok(Math.abs(after.top - wheeled.top) <= 1, `and stays through the next frame (${wheeled.top} -> ${after.top})`)
+  w1End(p)
+})
+
+test("W1: a chat read again with earlier messages loaded keeps them, and the message at the top of the window is where it was; where that message is gone, the thread is at its end", async () => {
+  const older = Array.from({ length: 12 }, (_, i) => userMessage(`e${i}`, `Earlier ${i}\n\n${"word ".repeat(120)}`))
+  const cfg = w1Chat()
+  cfg.routes["GET /chats/chat2"].more = true
+  cfg.routes["GET /chats/chat2/messages?before=h0"] = { messages: older, more: false }
+  const p = await page(cfg)
+  await openChatRow(p, "chat2")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(3), label: "" })
+  await p.click(".thread__earlier")
+  await p.waitForSelector('.msg[data-id="e0"]')
+  // The fifth earlier message a little above the window's top: it crosses the edge.
+  const offset = () => p.evaluate(() => document.querySelector('.msg[data-id="e5"]').getBoundingClientRect().top - document.getElementById("thread").getBoundingClientRect().top)
+  await p.evaluate(() => {
+    const th = document.getElementById("thread")
+    th.scrollTop += document.querySelector('.msg[data-id="e5"]').getBoundingClientRect().top - th.getBoundingClientRect().top + 30
+  })
+  await w1At(p)
+  const before = await offset()
+  w1Ok(Math.abs(before + 30) <= 1, `the message crosses the top edge (${before})`)
+  const count = await p.locator("#messages .msg").count()
+  // The stream closes without `done` (a proxy's time limit): the chat is read again.
+  const streams = await p.evaluate(() => window.__mock.streams().length)
+  await p.evaluate((path) => window.__mock.frame(path, "end", null), STREAM2)
+  await p.waitForFunction((n) => window.__mock.streams().length === n + 1, streams)
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  await w1At(p)
+  const ids = await p.$$eval("#messages .msg", (l) => l.map((x) => x.dataset.id))
+  assert.equal(ids.length, count, "every message is still drawn")
+  assert.equal(new Set(ids).size, ids.length, "none twice")
+  assert.deepEqual(ids.slice(0, 13), [...older.map((m) => m.id), "h0"], "the earlier page first, then the newest")
+  assert.equal(await p.locator(".thread__earlier").count(), 0, "no more to load, as before")
+  const after = await offset()
+  w1Ok(Math.abs(after - before) <= 1, `the message at the top is where it was (${before} -> ${after})`)
+  // The summary replaced the messages: nothing drawn is in the answer, and the thread is at its end.
+  await p.evaluate((m) => window.__mock.answer("GET /chats/chat2", { ...window.__mockConfig.routes["GET /chats/chat2"], messages: [m], more: false, live: null }), userMessage("s1", `The summary\n\n${"word ".repeat(2000)}`))
+  await p.evaluate((path) => window.__mock.frame(path, "end", null), STREAM2)
+  await p.waitForSelector('.msg[data-id="s1"]')
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((x) => x.dataset.id)), ["s1"])
+  const end = await w1At(p)
+  w1Ok(end.gap <= 1, `its anchor gone, the thread is at its end (${end.gap})`)
+  w1End(p)
+})
+
+test("RR: two readings of the open chat at once: both had, the reply is followed once; both failed, the chat is still whole and can be read again", async () => {
+  const p = await page(w1Chat())
+  await openChatRow(p, "chat2")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  const opened = () => p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "stream_open").length)
+  const twice = async () => {
+    const asked = await p.evaluate(() => window.__mock.api("GET", "/chats/chat2").filter((c) => c.args.path === "/chats/chat2").length)
+    await p.evaluate(() => {
+      window.__mockConfig.hold = ["GET /chats/chat2"]
+      window.__mock.emit("open-chat", "chat2")
+      window.__mock.emit("open-chat", "chat2")
+    })
+    await p.waitForFunction((n) => window.__mock.api("GET", "/chats/chat2").filter((c) => c.args.path === "/chats/chat2").length === n + 2, asked)
+    await p.evaluate(() => window.__mock.release("GET /chats/chat2"))
+  }
+  const at = await opened()
+  await twice()
+  await p.waitForFunction((n) => window.__mock.calls.filter((c) => c.cmd === "stream_open").length > n, at)
+  await p.waitForTimeout(200)
+  assert.equal(await opened(), at + 1, "the older answer is dropped: the reply is followed once more, not twice")
+  assert.equal(await p.locator(".msg.is-live").count(), 1)
+  const count = await p.locator("#messages .msg").count()
+  // Both fail.
+  const good = await p.evaluate(() => window.__mockConfig.routes["GET /chats/chat2"])
+  await p.evaluate(() => window.__mock.answer("GET /chats/chat2", { __error: { status: 502, detail: "The server did not answer." } }))
+  await twice()
+  await p.waitForSelector(".msg.is-live .msg__again")
+  assert.equal(await p.locator(".msg__again").count(), 1, "said once")
+  assert.equal(await p.locator("#messages .msg").count(), count)
+  // The chat is the agent chat it was: its own commands still answer.
+  await p.fill("#composer-text", "/mode")
+  await p.focus("#composer-text")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => /Modes: manual, edit, auto, plan/.test(document.getElementById("thread-note").textContent))
+  await p.evaluate((was) => window.__mock.answer("GET /chats/chat2", was), good)
+  await p.click(".msg__again")
+  await p.waitForFunction((n) => window.__mock.calls.filter((c) => c.cmd === "stream_open").length === n + 2, at)
+  await p.waitForSelector(".msg.is-live:not(:has(.msg__again))")
+  assert.equal(await p.locator(".msg.is-live").count(), 1)
+  assert.deepEqual(p.errors, [])
+})
+
+test("RR: a reply's stream lost and the chat not had: the card waiting for an answer stays, and the reply says so with Read again", async () => {
+  const p = await page(w1Chat([["status", { text: "Waiting for you to allow bash…" }], ["ask", { cards: [deviceBashCard()] }]]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#cards:not([hidden]) .ask")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  await p.evaluate(() => window.__mock.answer("GET /chats/chat2", { __error: { status: 502, detail: "The server did not answer." } }))
+  await p.evaluate((path) => window.__mock.frame(path, "end", null), STREAM2)
+  await p.waitForSelector(".msg.is-live .msg__again")
+  assert.match(await p.textContent(".msg.is-live .msg__status"), /The server did not answer\./)
+  assert.equal(await p.locator("#cards .ask").count(), 1, "the approval is still there to answer")
+  assert.equal(await p.inputValue("#cards .ask__edit"), "ls -la build")
+  assert.equal(await p.locator(".thread__loading").count(), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("DM: an effort picked in the draft goes with its model: kept and sent while the model offers it, given up when the folder's model does not", async () => {
+  const p = await page(dm())
+  const effort = "#chat-settings .cchip:not(.cchip--model):not(.cchip--subagents)"
+  const draftOn = async () => {
+    await p.click("#new-chat-btn")
+    await p.click(".kind__tab >> text=Agent")
+    await pickDevice(p, "studio")
+    await p.waitForSelector("#target-chips .cchip--folder.is-warn")
+    await folderBy(p, "project")
+    await modelSaid(p, "gpt-oss")
+    await p.click(effort)
+    await p.locator(".menu .menu__item", { hasText: "low" }).click()
+    await p.waitForFunction((sel) => /low/.test(document.querySelector(sel)?.textContent || ""), effort)
+  }
+  await draftOn()
+  await p.fill("#composer-text", "Check the logs")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  const first = (await p.evaluate(() => window.__mock.api("POST", "/chats")))[0].args.body
+  assert.ok(first.effort === "low" && !("model" in first), `the picked effort, the model left to the server: ${JSON.stringify(first)}`)
+  await p.waitForSelector('.msg--user[data-id="m9"]')
+  // Another folder, another model (thinking on or off, no "low"): the effort is that model's own again.
+  await draftOn()
+  await folderBy(p, "Up a level")
+  await modelSaid(p, "Qwen")
+  await p.waitForFunction((sel) => !/low/.test(document.querySelector(sel)?.textContent || ""), effort)
+  await p.fill("#composer-text", "Check the logs")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 2)
+  const second = (await p.evaluate(() => window.__mock.api("POST", "/chats")))[1].args.body
+  assert.ok(!("effort" in second) && !("model" in second), `no effort without the model it was picked for: ${JSON.stringify(second)}`)
+  assert.deepEqual(p.errors, [])
+})
+
+test("DM: a folder's model the account's own list does not carry is shown as what the server says the chat starts on", async () => {
+  const answer = AGENT_MODELS()
+  const p = await page(dm({ "GET /models": models(), [startAt("token9", PROJECT)]: answer }))
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await pickDevice(p, "studio")
+  await p.waitForSelector("#target-chips .cchip--folder.is-warn")
+  await folderBy(p, "project")
+  await modelSaid(p, "gpt-oss")
+  assert.match(await p.getAttribute("#chat-settings .cchip--model", "title"), /the folder's usual model/)
+  await p.fill("#composer-text", "Check the logs")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  assert.ok(!("model" in (await p.evaluate(() => window.__mock.api("POST", "/chats")))[0].args.body))
+  assert.deepEqual(p.errors, [])
+})
+
+test("DP: no answer worth the name is said, never a list that loads for ever; a huge directory is drawn a part at a time; Cancel gives the focus back to the chip", async () => {
+  const many = Array.from({ length: 450 }, (_, i) => ({ path: `${PROJECT}/pkg-${String(i).padStart(3, "0")}`, name: `pkg-${String(i).padStart(3, "0")}`, accepted: true, reason: "", model: null }))
+  const p = await page(dp({ [`GET ${DIRS}${encodeURIComponent(PROJECT)}`]: dirAt(PROJECT, { parent: "/home/user", entries: many }), [`GET ${DIRS}${encodeURIComponent("/home/user")}`]: null }))
+  await openPicker(p)
+  assert.equal(await p.getAttribute("dialog[open]", "aria-labelledby"), "dirs-title")
+  assert.match(await p.textContent("#dirs-title"), /studio/)
+  await p.locator("dialog[open] .dirs__row", { hasText: "project" }).click()
+  await dirWhere(p, PROJECT)
+  assert.equal(await p.locator("dialog[open] .dirs__row:not(.dirs__row--up)").count(), 200)
+  assert.equal(await p.textContent("dialog[open] .dirs__more"), "Show 200 more")
+  await p.click("dialog[open] .dirs__more")
+  await p.waitForFunction(() => document.querySelectorAll("dialog[open] .dirs__row:not(.dirs__row--up)").length === 400)
+  assert.equal(await focused(p), "pkg-200", "on with the keys from where the list ended")
+  await p.click("dialog[open] .dirs__more")
+  await p.waitForFunction(() => document.querySelectorAll("dialog[open] .dirs__row:not(.dirs__row--up)").length === 450)
+  assert.equal(await p.locator("dialog[open] .dirs__more").count(), 0)
+  // Up, to a directory the server answers nothing for: said, the listing that was there kept.
+  await p.locator("dialog[open] .dirs__row--up").click()
+  await p.waitForSelector("dialog[open] .dirs__said:not([hidden])")
+  assert.equal(await p.textContent("dialog[open] .dirs__said"), "The device did not answer.")
+  assert.ok(await p.isHidden("dialog[open] .dirs__list[aria-busy]").catch(() => true))
+  assert.equal(await p.locator("dialog[open] .dirs__list[aria-busy]").count(), 0, "not loading for ever")
+  await p.click("dialog[open] .dialog__actions .btn:not(.btn--primary)")
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+  assert.ok(await p.evaluate(() => document.activeElement?.classList.contains("cchip--folder")), "Cancel: the focus is on the folder's chip")
+  // Nothing at all for the places either: the path is what is left.
+  await p.evaluate((key) => window.__mock.answer(key, null), `GET ${DIRS}`)
+  await p.click("#target-chips .cchip--folder")
+  await p.waitForSelector("dialog[open] .dirs__said:not([hidden])")
+  assert.equal(await p.textContent("dialog[open] .dirs__said"), "The device did not answer.")
+  assert.equal(await p.locator("dialog[open] .dirs__list[aria-busy]").count(), 0)
+  await p.fill("dialog[open] .dirs__typed", "/home/user/other")
+  await p.click("#dirs-use")
+  await p.waitForFunction(() => /other/.test(document.querySelector("#target-chips .cchip--folder")?.textContent || ""))
+  assert.deepEqual(p.errors, [])
+})
+
+test("ST: an Agentic task set to Chat and back keeps its computer, folder, mode and approval wait; saved as Chat, its watched command is given up and that is said", async () => {
+  const on = fixture("schedule_on_device")
+  for (const type of ["agentic", "chat"]) {
+    const p = await page(st([bagEnd()], { "PATCH /schedules/sched3": on }))
+    await openTask(p)
+    await p.click("#sched-edit")
+    await p.waitForSelector("#sched-cwd")
+    assert.ok(await p.isChecked("#sched-type-agentic"))
+    assert.ok(await p.isHidden("#sched-watch-lost"))
+    await p.selectOption("#sched-runmode", "auto")
+    await p.fill("#sched-wait", "45")
+    await p.check("#sched-type-chat")
+    await p.waitForSelector("#sched-cwd", { state: "detached" })
+    assert.match(await p.textContent("#sched-watch-lost"), /saved as Chat, it runs every time/)
+    assert.ok(await p.isVisible("#sched-watch-lost"))
+    if (type === "agentic") {
+      await p.check("#sched-type-agentic")
+      await p.waitForSelector("#sched-cwd")
+      assert.deepEqual([await p.inputValue("#sched-device"), await p.inputValue("#sched-cwd"), await p.inputValue("#sched-runmode"), await p.inputValue("#sched-wait")], ["tok1", "/home/frodo/waybread", "auto", "45"])
+      assert.ok(await p.isHidden("#sched-watch-lost"))
+    }
+    await p.click("#sched-save")
+    await p.waitForFunction(() => window.__mock.api("PATCH", "/schedules/sched3").length === 1)
+    const body = (await p.evaluate(() => window.__mock.api("PATCH", "/schedules/sched3")))[0].args.body
+    if (type === "agentic") {
+      assert.deepEqual(body.runs_on, { device: "tok1", cwd: "/home/frodo/waybread", mode: "auto", approval_wait_minutes: 45 })
+      assert.ok(!("watch" in body), "the watch is left alone")
+    } else {
+      assert.equal(body.runs_on, null)
+      assert.equal(body.watch, "", "no computer, no command to watch")
+    }
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+test("ST: words a server or a computer sends that are no words of the app's -- constructor, valueOf, __proto__ -- are drawn as they came, and the list stands", async () => {
+  const agentic = fixture("schedule_run_agentic").run
+  const cfg = st([WORKSTATION])
+  const on = fixture("schedule_on_device")
+  const hostile = ["constructor", "__proto__", "valueOf", "toString"]
+  Object.assign(cfg.routes, {
+    "GET /schedules/sched3": { schedule: { ...on.schedule, mode: "constructor", runs_on: { ...on.schedule.runs_on, mode: "valueOf" } } },
+    "GET /schedules/sched3/runs": {
+      runs: hostile.map((word, i) => ({ ...agentic, id: `run${i}`, status: i === 3 ? "constructor" : "ok", timing: word, model: { ...agentic.model, reason: word }, ran_on: { ...agentic.ran_on, mode: word } })),
+      more: false,
+    },
+  })
+  const p = await page(cfg)
+  await openTask(p)
+  await p.waitForSelector(".run[data-id='run3']")
+  assert.equal(await p.locator(".run").count(), 4, "every run is drawn")
+  assert.equal(await p.locator(".run__how, .run__late").count(), 0, "none of them is a way a model was chosen, or a timing")
+  assert.deepEqual(await p.$$eval(".run__name", (l) => l.map((x) => x.textContent)), ["Qwen", "Qwen", "Qwen", "Qwen"])
+  assert.equal(await p.textContent(".run[data-id='run3'] .schip"), "constructor", "a status the app has no word for, as it came")
+  assert.match(await p.getAttribute(".run[data-id='run1'] .run__where", "title"), /__proto__/)
+  assert.match(await p.textContent("#sched-folder-said"), /valueOf · approvals wait/)
+  assert.match(await p.textContent(".fact:has(.fact__label:text-is('Runs'))"), /A new chat for each run/)
+  assert.deepEqual(p.errors, [])
+})
+
+// --- REF: a model is its ref -- two connections may serve one id ------------------------------------
+
+/** The server's models with a twin: Qwen on a second connection, the same id, another ref. */
+function twins(over = {}) {
+  const base = AGENT_MODELS(null)
+  const qwen = base.models.find((m) => m.id === "qwen")
+  return { ...base, models: [qwen, { ...qwen, ref: "plan/qwen", provider: "plan", connection: "Plan", default: false }, ...base.models.filter((m) => m.id !== "qwen")], ...over }
+}
+
+test("REF: two models with one id are told apart by their connection and chosen by their ref: the draft's picker, the folder's usual model, and what is sent", async () => {
+  const p = await page(dm({ "GET /models": twins(), [startAt("token9", PROJECT)]: twins({ start: { model: "qwen", ref: "plan/qwen", from: "directory" } }) }))
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  // The default is the first Qwen; with a twin beside it, each says its connection.
+  await modelSaid(p, "Qwen · Local")
+  await p.click("#chat-settings .cchip--model")
+  assert.deepEqual(await p.$$eval(".menu .menu__item", (l) => l.map((x) => [x.querySelector(".menu__label").textContent, x.getAttribute("aria-checked")])), [["Qwen · Local", "true"], ["Qwen · Plan", "false"], ["gpt-oss", "false"], ["Vision", "false"]])
+  await p.keyboard.press("Escape")
+  // The folder's model is the one on its own connection.
+  await pickDevice(p, "studio")
+  await p.waitForSelector("#target-chips .cchip--folder.is-warn")
+  await folderBy(p, "project")
+  await modelSaid(p, "Qwen · Plan")
+  assert.match(await p.getAttribute("#chat-settings .cchip--model", "title"), /the folder's usual model/)
+  await p.click("#chat-settings .cchip--model")
+  assert.deepEqual(await p.$$eval(".menu .menu__item", (l) => l.map((x) => x.getAttribute("aria-checked"))), ["false", "true", "false", "false"])
+  // Picked: the other twin, sent as its ref.
+  await p.locator(".menu .menu__item", { hasText: "Qwen · Local" }).click()
+  await modelSaid(p, "Qwen · Local")
+  await p.fill("#composer-text", "Check the logs")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  assert.equal((await p.evaluate(() => window.__mock.api("POST", "/chats")))[0].args.body.model, "local/qwen")
+  assert.deepEqual(p.errors, [])
+})
+
+test("REF: an open chat's model is changed by ref; a schedule's model is offered and saved by ref, twins named by their connection; a run the computer refused says the computer's sentence", async () => {
+  const sm = fixture("schedule_models")
+  const qwen = sm.models.find((m) => m.id === "qwen")
+  const agentic = fixture("schedule_run_agentic").run
+  const said = "This schedule's session is open in a terminal on workstation."
+  const cfg = st([WORKSTATION], {
+    "GET /schedules/models": { ...sm, models: [...sm.models, { ...qwen, ref: "plan/qwen", provider: "plan", connection: "Plan" }] },
+    "GET /schedules/sched3/runs": { runs: [{ ...agentic, id: "run7", status: "failed", error: { class: "device", text: said, reason: "terminal" } }], more: false },
+    "GET /models": twins(),
+    "GET /models?chat=chat1": twins(),
+    "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?")], more: false, live: null },
+    "PATCH /chats/chat1": { chat: chatRow() },
+    "POST /schedules": { schedule: { ...fixture("schedule_on_device").schedule, id: "sched9" } },
+  })
+  const p = await page(cfg)
+  await openChatRow(p, "chat1")
+  await modelSaid(p, "Qwen · Local")
+  await p.click("#chat-settings .cchip--model")
+  await p.locator(".menu .menu__item", { hasText: "Qwen · Plan" }).click()
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat1").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat1")))[0].args.body, { model: "plan/qwen" })
+  // The run the computer refused: its own sentence, and why as the server names it.
+  await openTask(p)
+  await p.waitForSelector(".run[data-id='run7'] .run__error")
+  assert.equal(await p.textContent(".run[data-id='run7'] .run__error"), said)
+  assert.equal(await p.getAttribute(".run[data-id='run7'] .run__error", "data-reason"), "terminal")
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "New scheduled")
+  await p.keyboard.press("Enter")
+  await p.waitForSelector("#sched-type")
+  await p.check("#sched-type-agentic")
+  await p.fill("#sched-words", "every day at 7:30 check the build")
+  await p.click(".sched--new button[type=submit]")
+  await p.waitForSelector("#sched-model")
+  assert.deepEqual(await p.$$eval("#sched-model option", (l) => l.map((o) => [o.value, o.textContent])), [["", "The folder's usual model"], ["local/gpt-oss", "gpt-oss · busy"], ["local/qwen", "Qwen · Local"], ["plan/qwen", "Qwen · Plan"]])
+  await p.selectOption("#sched-model", "plan/qwen")
+  await p.fill("#sched-cwd", PROJECT)
+  await p.click("#sched-save")
+  assert.equal((await saved(p)).model, "plan/qwen")
   assert.deepEqual(p.errors, [])
 })
 

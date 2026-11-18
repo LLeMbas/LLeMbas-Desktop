@@ -13,7 +13,7 @@ import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
 import { menu, ask, showLine, popover, closePopover } from "./popup.js"
-import { avatar, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
+import { avatar, modelKey, findModel, modelLabel, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton, treeChanged, showPanel, panelOpen, stateWord } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
@@ -214,7 +214,7 @@ async function readAgentFacts(device) {
       return agentFacts.get(device)
     }
     noteSubagentsCap(r.subagents_cap)
-    const facts = { at: Date.now(), models: new Map((r.models || []).map((m) => [m.id, m.subagents])), offered: !!r.agent_subagents.offered, runs: r.agent_subagents.device_runs }
+    const facts = { at: Date.now(), models: new Map((r.models || []).map((m) => [modelKey(m), m.subagents])), offered: !!r.agent_subagents.offered, runs: r.agent_subagents.device_runs }
     agentFacts.set(device, facts)
     return facts
   } catch {
@@ -225,7 +225,7 @@ async function readAgentFacts(device) {
 /** Whether a new agent chat on `model` is offered subagents: `{ cap, own }`, or null. */
 function agentOffer(facts, model) {
   if (!facts || facts.none || !facts.offered || facts.runs === false) return null
-  const said = facts.models.get(model?.id)
+  const said = facts.models.get(modelKey(model))
   if (said !== undefined && said !== null && !(typeof said === "object" ? said.offered : said)) return null
   return { cap: subagentsCap(), own: namedOnly(said) }
 }
@@ -260,19 +260,23 @@ function remember(th) {
 }
 
 /**
- * The thread moved, or is about to be changed: was that the person? Only a move with the sizes
- * as they were is theirs -- one that comes with a change of size is the layout's (the end came
- * nearer, the box grew), and says nothing of what they want.
+ * The thread moved, or is about to be changed: was that the person? A move up is theirs
+ * whenever no layout can have made it -- the thread could still stand where it stood (its
+ * furthest place is no nearer than that) and stands higher: however little, also at the very
+ * end, also when a size changed in the same moment (a reply grows as they scroll). A move down
+ * is theirs only with the sizes as they were; one that comes with a change of size is the
+ * layout's (the end came nearer, the box grew), and says nothing of what they want.
  */
 function noticed() {
   const th = $("thread")
   if (!th.clientHeight) return // not on the screen: nothing to read
   const gap = th.scrollHeight - th.scrollTop - th.clientHeight
   const moved = th.scrollTop - seen.top
-  if (gap <= 2) following = true
-  else if (th.scrollHeight === seen.height && th.clientHeight === seen.client) {
-    if (moved < -1) following = false
-    else if (moved > 1 && gap < NEAR) following = true
+  const same = th.scrollHeight === seen.height && th.clientHeight === seen.client
+  if (moved < -0.5 && th.scrollHeight - th.clientHeight >= seen.top) following = false
+  else if (gap <= 2) following = true
+  else if (same) {
+    if (moved > 1 && gap < NEAR) following = true
   } else if (following) th.scrollTop = th.scrollHeight
   remember(th)
 }
@@ -304,11 +308,9 @@ function initFollowing() {
   // What changes a size without a frame of a reply: a picture that arrived, a block opened, the
   // dock grown by a card or a longer message, the window; and the thread back on the screen
   // after another page, with what was written meanwhile.
-  const sized = new ResizeObserver(() => {
-    if (!th.clientHeight) return
-    if (following) th.scrollTop = th.scrollHeight
-    remember(th)
-  })
+  // Read as every other change is (`noticed`): the person's move up in the same moment ends
+  // following here too, and the end is kept only while it is followed.
+  const sized = new ResizeObserver(noticed)
   for (const el of [th, $("messages"), $("new-chat")]) sized.observe(el)
 }
 
@@ -461,7 +463,7 @@ function assistantMessage(m, chat, last = null) {
     if (whole.includes("\n")) el.append(h("details", { class: "msg__error" }, h("summary", { text: t("Details") }), h("pre", { class: "call__pre", text: whole })))
   }
   const meta = metricsLine(m.metrics)
-  const model = m.model ? ctx.models().find((x) => x.id === m.model) || { id: m.model, name: m.model } : null
+  const model = m.model ? findModel(ctx.models(), m.model) || { id: m.model, name: m.model } : null
   el.append(
     h(
       "footer",
@@ -670,7 +672,7 @@ class Live {
     this.clock = 0
     // The same reply, followed again (its stream ended and the chat was read anew): what was
     // drawn of it stays until the new stream's frames draw over it, so the thread keeps its height.
-    if (from && from.id === messageId) {
+    if (from && from.id === messageId && from.chat?.id === chat.id) {
       for (const part of ["steps", "tail", "calls", "jobs"]) {
         this[part].append(...from[part].childNodes)
         this[part].hidden = from[part].hidden
@@ -687,7 +689,14 @@ class Live {
     this.status.textContent = isProgress(p) ? progressLine(p) : this.said || t("Writing…")
     this.status.dataset.phase = isProgress(p) ? p.phase : ""
     const ticks = progressTicks(p)
-    if (ticks && !this.clock) this.clock = setInterval(() => (this.done ? this.stopClock() : this.drawStatus()), 1000)
+    // The line may wrap as its seconds grow: drawn like any other change, the thread kept in place.
+    if (ticks && !this.clock)
+      this.clock = setInterval(() => {
+        if (this.done) return this.stopClock()
+        const top = mark()
+        this.drawStatus()
+        settle(top)
+      }, 1000)
     else if (!ticks) this.stopClock()
   }
 
@@ -1377,17 +1386,20 @@ function modeChip(value, onChange, disabled) {
 }
 
 function modelChip(models, value, onChange, mayPick, why = "") {
-  const m = models.find((x) => x.id === value) || (value ? { id: value, name: value } : null)
+  // `value` is a ref (a draft's choice) or an id (an open chat's model, as the server says it).
+  const m = findModel(models, value) || (value ? { id: value, name: value } : null)
+  const label = m ? modelLabel(models, m) : ""
   if (!m) return chip({ ico: ICONS.info, label: t("No model is available to this account."), menuish: false, disabled: true })
   return chip({
     lead: avatar(m),
-    label: m.name,
-    title: `${t("Model")}: ${m.name} (${m.id})${why ? ` · ${why}` : ""}`,
+    label,
+    title: `${t("Model")}: ${label} (${m.id})${why ? ` · ${why}` : ""}`,
     menuish: mayPick && models.length > 1,
     cls: "cchip--model",
     onclick: (e) => {
       if (!mayPick || models.length < 2) return
-      menu(e.currentTarget, models.map((x) => ({ label: x.name, lead: avatar(x), checked: x.id === value, run: () => x.id !== value && onChange(x.id) })))
+      // Two models with one id are told apart by their connection, and chosen by their ref.
+      menu(e.currentTarget, models.map((x) => ({ label: modelLabel(models, x), lead: avatar(x), checked: x === m, run: () => x !== m && onChange(modelKey(x)) })))
     },
   })
 }
@@ -1544,19 +1556,22 @@ function renderTarget(chips, words) {
 function elsewhereFolderChip(device, value, onChange) {
   const name = deviceOf(device)?.name || t("Another device")
   // The chips are drawn again by a choice: the focus goes back to the folder's chip as it now is.
+  // (Also after a dialog closed without one: the chip it was opened from may have been drawn anew.)
+  const toChip = () => [...document.querySelectorAll("#chat-target .cchip--folder, #target-sum")].find((c) => c.offsetParent !== null)?.focus()
   const chosen = (dir) => {
     onChange(dir)
-    const chips = [...document.querySelectorAll("#chat-target .cchip--folder, #target-sum")]
-    chips.find((c) => c.offsetParent !== null)?.focus()
+    toChip()
   }
   const type = async () => {
     const dir = await ask({ title: t("Folder on %(device)s", { device: name }), text: t("The folder's full path on that computer. Its agent opens only folders it has been given."), value: value || "", ok: t("Choose"), cancel: t("Cancel") })
     if (dir) chosen(dir)
+    else toChip()
   }
   const known = knownFolders(device)
   const browse = async () => {
     const dir = await pickDirectory({ device, name, value: value || "", recent: known })
     if (dir) chosen(dir)
+    else toChip()
   }
   if (!value && !known.length) return chip({ ico: ICONS.folder, label: t("Choose a folder…"), name: t("Folder"), menuish: false, cls: "cchip--folder is-warn", onclick: browse })
   return chip({
@@ -1591,11 +1606,18 @@ function defaultModel() {
 }
 
 function draftModel(m, from) {
-  const id = m?.id || ""
+  const id = modelKey(m)
   const moved = draft.model !== id
   draft.model = id
   draft.from = from
-  if (moved && !draft.effortPicked) draft.effort = levelsOf(m).start
+  // Kept as the server described it: a folder's model the account's own list does not carry
+  // is still shown as what it is, since that is what the chat will start on.
+  draft.startModel = m && !findModel(ctx.models(), id) ? m : null
+  // The effort goes with the model: one picked stays only while the model it is now offers it.
+  if (moved && !(draft.effortPicked && levelsOf(m).levels.includes(draft.effort))) {
+    draft.effort = levelsOf(m).start
+    draft.effortPicked = false
+  }
   return moved
 }
 
@@ -1612,13 +1634,17 @@ function followFolder() {
     return
   }
   get(`/models?kind=agent&device=${encodeURIComponent(device)}&directory=${encodeURIComponent(draft.dir)}`)
-    .then((r) => r?.start || null)
     .catch(() => null)
-    .then((start) => {
+    .then((r) => {
       // An answer for a draft, a folder or a computer since left is dropped; so is one that
       // comes after the person has picked.
       if (draft !== mine || draft.asked !== key || draft.picked) return
-      const m = start?.model ? ctx.models().find((x) => x.id === start.model) : null
+      const start = r?.start || null
+      // The model the server says the chat starts on: looked up in the account's models, then
+      // in the answer's own -- what is shown is what `POST /chats` without a model will do.
+      // By its ref -- the folder's model on its own connection -- else by its id.
+      const named = start?.ref || start?.model || ""
+      const m = findModel(ctx.models(), named) || findModel(Array.isArray(r?.models) ? r.models : [], named)
       if (draftModel(m || defaultModel(), m ? start.from || "" : "")) renderChips()
       else if (m) renderChips()
     })
@@ -1634,8 +1660,9 @@ async function renderChips() {
   const mayPick = ctx.me()?.permissions?.["chat.model_select"] !== false
   if (draft) {
     const s = ctx.status()
-    const models = ctx.models()
-    const model = models.find((m) => m.id === draft.model)
+    const own = ctx.models()
+    const models = draft.startModel && modelKey(draft.startModel) === draft.model && !findModel(own, draft.model) ? [...own, draft.startModel] : own
+    const model = findModel(models, draft.model)
     const parts = []
     if (draft.kind === "agent") {
       // Computer, folder and mode: where and how the agent works, in the bar above the composer.
@@ -1663,7 +1690,9 @@ async function renderChips() {
       draft.model = id
       draft.picked = true
       draft.from = ""
-      draft.effort = levelsOf(models.find((m) => m.id === id)).start
+      draft.startModel = null
+      draft.effort = levelsOf(findModel(models, id)).start
+      draft.effortPicked = false
       renderChips()
     }, mayPick, draft.from === "directory" ? t("the folder's usual model") : ""))
     if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), (draft.effortPicked = true), renderChips())))
@@ -1715,7 +1744,7 @@ async function renderChips() {
   const models = await chatModels(chat)
   if (drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
   open.models = models // the models this chat may use, as /effort reads its levels
-  const current = models.find((m) => m.id === chat.model) || { id: chat.model, name: chat.model, efforts: [] }
+  const current = findModel(models, chat.model) || { id: chat.model, name: chat.model, efforts: [] }
   const parts = []
   if (chat.kind === "agent") parts.push(modeChip(chat.mode || "edit", (m) => save({ mode: m })))
   if (chat.model) parts.push(modelChip(models, chat.model, (id) => save({ model: id }), mayPick))
@@ -1950,43 +1979,76 @@ function alertIn(text, info = false) {
 }
 const note = (text) => alertIn(text, true)
 
+/** Which reading of a chat is the latest: an older one's answer, or its failure, is dropped. */
+let reads = 0
+
+/**
+ * The message at the top of what the thread shows -- the first one reaching below the thread's
+ * top edge -- and how far its top is from that edge: what a thread drawn anew is put back by.
+ */
+function anchorOf() {
+  const th = $("thread")
+  const edge = th.getBoundingClientRect().top
+  for (const el of $("messages").querySelectorAll(".msg[data-id]")) {
+    const box = el.getBoundingClientRect()
+    if (box.bottom > edge) return { id: el.dataset.id, offset: box.top - edge }
+  }
+  return null
+}
+
+/** The thread drawn anew, put back: at its end when followed, else with `anchor` where it was; the end if that message is gone. */
+function settleOn(anchor) {
+  const th = $("thread")
+  if (!th.clientHeight) return
+  const el = !following && anchor ? $("messages").querySelector(`.msg[data-id="${CSS.escape(anchor.id)}"]`) : null
+  if (!el) return toBottom()
+  th.scrollTop += el.getBoundingClientRect().top - th.getBoundingClientRect().top - anchor.offset
+  remember(th)
+}
+
 /** Open a chat by id: its newest page, and the reply being written, if one is. */
 export async function openChat(id) {
+  const mine = ++reads
   // The chat that is open, read again (a reply's stream ended, a message was edited, the summary
-  // was made): what is on the screen stays there until the answer has come, and the thread stays
-  // where the person has it. Cleared first, it shrank to one line and stood at its top.
-  const again = open?.chat?.id === id && !!$("messages").querySelector(".msg")
-  const was = again ? lastLive : null
+  // was made): what is on the screen stays there until the answer has come -- the thread, the
+  // cards waiting for an answer, the chat itself as `open` has it -- and the thread stays where
+  // the person has it. Cleared first, it shrank to one line and stood at its top. Only a chat
+  // read whole counts: while its first reading is on its way, a second is a first one too.
+  const again = open?.chat?.id === id && !!open.chat.kind && !!$("messages").querySelector(".msg")
+  if (!again && open?.chat?.id !== id) lastLive = null
+  const was = again && lastLive?.chat?.id === id ? lastLive : null
   if (open?.chat?.id !== id) discard()
-  const before = again ? open : null
   if (open?.live) open.live.stop()
   if (open?.chat?.id !== id) pythonFor(null)
-  open = { chat: { id }, live: null, more: false }
+  open = again ? { ...open, live: null } : { chat: { id }, live: null, more: false }
   draft = null
   closePopover()
   closeComposerMenu()
   invoke("set_open_chat", { chat: id })
-  // What is drawn next is asked of the server afresh: no page of an answer from what was held.
-  invoke("pages_clear")
   showComposer(true)
   $("new-chat").hidden = true
   $("main").dataset.new = "false"
-  clear($("composer-chips"))
-  renderNotice()
   const list = $("messages")
-  renderCards({ id }, [])
-  alertIn("")
-  if (!again) clear(list).append(h("p", { class: "muted thread__loading", text: t("Loading…") }))
+  if (!again) {
+    // What is drawn next is asked of the server afresh: no page of an answer from what was held.
+    invoke("pages_clear")
+    clear($("composer-chips"))
+    renderNotice()
+    renderCards({ id }, [])
+    alertIn("")
+    clear(list).append(h("p", { class: "muted thread__loading", text: t("Loading…") }))
+  }
   let r
   try {
     r = await get(`/chats/${encodeURIComponent(id)}`)
   } catch (err) {
-    if (open?.chat?.id !== id) return
-    // The chat read again and not had: what is drawn stays, the chat is what it was, and the
-    // error is said beside it -- on the reply that was being written, where there is one.
-    if (before) {
-      open = { ...before, live: null }
+    if (mine !== reads || open?.chat?.id !== id) return
+    // The chat read again and not had: what is drawn stays -- a card waiting for an answer
+    // too -- the chat is what it was, and the error is said beside it: on the reply that was
+    // being written, where there is one.
+    if (again) {
       setRunning(false)
+      renderNotice()
       if (was?.el.isConnected) was.lost(err)
       else alertIn(why(err))
       return
@@ -1995,31 +2057,44 @@ export async function openChat(id) {
     alertIn(why(err))
     return
   }
-  if (open?.chat?.id !== id) return
+  if (mine !== reads || open?.chat?.id !== id) return
   open.chat = r.chat
-  open.more = r.more
   // This window is the chat's page for the `python` tool (a chat on the server, Python on there).
   pythonFor(r.chat)
   watchActivity(r.chat)
   renderHead(r.chat)
   renderChips()
   renderNotice()
-  const top = mark()
-  clear(list)
-  if (r.more) list.append(earlier())
+  mark()
+  const anchor = again ? anchorOf() : null
   const seed = seedOf(r.chat, r.messages, r.more)
-  for (const m of r.messages) {
-    if (m.id === r.live) continue
-    // A report's conversation opens with a line the server wrote in the person's place: not shown.
-    if (m.id === seed) continue
-    list.append(m.role === "user" ? userMessage(m) : assistantMessage(m, r.chat))
+  // A report's conversation opens with a line the server wrote in the person's place: not shown.
+  const shown = r.messages.filter((m) => m.id !== r.live && m.id !== seed)
+  // Read again with earlier pages drawn above the newest one: they stay, and what is drawn anew
+  // begins at the newest page's first message. Where that message is not on the screen (the
+  // summary replaced the messages), the thread is the newest page alone, as when it is opened.
+  const first = again && shown[0] ? list.querySelector(`.msg[data-id="${CSS.escape(shown[0].id)}"]`) : null
+  if (first?.previousElementSibling) {
+    while (first.nextSibling) first.nextSibling.remove()
+    first.remove()
+  } else {
+    clear(list)
+    if (r.more) list.append(earlier())
+    open.more = r.more
   }
+  if (again) {
+    invoke("pages_clear")
+    alertIn("")
+    // The cards are the stream's to say (its `ask` frame); with no reply being written, none waits.
+    if (!r.live) renderCards(r.chat, [])
+  }
+  for (const m of shown) list.append(m.role === "user" ? userMessage(m) : assistantMessage(m, r.chat))
   ctx.opened(r.chat)
   if (r.live) follower(r.chat, r.live, was)
   else setRunning(false)
   // A chat opened is at its end and followed (what the reply's first frames bring included);
-  // one read again is where it was.
-  if (again) settle(top)
+  // one read again is where it was: the message at the top of the window is there again.
+  if (again) settleOn(anchor)
   else toBottom()
   $("composer-text").focus({ preventScroll: true })
 }
@@ -2069,8 +2144,10 @@ export function closeChat() {
 // --- A new chat ------------------------------------------------------------------------------------
 
 // { kind, device, dir, mode, model, effort, agents } while a new chat is being written; and how
-// its model came to be: `picked` (the person chose it here), `from` ("directory": the folder's
-// usual model), `asked` (the computer and folder it was last asked for).
+// its model came to be: `picked` (the person chose it here), `effortPicked` (its effort too),
+// `from` ("directory": the folder's usual model), `asked` (the computer and folder it was last
+// asked for), `startModel` (the folder's model as the server described it, where the account's
+// list does not have it).
 let draft = null
 let lastKind = "agent"
 
@@ -2083,13 +2160,16 @@ export function draftKind() {
 export function modelsChanged() {
   if (!draft) return
   const models = ctx.models()
-  if (!models.some((m) => m.id === draft.model)) {
+  // (A folder's model the account's list does not have is the server's to say: asked again.)
+  if (!findModel(models, draft.model)) {
     const start = models.find((m) => m.default) || models[0]
-    draft.model = start?.id || ""
+    draft.model = modelKey(start)
     draft.effort = levelsOf(start).start
     // The model is not the person's pick any more, and the folder is asked again.
     draft.picked = false
+    draft.effortPicked = false
     draft.from = ""
+    draft.startModel = null
     draft.asked = ""
   }
   renderChips()
@@ -2155,7 +2235,7 @@ export function newChat(kind) {
   const models = ctx.models()
   const start = models.find((m) => m.default) || models[0]
   lastKind = kind || lastKind
-  draft = { kind: lastKind, device: "", dir: "", mode: "edit", model: start?.id || "", effort: levelsOf(start).start, agents: null, picked: false, effortPicked: false, from: "", asked: "" }
+  draft = { kind: lastKind, device: "", dir: "", mode: "edit", model: modelKey(start), effort: levelsOf(start).start, agents: null, picked: false, effortPicked: false, from: "", asked: "", startModel: null }
   clear($("messages"))
   renderCards({ id: "" }, [])
   alertIn("")
@@ -2278,7 +2358,7 @@ const chatId = () => (draft ? "" : open?.chat?.id || "")
 const isAgent = () => (draft ? draft.kind === "agent" : open?.chat?.kind === "agent")
 const chatModel = () => {
   const id = draft ? draft.model : open?.chat?.model
-  return (open?.models || []).find((m) => m.id === id) || ctx.models().find((m) => m.id === id) || (id ? { id, name: id, efforts: [] } : null)
+  return findModel(open?.models || [], id) || findModel(ctx.models(), id) || (id ? { id, name: id, efforts: [] } : null)
 }
 
 async function saveChat(body, done) {

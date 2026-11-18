@@ -12,7 +12,9 @@ an app of its own.
   a chat page, and the chat's folder, mode, model, effort and team size as chips in the message
   box.
 - **Scheduled tasks** (with a server that has them): the list, each task's history and *Run now*,
-  and a new one said in your own words, with its next runs shown before you save.
+  and a new one said in your own words, with its next runs shown before you save. Two types:
+  **Chat**, which runs on the server, and **Agentic**, which runs as an agent on one of your
+  computers, in a folder you choose there.
 - **Files**, two trees kept apart: the agent's folders on this computer, and your files on the
   server.
 - **A viewer** for what you open and for what the agent shows you: Markdown drawn, code

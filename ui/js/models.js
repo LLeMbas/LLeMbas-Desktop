@@ -79,6 +79,29 @@ export function avatar(model) {
   return el
 }
 
+// --- Which model is meant -----------------------------------------------------------------------------
+//
+// A model's one unambiguous name is its `ref` (`provider/id`, server 2.0.0-beta.14): two
+// connections may serve one `id`, and the `id` alone then names the first of them. The app
+// keeps a chosen model by its ref and sends the ref wherever the server takes a model. A chat
+// and a schedule still say their model as an `id`, and a server before `ref` has nothing else:
+// a value is looked up as a ref first, then as an id.
+
+/** What a model is kept and sent as: its `ref`, or its `id` where the server gives no ref. */
+export const modelKey = (m) => (m && (m.ref || m.id)) || ""
+
+/** The model `value` names among `models`: by ref, else the first with that id; or null. */
+export function findModel(models, value) {
+  if (!value) return null
+  return models.find((m) => m.ref === value) || models.find((m) => m.id === value) || null
+}
+
+/** A model's name where one is picked: with its connection when another in the list has its id. */
+export function modelLabel(models, m) {
+  const twins = m?.connection && models.some((x) => x !== m && x.id === m.id && modelKey(x) !== modelKey(m))
+  return twins ? `${m.name} · ${m.connection}` : m?.name || m?.id || ""
+}
+
 // --- How hard a model thinks, and how many subagents a chat may have --------------------------------
 //
 // The levels are the harness spec's (3.2.0, `models/schema.json`), as /api/v2/models gives them:

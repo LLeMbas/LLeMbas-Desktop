@@ -37,7 +37,15 @@ computers; an older one of either leaves things as they were.
   page says its type, computer, folder and model; each run in its history says where it ran and
   how its model was chosen (the folder's usual model, the default, the continued conversation's
   own, or another because the first was busy). The models offered are the server's scheduling
-  models; a model it refuses for scheduled work is refused in its own words.
+  models; a model it refuses for scheduled work is refused in its own words. A run a computer
+  refused says the computer's own sentence (its session open in a terminal there, for one).
+  An Agentic task set to Chat and back keeps its computer, folder, mode and approval wait; one
+  that runs only when a command's output on the computer changes says, before it is saved as
+  Chat, that it will then run every time (a Chat schedule has no computer to watch on).
+- **Two connections that serve the same model are told apart.** A model is kept, matched and
+  sent by its `ref` (`provider/model`), which the server gives each model from 2.0.0-beta.14;
+  where two models share an id, the pickers say "Name · Connection". The folder's usual model
+  is the one on its own connection.
 
 ### Changed
 
@@ -46,11 +54,27 @@ computers; an older one of either leaves things as they were.
 - A scheduled task's page says Type, Computer and Folder where it said "Where it runs".
 - tests/ui: the fixtures are the server's at its development branch (`SOURCE`), with the new
   ones for a device's directories, the model a folder starts on, the scheduling models and an
-  Agentic run; tests for the folder dialog (DP), the draft's model (DM), the two types (ST) and
-  a chat that cannot be read again (RR).
+  Agentic run; tests for the folder dialog (DP), the draft's model (DM), the two types (ST), a
+  chat that cannot be read again (RR) and models by their ref (REF).
 
 ### Fixed
 
+- **A chat read again keeps the earlier messages you loaded, and your place among them.** After
+  "Earlier messages", a chat read again (a reply's stream closed by a proxy, a message edited)
+  was drawn from its newest page alone and put back at the same number of pixels -- on other
+  messages. The earlier pages now stay, and the message at the top of the window is where it
+  was; if it is gone (a summary replaced the messages), the thread is at its end.
+- **Scrolling up slowly while a reply is written is no longer undone.** A move up of a pixel
+  or two at the thread's end still counted as "at the end", and the next frame took the thread
+  back. Any move up by the person ends following, however small, also when the reply grows in
+  the same moment.
+- Two readings of the open chat at once (a stream that ends as a notification is clicked) no
+  longer follow the reply twice, and two that fail leave the chat as it was. A card waiting for
+  an answer is not taken away by a reading that fails.
+- An effort picked in a new chat's draft is given up when the draft's model changes to one
+  that does not offer it, and is sent only while the draft's model offers it.
+- A status, timing, mode or reason the app has no word for -- `constructor`, `valueOf` --
+  no longer breaks a scheduled task's history.
 - **A chat that cannot be read again keeps what is drawn.** When the chat that is open was read
   again (a reply ended, a message was edited) and the server could not be had, the thread was
   emptied and only the error shown. The thread now stays, the chat is still the open one, and

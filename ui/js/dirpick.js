@@ -17,6 +17,8 @@ import { h, icon, ICONS } from "./dom.js"
 import { get, why } from "./bridge.js"
 
 const enc = encodeURIComponent
+// A directory with thousands in it: this many rows at a time, and a button for the next ones.
+const ROWS = 200
 
 /**
  * pickDirectory({ device, name, value, recent }) -> the chosen path, or null.
@@ -29,6 +31,7 @@ export function pickDirectory({ device, name, value = "", recent = [] }) {
     let here = "" // the directory the listing shows; "" for the computer's places
     let listing = null // the server's last answer, or null while there is none
     let asked = 0
+    let showing = ROWS // how many of the listing's folders are drawn
 
     const where = h("bdi", { class: "dirs__path" })
     const model = h("p", { class: "hint dirs__model", hidden: true })
@@ -39,7 +42,7 @@ export function pickDirectory({ device, name, value = "", recent = [] }) {
     const form = h(
       "form",
       { class: "dialog__body dirs", method: "dialog" },
-      h("h2", { class: "dialog__title", text: t("Folder on %(device)s", { device: name || t("Another device") }) }),
+      h("h2", { class: "dialog__title", id: "dirs-title", text: t("Folder on %(device)s", { device: name || t("Another device") }) }),
       h("p", { class: "dirs__where" }, icon(ICONS.folder), where),
       model,
       said,
@@ -47,7 +50,7 @@ export function pickDirectory({ device, name, value = "", recent = [] }) {
       typed,
       h("div", { class: "dialog__actions" }, h("button", { type: "button", class: "btn", text: t("Cancel"), onclick: () => done(null) }), use),
     )
-    const dlg = h("dialog", { class: "dialog" }, form)
+    const dlg = h("dialog", { class: "dialog", "aria-labelledby": "dirs-title" }, form)
 
     let settled = false
     const done = (path) => {
@@ -96,7 +99,8 @@ export function pickDirectory({ device, name, value = "", recent = [] }) {
       const rows = []
       if (!none && here) rows.push(row({ path: l.parent || "", label: l.parent ? t("Up a level") : t("All places"), hint: "", title: l.parent || t("Places on this device"), lead: ICONS.back, cls: "dirs__row--up" }))
       if (!none) {
-        for (const e of l.entries || []) {
+        const entries = Array.isArray(l.entries) ? l.entries.filter((e) => e && typeof e.path === "string" && e.path) : []
+        for (const e of entries.slice(0, showing)) {
           rows.push(
             row({
               path: e.path,
@@ -108,7 +112,28 @@ export function pickDirectory({ device, name, value = "", recent = [] }) {
             }),
           )
         }
-        if (!(l.entries || []).length) rows.push(h("li", { class: "muted dirs__empty", text: here ? t("No directories here.") : t("This device offers no directories: its remote roots are empty or missing.") }))
+        if (entries.length > showing) {
+          rows.push(
+            h(
+              "li",
+              null,
+              h("button", {
+                type: "button",
+                class: "btn btn--sm dirs__more",
+                text: t("Show %(n)s more", { n: Math.min(ROWS, entries.length - showing) }),
+                title: String(entries.length),
+                onclick: () => {
+                  const at = showing
+                  showing += ROWS
+                  draw()
+                  // On with the keys from where the list ended.
+                  list.querySelectorAll(".dirs__row:not(.dirs__row--up):not(.dirs__row--recent)")[at]?.focus()
+                },
+              }),
+            ),
+          )
+        }
+        if (!entries.length) rows.push(h("li", { class: "muted dirs__empty", text: here ? t("No directories here.") : t("This device offers no directories: its remote roots are empty or missing.") }))
       }
       // The folders worked in before: beside the places, and all there is where nothing is listed.
       if ((none || !here) && recent.length) {
@@ -150,6 +175,8 @@ export function pickDirectory({ device, name, value = "", recent = [] }) {
         r = { code: "refused", error: why(err), entries: [] }
       }
       if (mine !== asked || settled) return
+      // Anything but an object is no answer: said so, never a list that loads for ever.
+      if (!r || typeof r !== "object" || Array.isArray(r)) r = { code: "no_answer", error: "", entries: [] }
       // A directory that cannot be listed (the computer's words say why) leaves the listing that
       // was there; no listing at all leaves the typed path and the recent folders.
       if (r.code && listing && !listing.code && path) {
@@ -163,6 +190,7 @@ export function pickDirectory({ device, name, value = "", recent = [] }) {
       if (r.code && !r.error) r.error = t("The device did not answer.")
       const first = !listing
       listing = r
+      showing = ROWS
       here = r.code ? "" : r.path || ""
       // The path box says where the listing is; what was typed stays where nothing is listed,
       // and when the dialog opens on the places.

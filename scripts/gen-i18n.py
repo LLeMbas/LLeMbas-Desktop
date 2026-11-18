@@ -697,6 +697,8 @@ KEYS = (
     "a computer no longer signed in",
     "default model",
     "the conversation's own model",
+    "Choose a computer first.",
+    "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -704,6 +706,8 @@ KEYS = (
 # the device, as the server's catalogue has it.
 OWN: dict[str, dict[str, str]] = {
     "cs": {
+        "Choose a computer first.": "Nejdřív vyberte počítač.",
+        "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.": "Tato úloha se spouští jen tehdy, když se na počítači změní výstup příkazu. Plán typu Chat nemá počítač, na kterém by sledoval: uložená jako Chat se spustí pokaždé.",
         "Recent": "Nedávné",
         "the conversation's own model": "vlastní model konverzace",
         "Sign in again: the server no longer accepts this app's sign-in.": "Přihlaste se znovu: server už nepřijímá přihlášení této aplikace.",
@@ -1043,6 +1047,8 @@ OWN: dict[str, dict[str, str]] = {
         "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Zkouší se to znovu samo. Do té doby běží Python této konverzace v kartě prohlížeče, kde je konverzace otevřená.",
     },
     "de": {
+        "Choose a computer first.": "Wählen Sie zuerst einen Computer.",
+        "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.": "Diese Aufgabe läuft nur, wenn sich die Ausgabe eines Befehls auf dem Computer ändert. Ein Chat-Zeitplan hat keinen Computer, auf dem er beobachten könnte: Als Chat gespeichert, läuft sie jedes Mal.",
         "Recent": "Zuletzt verwendet",
         "the conversation's own model": "das eigene Modell der Unterhaltung",
         "Sign in again: the server no longer accepts this app's sign-in.": "Melden Sie sich erneut an: Der Server nimmt die Anmeldung dieser App nicht mehr an.",
@@ -1382,6 +1388,8 @@ OWN: dict[str, dict[str, str]] = {
         "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Es wird von selbst erneut versucht. Bis dahin läuft das Python dieses Chats in einem Browser-Tab, in dem der Chat geöffnet ist.",
     },
     "es": {
+        "Choose a computer first.": "Elija primero un equipo.",
+        "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.": "Esta tarea solo se ejecuta cuando cambia la salida de un comando en el equipo. Una programación de tipo Chat no tiene equipo en el que vigilar: guardada como Chat, se ejecuta siempre.",
         "Recent": "Recientes",
         "the conversation's own model": "el modelo propio de la conversación",
         "Sign in again: the server no longer accepts this app's sign-in.": "Vuelva a iniciar sesión: el servidor ya no acepta el inicio de sesión de esta aplicación.",
@@ -1721,6 +1729,8 @@ OWN: dict[str, dict[str, str]] = {
         "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Se vuelve a intentar por sí solo. Hasta entonces, el Python de este chat se ejecuta en una pestaña del navegador que tenga el chat abierto.",
     },
     "fr": {
+        "Choose a computer first.": "Choisissez d'abord un ordinateur.",
+        "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.": "Cette tâche ne s'exécute que lorsque la sortie d'une commande change sur l'ordinateur. Une planification de type Chat n'a pas d'ordinateur à surveiller : enregistrée comme Chat, elle s'exécute à chaque fois.",
         "Recent": "Récents",
         "the conversation's own model": "le modèle propre à la conversation",
         "Sign in again: the server no longer accepts this app's sign-in.": "Reconnectez-vous : le serveur n’accepte plus la connexion de cette application.",
@@ -2060,6 +2070,8 @@ OWN: dict[str, dict[str, str]] = {
         "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Une nouvelle tentative a lieu d’elle-même. D’ici là, le Python de cette conversation s’exécute dans un onglet du navigateur où la conversation est ouverte.",
     },
     "hu": {
+        "Choose a computer first.": "Először válasszon számítógépet.",
+        "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.": "Ez a feladat csak akkor fut, ha egy parancs kimenete megváltozik a számítógépen. A Chat típusú ütemezésnek nincs számítógépe, amelyen figyelhetne: Chatként mentve minden alkalommal lefut.",
         "Recent": "Legutóbbiak",
         "the conversation's own model": "a beszélgetés saját modellje",
         "Sign in again: the server no longer accepts this app's sign-in.": "Jelentkezzen be újra: a szerver már nem fogadja el ennek az alkalmazásnak a bejelentkezését.",
@@ -2399,6 +2411,8 @@ OWN: dict[str, dict[str, str]] = {
         "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Magától újra megpróbálja. Addig ennek a beszélgetésnek a Pythonja egy olyan böngészőlapon fut, ahol a beszélgetés meg van nyitva.",
     },
     "it": {
+        "Choose a computer first.": "Scegliete prima un computer.",
+        "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.": "Questa attività viene eseguita solo quando cambia l'output di un comando sul computer. Una pianificazione di tipo Chat non ha un computer su cui osservare: salvata come Chat, viene eseguita ogni volta.",
         "Recent": "Recenti",
         "the conversation's own model": "il modello proprio della conversazione",
         "Sign in again: the server no longer accepts this app's sign-in.": "Accedi di nuovo: il server non accetta più l’accesso di questa app.",
@@ -2738,6 +2752,8 @@ OWN: dict[str, dict[str, str]] = {
         "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Viene riprovato da solo. Fino ad allora, il Python di questa chat viene eseguito in una scheda del browser in cui la chat è aperta.",
     },
     "pl": {
+        "Choose a computer first.": "Najpierw wybierz komputer.",
+        "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.": "To zadanie uruchamia się tylko wtedy, gdy zmieni się wynik polecenia na komputerze. Harmonogram typu Chat nie ma komputera, na którym mógłby obserwować: zapisane jako Chat uruchamia się za każdym razem.",
         "Recent": "Ostatnie",
         "the conversation's own model": "własny model rozmowy",
         "Sign in again: the server no longer accepts this app's sign-in.": "Zaloguj się ponownie: serwer nie przyjmuje już logowania tej aplikacji.",
@@ -3077,6 +3093,8 @@ OWN: dict[str, dict[str, str]] = {
         "It is tried again by itself. Until it can, this chat's Python runs in a browser tab that has the chat open.": "Próba zostanie ponowiona samoczynnie. Do tego czasu Python tego czatu działa w karcie przeglądarki, w której czat jest otwarty.",
     },
     "sk": {
+        "Choose a computer first.": "Najprv vyberte počítač.",
+        "This task runs only when a command's output on the computer changes. A Chat schedule has no computer to watch on: saved as Chat, it runs every time.": "Táto úloha sa spúšťa len vtedy, keď sa na počítači zmení výstup príkazu. Plán typu Chat nemá počítač, na ktorom by sledoval: uložená ako Chat sa spustí zakaždým.",
         "Recent": "Nedávne",
         "the conversation's own model": "vlastný model konverzácie",
         "Sign in again: the server no longer accepts this app's sign-in.": "Prihláste sa znova: server už neprijíma prihlásenie tejto aplikácie.",
