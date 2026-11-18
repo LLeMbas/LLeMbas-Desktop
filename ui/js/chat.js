@@ -347,8 +347,37 @@ function action(ico, label, onclick, cls = "") {
   return h("button", { type: "button", class: `msg__act ${cls}`, "aria-label": label, title: label, onclick }, icon(ico))
 }
 
-function copyText(text) {
-  navigator.clipboard?.writeText(text).catch(() => {})
+/** How long (ms) a Copy button says it has copied. */
+const COPIED_FOR = 1600
+
+/**
+ * Text onto the clipboard, and the button that asked says so: its icon becomes a tick and its
+ * name "Copied" for a moment. Without that the click looks as if nothing happened.
+ */
+function copyText(text, button) {
+  const done = navigator.clipboard?.writeText(text)
+  if (!done) return
+  done
+    .then(() => {
+      if (!button?.isConnected) return
+      const name = button.getAttribute("aria-label") === t("Copied") ? button.dataset.name : button.getAttribute("aria-label")
+      button.dataset.name = name
+      clearTimeout(Number(button.dataset.copied))
+      button.replaceChildren(icon(ICONS.check))
+      button.setAttribute("aria-label", t("Copied"))
+      button.title = t("Copied")
+      button.classList.add("is-copied")
+      button.dataset.copied = String(
+        setTimeout(() => {
+          button.replaceChildren(icon(ICONS.copy))
+          button.setAttribute("aria-label", name)
+          button.title = name
+          button.classList.remove("is-copied")
+          delete button.dataset.copied
+        }, COPIED_FOR),
+      )
+    })
+    .catch(() => {})
 }
 
 /**
@@ -388,7 +417,7 @@ function userMessage(m) {
         "div",
         { class: "msg__actions" },
         action(ICONS.edit, t("Edit message"), () => startEdit(el, m)),
-        action(ICONS.copy, t("Copy"), () => copyText(m.text || "")),
+        action(ICONS.copy, t("Copy"), (e) => copyText(m.text || "", e.currentTarget)),
       ),
     )
   }
@@ -499,7 +528,7 @@ function assistantMessage(m, chat, last = null) {
       h(
         "div",
         { class: "msg__actions" },
-        action(ICONS.copy, t("Copy"), () => copyText(replyText(m))),
+        action(ICONS.copy, t("Copy"), (e) => copyText(replyText(m), e.currentTarget)),
         readAloudButton(m.id, () => replyText(m)),
         // Only the last reply: CSS shows it there and nowhere else (app.css, .msg__regen).
         action(ICONS.refresh, t("Regenerate reply"), () => regenerate(m), "msg__regen"),

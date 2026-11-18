@@ -627,6 +627,8 @@ button.place--python { cursor: pointer; }
 .msg--user:hover .msg__actions, .msg--user:focus-within .msg__actions { opacity: 1; }
 .msg__act { display: grid; place-items: center; width: var(--control-h-sm); height: var(--control-h-sm); padding: 0; color: var(--ink-faint); background: none; border: 0; border-radius: var(--radius-lg); cursor: pointer; }
 .msg__act:hover, .msg__act:focus-visible { color: var(--ink); background: var(--surface-hover); }
+/* It copied: the tick stays in the reading colour for its moment, hovered or not. */
+.msg__act.is-copied, .md-copy.is-copied { color: var(--ink); }
 /* Regenerate: on the last reply only, and not while it is being written. */
 .msg__regen { display: none; }
 .messages > .msg--assistant:last-child:not(.is-live) .msg__regen { display: grid; }

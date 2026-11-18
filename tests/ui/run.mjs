@@ -2722,6 +2722,34 @@ test("P2: how a reply that did not finish ended stays on it: Stopped, with the r
   assert.deepEqual(p.errors, [])
 })
 
+test("CP1: Copy says that it copied: the button under a message shows a tick and is named Copied for a moment, a code block's says Copied", async () => {
+  const cfg = agentChatOpen([["status", { text: "Writing…" }]], {
+    "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?"), reply({ id: "m6", steps: [{ index: 0, kind: "text", open: true, markdown: "With **care**.\n\n```sh\nbake --slowly\n```" }] })], more: false, live: null },
+    "GET /models?chat=chat1": models(),
+  })
+  const p = await page(cfg)
+  await p.evaluate(() => {
+    window.__copied = []
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (text) => (window.__copied.push(text), Promise.resolve()) } })
+  })
+  await openChatRow(p, "chat1")
+  const copy = p.locator('.msg--assistant[data-id="m6"] .msg__act[aria-label="Copy"]')
+  await copy.click()
+  const said = p.locator('.msg--assistant[data-id="m6"] .msg__act.is-copied')
+  await said.waitFor()
+  assert.equal(await said.getAttribute("aria-label"), "Copied")
+  assert.equal(await said.getAttribute("title"), "Copied")
+  // A second click while it still says so copies again and does not lose the button's own name.
+  await said.click()
+  assert.equal((await p.evaluate(() => window.__copied)).length, 2)
+  await p.waitForSelector('.msg--assistant[data-id="m6"] .msg__act[aria-label="Copy"]:not(.is-copied)', { timeout: 5000 })
+  // A code block's button is a word, and the word changes.
+  await p.click('.msg--assistant[data-id="m6"] .md-copy')
+  await p.waitForFunction(() => document.querySelector('.msg--assistant[data-id="m6"] .md-copy')?.textContent === "Copied")
+  assert.match((await p.evaluate(() => window.__copied)).at(-1), /bake --slowly/)
+  await p.waitForFunction(() => document.querySelector('.msg--assistant[data-id="m6"] .md-copy')?.textContent === "Copy", null, { timeout: 5000 })
+})
+
 test("P2: the rest of the chat screen works: edit a message, regenerate, stop, a queued message, earlier messages, attach, the chat's menu", async () => {
   const cfg = agentChatOpen([["status", { text: "Writing…" }]], {
     "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?"), reply({ id: "m6", steps: [{ index: 0, kind: "text", open: true, markdown: "With **care**." }] })], more: true, live: null },

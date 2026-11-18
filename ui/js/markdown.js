@@ -150,7 +150,22 @@ function codeBlock(text, lang) {
     type: "button",
     class: "md-copy",
     text: t("Copy"),
-    onclick: () => navigator.clipboard?.writeText(text).catch(() => {}),
+    // The button says it copied, for a moment: a click that changes nothing looks broken.
+    onclick: () =>
+      navigator.clipboard
+        ?.writeText(text)
+        .then(() => {
+          clearTimeout(Number(copy.dataset.copied))
+          copy.textContent = t("Copied")
+          copy.classList.add("is-copied")
+          copy.dataset.copied = String(
+            setTimeout(() => {
+              copy.textContent = t("Copy")
+              copy.classList.remove("is-copied")
+            }, 1600),
+          )
+        })
+        .catch(() => {}),
   })
   return h("div", { class: "md-code" }, lang ? h("span", { class: "md-lang", text: lang }) : null, copy, h("pre", null, code))
 }

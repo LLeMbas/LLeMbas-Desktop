@@ -6,6 +6,10 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Copy says that it copied.** The Copy button under a message shows a tick and is named *Copied* for a moment, and a code block's button says *Copied*. Both copied before but showed nothing, so the click looked as if it had failed.
+
 ## [1.0.0-beta.11] — 2026-11-18
 
 For LLeMbas server 2.0.0-beta.14 and a LLeMbas CLI with harness spec 3.9.0 on the linked
