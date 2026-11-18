@@ -5,14 +5,24 @@
 // the list (name, type, size, changed), and the chosen file's details and preview. A file opens in
 // the viewer either way.
 //
+// Both are file managers, with the same hands: a new file and a new folder, rename, move and
+// copy through a dialog that walks to the folder (no path is typed), delete, several things at
+// once from a bar that appears when something is ticked, a row dragged onto a folder to move it
+// there, and a text file edited in the viewer. What differs is what does the work (`ops`): the
+// server's routes, or Rust inside the agent's folders (src-tauri/src/files.rs, which checks
+// every path again). The server's has its trash, its versions, a download to where the person
+// chooses and files dropped from the computer; and a thing can be copied from one tab to the
+// other.
+//
 // Nothing here is ever an empty box: a directory being read says Loading…, past SLOW_MS it says
 // the server has not answered (with Try again, the late answer still drawn), and a refusal, an
 // answer that is not a listing or a failure to draw it is said in its place with Try again.
 
 import { $, h, clear, icon, ICONS, bytes } from "./dom.js"
-import { invoke, get, post, del, why } from "./bridge.js"
+import { invoke, listen, api, get, post, del, why } from "./bridge.js"
 import { menu, ask } from "./popup.js"
-import { openViewer, showKind, withheldWords } from "./viewer.js"
+import { openViewer, showKind, fileKind, withheldWords } from "./viewer.js"
+import { pickFolder, trashDialog, versionsDialog } from "./filedialogs.js"
 
 // The server's tree as the app's door gives it, read as the person (their own access, no chat):
 //   GET /files?path=/a        -> { path, parent, entries: [{ name, path, kind: "dir"|"file"|"mount", size, mime, updated_at }] }
@@ -37,15 +47,16 @@ const PREVIEW_CHARS = 6000
 /** A directory in either tree: the server's mounts open like its folders. */
 const isDir = (e) => e.kind === "dir" || e.kind === "mount"
 
-const IMAGE = /\.(png|jpe?g|gif|webp|bmp|ico|avif|svg)$/i
+/** What a file is: the server's word for it (`file_kind`), this computer's, or its name's. */
+const kindOf = (e) => (isDir(e) ? "" : fileKind(e.name, e.file_kind))
+
+const KIND_ICONS = { markdown: "fileText", text: "fileText", table: "fileText", notebook: "fileCode", code: "fileCode", html: "fileCode", image: "picture", svg: "picture", audio: "speaker", video: "play", archive: "archive" }
 
 /** An entry's icon, by what the viewer would make of it (the web's `file_icon`). */
 function iconOf(e) {
   if (e.kind === "mount") return ICONS.drive
   if (isDir(e)) return ICONS.folder
-  if ((e.mime || "").startsWith("image/") || IMAGE.test(e.name)) return ICONS.picture
-  const { kind } = showKind(e.path || e.name)
-  return kind === "code" || kind === "html" ? ICONS.fileCode : kind === "markdown" || kind === "text" ? ICONS.fileText : ICONS.file
+  return ICONS[KIND_ICONS[kindOf(e)] || "file"]
 }
 
 /** The Type column: a folder, a mount, or the extension (the web's `type_label`). */
@@ -122,21 +133,46 @@ function reading(holder, { tag = "div", depth = 0, load, draw }) {
 }
 const readings = new WeakMap() // holder -> the reading it shows now (a number)
 
+/** How far a pressed row is moved before it is being dragged. */
+const DRAG_PX = 6
+
 /**
- * One explorer, inside the pane's elements (`crumbs`, `tree`, `list`, `details`). `source`:
+ * One explorer, inside the pane's elements (`crumbs`, `tree`, `list`, `details`, `status`,
+ * `batch`). `source`:
  *   key           "local" | "server" (the rows' data, the tests' handle)
  *   list(path)    -> { path, entries } (`path` as answered: the server's `/` says where it is)
  *   top()         the directory the explorer opens at (the server's: as `/` answered)
  *   ask(path)     the path to ask for a directory (the server's top is asked as `/`)
  *   crumbs(path)  -> [[name, path], ...] from the top down
+ *   parent(path)  the directory a path is in
  *   rootName()    the tree's first line
  *   open(entry)   in the viewer
  *   preview(entry) -> { text, withheld, size }
- *   actions(entry) (optional) -> menu items
+ *   media?(entry, kind) -> the address a picture's bytes are served at (the details' thumbnail)
+ *   ops?          what changes the tree, each a promise:
+ *     mkdir(dir, name)  mkfile(dir, name)  rename(entry, name)
+ *     move(paths, to)  copy(paths, to)  remove(paths)   -> { done, failed: [{ path, error }], said? }
+ *   dirItems?(entry), fileItems?(entry), acrossItems?(entry)  -> more of a row's menu
+ *   batchItems?(paths) -> more of the bar's buttons: [{ label, run }]
  */
 function explorer(el, source) {
   let current = null // the directory listed now (as answered)
   let chosen = null // the file whose details show
+  let shown = [] // the entries listed now
+  const picked = new Map() // path -> entry: what is ticked
+  let thumb = null // the address of the details' picture, to let go
+  const ops = source.ops || null
+
+  /** What happened, under the bar: a word, or -- an error -- what went wrong, and it stays. */
+  const say = (text, error = false) => {
+    const line = el.status
+    if (!line) return
+    line.hidden = !text
+    line.textContent = text || ""
+    line.className = `status fx__status${error ? " is-error" : ""}`
+    line.setAttribute("role", error ? "alert" : "status")
+  }
+
   // One request per directory for the tree and the list together: an answer is shared while it
   // is on its way and for a moment after (the tree drawn again once the top is known); a refusal
   // is never kept, so Try again asks afresh. Read again and a change forget them all.
@@ -160,7 +196,7 @@ function explorer(el, source) {
     clear(treeBox)
     const rootRow = h(
       "button",
-      { type: "button", class: "ftree__row ftree__root", dataset: { path: source.top() }, onclick: () => go(source.top()) },
+      { type: "button", class: "ftree__row ftree__root", dataset: { path: source.top(), drop: source.top() }, onclick: () => go(source.top()) },
       icon(ICONS.folder),
       h("span", { class: "ftree__name", text: source.rootName() }),
     )
@@ -186,7 +222,7 @@ function explorer(el, source) {
     const chevron = h("button", { type: "button", class: "ftree__chevron", "aria-label": e.name, "aria-expanded": "false", tabindex: "-1" }, icon(ICONS.chevron))
     const row = h(
       "button",
-      { type: "button", class: "ftree__row", title: e.path, dataset: { path: e.path } },
+      { type: "button", class: "ftree__row", title: e.path, dataset: { path: e.path, drop: e.path } },
       icon(iconOf(e)),
       h("span", { class: "ftree__name", text: e.name }),
     )
@@ -235,7 +271,7 @@ function explorer(el, source) {
         const last = i === parts.length - 1
         const part = last
           ? h("span", { class: "crumbs__here", "aria-current": "page", title: at, text: name })
-          : h("button", { type: "button", class: "crumbs__link", title: at, text: name, onclick: () => go(at) })
+          : h("button", { type: "button", class: "crumbs__link", title: at, text: name, dataset: { drop: at }, onclick: () => go(at) })
         return i ? [h("span", { class: "crumbs__sep", "aria-hidden": "true", text: "/" }), part] : [part]
       }),
     )
@@ -246,6 +282,9 @@ function explorer(el, source) {
   const go = (path) => {
     current = path
     chosen = null
+    shown = []
+    picked.clear()
+    drawBatch()
     drawDetails()
     drawCrumbs()
     mark()
@@ -256,18 +295,38 @@ function explorer(el, source) {
         if (answer.path !== undefined && answer.path !== path && source.ask(path) === source.ask(answer.path)) current = answer.path
         drawCrumbs()
         mark()
+        shown = answer.entries
         drawRows(answer.entries)
       },
     })
   }
+  /** What can be ticked: everything but a mount, where the tree can be changed at all. */
+  const tickable = (e) => !!ops && e.kind !== "mount"
+  let pickAll = null
   const drawRows = (entries) => {
+    pickAll = null
     if (!entries.length) {
       el.list.append(h("div", { class: "fx__empty" }, icon(ICONS.folder), h("p", { text: t("Nothing here yet. Not even a hobbit hole.") })))
       return
     }
+    pickAll = entries.some(tickable)
+      ? h("input", {
+          type: "checkbox",
+          class: "frow__pick",
+          "aria-label": t("Select everything here"),
+          title: t("Select everything here"),
+          onchange: (ev) => {
+            picked.clear()
+            if (ev.target.checked) for (const e of entries) if (tickable(e)) picked.set(e.path, e)
+            for (const box of el.list.querySelectorAll(".frow[data-path] .frow__pick")) box.checked = picked.has(box.closest(".frow").dataset.path)
+            drawBatch()
+          },
+        })
+      : null
     const head = h(
       "div",
       { class: "frow frow--head", role: "row" },
+      h("span", { role: "columnheader", class: "frow__tick" }, pickAll),
       h("span", { role: "columnheader", text: t("Name") }),
       h("span", { role: "columnheader", class: "frow__type", text: t("Type") }),
       h("span", { role: "columnheader", class: "frow__size", text: t("Size") }),
@@ -278,16 +337,31 @@ function explorer(el, source) {
   }
   const row = (e) => {
     const date = dateOf(e.updated_at)
-    const items = source.actions?.(e) || []
+    const items = itemsFor(e)
+    const kind = e.kind === "mount" ? "mount" : isDir(e) ? "dir" : kindOf(e)
     const openRow = h(
       "button",
       { type: "button", class: "frow__open", title: e.path },
-      h("span", { class: `frow__icon frow__icon--${e.kind === "mount" ? "mount" : isDir(e) ? "dir" : showKind(e.name).kind}` }, icon(iconOf(e))),
+      h("span", { class: `frow__icon frow__icon--${kind}` }, icon(iconOf(e))),
       h("span", { class: "frow__label", text: e.name }),
     )
+    const tick = tickable(e)
+      ? h("input", {
+          type: "checkbox",
+          class: "frow__pick",
+          "aria-label": t("Select %(name)s", { name: e.name }),
+          checked: picked.has(e.path),
+          onchange: (ev) => {
+            if (ev.target.checked) picked.set(e.path, e)
+            else picked.delete(e.path)
+            drawBatch()
+          },
+        })
+      : null
     const r = h(
       "div",
-      { class: "frow", role: "row", dataset: { path: e.path, kind: e.kind } },
+      { class: "frow", role: "row", dataset: { path: e.path, kind: e.kind, ...(isDir(e) ? { drop: e.path } : {}) } },
+      h("span", { role: "cell", class: "frow__tick" }, tick),
       h("span", { role: "cell", class: "frow__name" }, openRow, e.kind === "mount" ? h("span", { class: "badge", text: t("mount") }) : null),
       h("span", { role: "cell", class: "frow__type", text: typeOf(e) }),
       h("span", { role: "cell", class: "frow__size", text: isDir(e) ? "" : bytes(e.size) }),
@@ -296,7 +370,7 @@ function explorer(el, source) {
         "span",
         { role: "cell", class: "frow__actions" },
         items.length
-          ? h("button", { type: "button", class: "tool frow__more", "aria-label": t("More for %(name)s", { name: e.name }), title: t("More for %(name)s", { name: e.name }), onclick: (ev) => menu(ev.currentTarget, items) }, icon(ICONS.more))
+          ? h("button", { type: "button", class: "tool frow__more", "aria-label": t("More for %(name)s", { name: e.name }), title: t("More for %(name)s", { name: e.name }), onclick: (ev) => menu(ev.currentTarget, itemsFor(e)) }, icon(ICONS.more))
           : null,
       ),
     )
@@ -311,6 +385,164 @@ function explorer(el, source) {
     return r
   }
 
+  // --- What can be done: to one thing (its menu), and to everything ticked (the bar).
+  const dirOf = (path) => source.parent(path)
+  /** Do something to the tree, say how it went, and draw what is there now. */
+  const act = async (work, words) => {
+    say("")
+    try {
+      const r = await work()
+      const failed = r?.failed || []
+      if (failed.length) say(failed.map((f) => `${f.path}: ${f.error}`).join("\n"), true)
+      else say(r?.said || (typeof words === "function" ? words(r) : words) || "")
+      if (!r?.quiet) await refresh()
+      return r
+    } catch (err) {
+      say(why(err), true)
+      return null
+    }
+  }
+  const newIn = async (dir, folder) => {
+    const name = await ask(
+      folder
+        ? { title: t("New folder"), value: "", ok: t("Create"), cancel: t("Cancel") }
+        : { title: t("New file"), text: t("What should the file be called? With its extension, such as notes.md."), value: "", ok: t("Create"), cancel: t("Cancel") },
+    )
+    if (!name) return
+    await act(() => (folder ? ops.mkdir(dir, name) : ops.mkfile(dir, name)), folder ? t("Folder made.") : "")
+  }
+  const renameOne = async (e) => {
+    const name = await ask({ title: t("Rename"), value: e.name, ok: t("Rename"), cancel: t("Cancel") })
+    if (!name || name === e.name) return
+    await act(() => ops.rename(e, name), "")
+  }
+  const removeThese = async (entries) => {
+    const one = entries.length === 1 ? entries[0] : null
+    const yes = await ask({
+      title: t("Move to the trash"),
+      text: one ? t("Move “%(name)s” to the trash? It can be restored from there.", { name: one.name }) : t("Move the %(n)s selected to the trash? They can be restored from there.", { n: entries.length }),
+      ok: t("Move to the trash"),
+      cancel: t("Cancel"),
+      danger: true,
+    })
+    if (!yes) return
+    await act(() => ops.remove(entries.map((e) => e.path)), (r) => (one ? t("Moved to the trash.") : t("Moved to the trash: %(n)s.", { n: r?.done ?? entries.length })))
+  }
+  /** Move or copy these into a folder chosen by walking to it. */
+  const sendThese = async (entries, copy) => {
+    const to = await pickFolder({ source, start: current ?? source.top(), title: copy ? t("Copy to which folder?") : t("Move to which folder?"), ok: copy ? t("Copy here") : t("Move here") })
+    if (to === null || to === undefined) return
+    await moveInto(entries.map((e) => e.path), to, copy)
+  }
+  const moveInto = (paths, to, copy = false) =>
+    act(
+      () => (copy ? ops.copy(paths, to) : ops.move(paths, to)),
+      (r) => (copy ? (r?.copied ? t("Copied as %(name)s.", { name: r.copied }) : t("Copied: %(n)s.", { n: r?.done ?? paths.length })) : paths.length === 1 ? t("Moved.") : t("Moved: %(n)s.", { n: r?.done ?? paths.length })),
+    )
+
+  const itemsFor = (e) => {
+    const items = []
+    if (isDir(e)) {
+      items.push(...(source.dirItems?.(e) || []))
+      if (ops?.mkdir) items.push({ label: t("New folder"), run: () => newIn(e.path, true) })
+      if (ops?.mkfile) items.push({ label: t("New file"), run: () => newIn(e.path, false) })
+    } else items.push({ label: t("Open in the viewer"), run: () => source.open(e) }, ...(source.fileItems?.(e) || []))
+    if (e.kind === "mount" || !ops) return items
+    const across = source.acrossItems?.(e) || []
+    items.push(null, { label: t("Move"), run: () => sendThese([e], false) }, { label: t("Copy to…"), run: () => sendThese([e], true) }, ...across)
+    items.push(null, { label: t("Rename"), run: () => renameOne(e) }, { label: t("Delete"), danger: true, run: () => removeThese([e]) })
+    return items
+  }
+
+  /** The bar for what is ticked: how many, and what can be done to all of them at once. */
+  const drawBatch = () => {
+    const bar = el.batch
+    if (!bar) return
+    const entries = [...picked.values()]
+    bar.hidden = !entries.length
+    if (pickAll) {
+      const all = shown.filter(tickable).length
+      pickAll.checked = entries.length > 0 && entries.length === all
+      pickAll.indeterminate = entries.length > 0 && entries.length < all
+    }
+    clear(bar)
+    if (!entries.length) return
+    const btn = (label, run, cls = "") => h("button", { type: "button", class: `btn btn--sm ${cls}`, text: label, onclick: run })
+    bar.append(
+      h("span", { class: "fx__count", role: "status", text: t("%(n)s selected", { n: entries.length }) }),
+      h(
+        "span",
+        { class: "fx__batch-do" },
+        btn(t("Move"), () => sendThese(entries, false)),
+        btn(t("Copy to…"), () => sendThese(entries, true)),
+        (source.batchItems?.(entries) || []).map((i) => btn(i.label, i.run)),
+        btn(t("Delete"), () => removeThese(entries), "btn--danger"),
+        btn(t("Clear the selection"), () => {
+          picked.clear()
+          for (const box of el.list.querySelectorAll(".frow[data-path] .frow__pick")) box.checked = false
+          drawBatch()
+        }),
+      ),
+    )
+  }
+
+  // --- A row dragged onto a folder moves it there (and with it everything ticked, when it is
+  // ticked). Followed with the pointer rather than the browser's own drag and drop, which the
+  // window's file drop takes over on some systems; a folder in the list, in the tree or among
+  // the crumbs takes it.
+  // The pane's elements outlive an explorer (the pane is drawn again for another folder): the
+  // list has one such handler, the latest explorer's, never one from each.
+  el.list.onpointerdown = !ops?.move
+    ? null
+    : (ev) => {
+      if (ev.button !== 0 || ev.pointerType !== "mouse") return
+      const from = ev.target.closest?.(".frow[data-path]")
+      if (!from || from.dataset.kind === "mount" || ev.target.closest(".frow__actions, .frow__tick")) return
+      const paths = picked.has(from.dataset.path) ? [...picked.keys()] : [from.dataset.path]
+      const label = paths.length > 1 ? t("%(n)s selected", { n: paths.length }) : from.querySelector(".frow__label")?.textContent || ""
+      let ghost = null
+      let over = null
+      const takes = (x, y) => {
+        const hit = document.elementFromPoint(x, y)?.closest?.("[data-drop]")
+        if (!hit || !el.pane.contains(hit)) return null
+        const to = hit.dataset.drop
+        // Not onto itself, into itself, or into the folder it is in already.
+        if (paths.some((p) => to === p || to.startsWith(`${p}/`) || dirOf(p) === to)) return null
+        return hit
+      }
+      const move = (e) => {
+        if (!ghost) {
+          if (Math.hypot(e.clientX - ev.clientX, e.clientY - ev.clientY) < DRAG_PX) return
+          ghost = h("div", { class: "fdrag", "aria-hidden": "true", text: label })
+          document.body.append(ghost)
+          el.pane.classList.add("is-dragging")
+        }
+        ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`
+        const hit = takes(e.clientX, e.clientY)
+        if (hit === over) return
+        over?.classList.remove("is-drop")
+        over = hit
+        over?.classList.add("is-drop")
+      }
+      const end = (e) => {
+        document.removeEventListener("pointermove", move)
+        document.removeEventListener("pointerup", end)
+        document.removeEventListener("pointercancel", end)
+        el.pane.classList.remove("is-dragging")
+        over?.classList.remove("is-drop")
+        if (!ghost) return
+        ghost.remove()
+        // The click that ends a drag opens nothing.
+        const swallow = (c) => (c.stopPropagation(), c.preventDefault())
+        document.addEventListener("click", swallow, { capture: true, once: true })
+        setTimeout(() => document.removeEventListener("click", swallow, true), 0)
+        if (e.type === "pointerup" && over) moveInto(paths, over.dataset.drop)
+      }
+      document.addEventListener("pointermove", move)
+      document.addEventListener("pointerup", end)
+      document.addEventListener("pointercancel", end)
+    }
+
   // --- The chosen file's details and preview.
   const choose = (e) => {
     chosen = e
@@ -320,6 +552,8 @@ function explorer(el, source) {
   const drawDetails = () => {
     const box = el.details
     if (!box) return
+    if (thumb) invoke("media_close", { url: thumb }).catch(() => {})
+    thumb = null
     for (const r of el.list.querySelectorAll(".frow.is-chosen")) if (!chosen || r.dataset.path !== chosen.path) r.classList.remove("is-chosen")
     clear(box)
     if (!chosen) {
@@ -327,15 +561,36 @@ function explorer(el, source) {
       return
     }
     const e = chosen
+    const kind = kindOf(e)
     const date = dateOf(e.updated_at)
     const fact = (label, value, title) => (value ? [h("dt", { text: label }), h("dd", { title: title || value, text: value })] : [])
     const preview = h("div", { class: "fdetails__preview", "aria-label": t("Preview") })
     box.append(
-      h("div", { class: "fdetails__id" }, h("span", { class: `frow__icon frow__icon--${showKind(e.name).kind}` }, icon(iconOf(e))), h("h2", { class: "fdetails__name", title: e.name, text: e.name })),
+      h("div", { class: "fdetails__id" }, h("span", { class: `frow__icon frow__icon--${kind}` }, icon(iconOf(e))), h("h2", { class: "fdetails__name", title: e.name, text: e.name })),
       h("dl", { class: "fdetails__facts" }, fact(t("Type"), typeOf(e)), fact(t("Size"), bytes(e.size)), fact(t("Changed"), date.short, date.full), fact(t("Path"), e.path)),
-      h("div", { class: "fdetails__do" }, h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Open in the viewer"), onclick: () => source.open(e) })),
+      h(
+        "div",
+        { class: "fdetails__do" },
+        h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Open in the viewer"), onclick: () => source.open(e) }),
+        (source.fileItems?.(e) || []).filter((i) => i?.details).map((i) => h("button", { type: "button", class: "btn btn--sm", text: i.label, onclick: i.run })),
+      ),
       preview,
     )
+    // A picture is seen; text is read; anything else has its facts above and no more.
+    if ((kind === "image" || kind === "svg") && source.media) {
+      reading(preview, {
+        load: () => source.media(e, kind),
+        draw: (url) => {
+          if (chosen !== e) return void invoke("media_close", { url }).catch(() => {})
+          thumb = url
+          const img = h("img", { class: "fdetails__picture", alt: "", src: url, draggable: "false" })
+          img.addEventListener("error", () => img.replaceWith(h("p", { class: "fdetails__note", text: t("This file cannot be shown here.") })), { once: true })
+          preview.append(img)
+        },
+      })
+      return
+    }
+    if (["audio", "video", "pdf", "model3d", "archive", "binary"].includes(kind)) return
     reading(preview, {
       load: () => source.preview(e),
       draw: (f) => {
@@ -364,7 +619,12 @@ function explorer(el, source) {
     if (dir === current || source.ask(dir) === source.ask(current ?? source.top())) return go(current ?? source.top())
     return Promise.resolve()
   }
-  return { go, refresh, changed, drawTree, current: () => current ?? source.top() }
+  /** The folder under a point of the window, where this pane shows one there; else the one listed. */
+  const folderAt = (x, y) => {
+    const hit = Number.isFinite(x) ? document.elementFromPoint(x, y)?.closest?.("[data-drop]") : null
+    return hit && el.pane.contains(hit) ? hit.dataset.drop : (current ?? source.top())
+  }
+  return { go, refresh, changed, drawTree, say, act, newIn, folderAt, current: () => current ?? source.top() }
 }
 
 // --- This computer ------------------------------------------------------------------------------
@@ -384,10 +644,100 @@ export function showLocal({ roots, root, fixed }) {
 
 const baseName = (p) => String(p).replace(/\/+$/, "").split("/").pop() || p
 
+/** What Rust says of several things moved, copied or deleted, as the explorer takes it. */
+const outcomes = (results) => ({ done: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).map((r) => ({ path: r.path, error: r.error || "" })) })
+
+/** This computer's tree under `root`, as an explorer's (and a folder dialog's) place. */
+function localSource(root) {
+  const where = t("This computer")
+  const read = (e) => invoke("local_read", { root, path: e.path })
+  const open = async (e) => {
+    try {
+      const f = await read(e)
+      const editable = f.writable && typeof f.text === "string"
+      return openViewer({
+        name: f.name,
+        path: `${f.root}/${f.path}`,
+        where,
+        kind: f.kind,
+        mime: f.mime,
+        text: f.text ?? undefined,
+        withheld: f.withheld,
+        size: f.size,
+        sha: f.sha,
+        media: () => invoke("media_open", { source: "local", kind: fileKind(f.name, f.kind), root, path: f.path }),
+        save: editable ? (text, { base, force }) => invoke("local_write", { root, path: f.path, text, base: base || null, force: !!force }) : undefined,
+        reload: () => open(e),
+      })
+    } catch (err) {
+      return openViewer({ name: e.name, path: e.path, where, error: why(err) })
+    }
+  }
+  return {
+    key: "local",
+    top: () => "",
+    ask: (path) => path || "",
+    parent: (path) => (String(path).includes("/") ? String(path).replace(/\/[^/]*$/, "") : ""),
+    rootName: () => baseName(root),
+    crumbs: (path) => {
+      const out = [[baseName(root), ""]]
+      let at = ""
+      for (const part of String(path).split("/").filter(Boolean)) {
+        at = at ? `${at}/${part}` : part
+        out.push([part, at])
+      }
+      return out
+    },
+    list: async (path) => {
+      const r = await invoke("local_list", { root, path })
+      if (!r || !Array.isArray(r.entries)) throw { detail: t("The server's answer could not be read.") }
+      return {
+        path: r.path ?? path,
+        entries: r.entries.map((e) => ({ ...e, updated_at: e.modified ? new Date(e.modified * 1000).toISOString() : null })),
+      }
+    },
+    preview: read,
+    media: (e, kind) => invoke("media_open", { source: "local", kind, root, path: e.path }),
+    open,
+    ops: {
+      mkdir: (dir, name) => invoke("local_make", { root, dir, name, folder: true }),
+      mkfile: (dir, name) => invoke("local_make", { root, dir, name, folder: false }),
+      rename: (e, name) => invoke("local_rename", { root, path: e.path, name }),
+      move: async (paths, to) => outcomes(await invoke("local_transfer", { root, paths, to, copy: false })),
+      copy: async (paths, to) => {
+        const results = await invoke("local_transfer", { root, paths, to, copy: true })
+        return { ...outcomes(results), copied: results.length === 1 && results[0].ok ? baseName(results[0].to || "") : "" }
+      },
+      remove: async (paths) => outcomes(await invoke("local_delete", { root, paths })),
+    },
+    // To the server: into a folder of the person's files there, chosen by walking to it.
+    acrossItems: (e) =>
+      isDir(e)
+        ? []
+        : [
+            {
+              label: t("Copy to the server…"),
+              run: async () => {
+                const dir = await pickFolder({ source: serverSource(), start: serverRoot, title: t("Copy to which folder?"), ok: t("Copy here") })
+                if (dir === null || dir === undefined) return
+                await localPane?.act(async () => {
+                  const r = await invoke("local_upload", { root, paths: [e.path], dir })
+                  if (r.sent) reloadServer(dir)
+                  return { quiet: true, done: r.sent, failed: (r.failed || []).map((f) => ({ path: f.name, error: f.error || "" })) }
+                }, t("Uploaded."))
+              },
+            },
+          ],
+  }
+}
+
 function renderLocal() {
   const head = clear($("local-where"))
-  const els = { crumbs: $("local-crumbs"), tree: $("local-tree"), list: $("local-list"), details: $("local-details") }
+  const els = { pane: $("pane-local"), crumbs: $("local-crumbs"), tree: $("local-tree"), list: $("local-list"), details: $("local-details"), status: $("local-status"), batch: $("local-batch") }
   $("pane-local").dataset.empty = String(!local.roots.length)
+  for (const id of ["local-mkdir", "local-mkfile"]) $(id).hidden = !local.roots.length
+  els.status.hidden = true
+  els.batch.hidden = true
   if (!local.roots.length) {
     clear(els.crumbs)
     clear(els.tree)
@@ -413,40 +763,7 @@ function renderLocal() {
       ),
     )
   }
-  const root = local.root
-  const where = t("This computer")
-  localPane = explorer(els, {
-    key: "local",
-    top: () => "",
-    ask: (path) => path || "",
-    rootName: () => baseName(root),
-    crumbs: (path) => {
-      const out = [[baseName(root), ""]]
-      let at = ""
-      for (const part of String(path).split("/").filter(Boolean)) {
-        at = at ? `${at}/${part}` : part
-        out.push([part, at])
-      }
-      return out
-    },
-    list: async (path) => {
-      const r = await invoke("local_list", { root, path })
-      if (!r || !Array.isArray(r.entries)) throw { detail: t("The server's answer could not be read.") }
-      return {
-        path: r.path ?? path,
-        entries: r.entries.map((e) => ({ ...e, updated_at: e.modified ? new Date(e.modified * 1000).toISOString() : null })),
-      }
-    },
-    preview: (e) => invoke("local_read", { root, path: e.path }),
-    open: async (e) => {
-      try {
-        const f = await invoke("local_read", { root, path: e.path })
-        openViewer({ name: f.name, path: `${f.root}/${f.path}`, where, text: f.text, withheld: f.withheld, size: f.size })
-      } catch (err) {
-        openViewer({ name: e.name, path: e.path, where, error: why(err) })
-      }
-    },
-  })
+  localPane = explorer(els, localSource(local.root))
   localPane.drawTree()
   localPane.go("")
 }
@@ -464,30 +781,32 @@ export async function readServer(path) {
 
 // The library's writes, as the person (each answers with the directory's listing, or a refusal
 // in the server's words):
-//   POST /files/upload?path=   multipart `files` (sent by Rust: `library_upload`, from the dialog)
+//   POST /files/upload?path=   multipart `files` (sent by Rust: `library_upload`, from the dialog,
+//                              and `library_upload_dropped`, the files dropped on the window)
 //   POST /files/mkdir          { path, name }
 //   POST /files/rename         { path, name }
+//   POST /files/move           { path, to }        POST /files/copy { path, to } -> + `copied`
+//   POST /files/batch          { op: move|copy|delete, paths, to? } -> { results, done, failed }
+//   PUT  /files/content        { path, text, base?, force? }: save; a new path makes the file
 //   DELETE /files?path=        to the trash, as on the web
+//   GET /files/trash · POST /files/restore { id } · DELETE /files/trash[?id=]
+//   GET /files/versions?path= · POST /files/versions/restore { path, version }
+// and, by Rust, to a place the person chooses in the system's dialog, written as they arrive:
+//   GET /files/raw?path=[&version=]   (`file_save_as`)       POST /files/zip { paths } (`files_zip_save`)
 
 let server = null // the explorer drawn now
 let serverRoot = "/" // the directory the server answered `/` with: `/` or the person's home
 
+const enc = encodeURIComponent
 const parentOf = (path) => path.replace(/\/[^/]*$/, "") || "/"
 const reloadServer = (dir) => server?.changed(dir)
+const serverSaid = (text, error = false) => server?.say(text, error)
 
-function serverSaid(text, error = false) {
-  const line = $("server-status")
-  line.hidden = !text
-  line.textContent = text || ""
-  line.className = `status${error ? " is-error" : ""}`
-  line.setAttribute("role", error ? "alert" : "status")
-}
-
-/** Into `dir`: files chosen in the system's dialog. */
-export async function uploadInto(dir) {
+/** Into `dir`: files chosen in the system's dialog, or -- `dropped` -- the ones just dropped on the window. */
+export async function uploadInto(dir, dropped = false) {
   serverSaid("")
   try {
-    const r = await invoke("library_upload", { dir, title: t("Upload") })
+    const r = dropped ? await invoke("library_upload_dropped", { dir }) : await invoke("library_upload", { dir, title: t("Upload") })
     if (r.failed?.length) serverSaid(r.failed.map((f) => `${f.name}: ${f.error}`).join("\n"), true)
     if (r.sent) await reloadServer(dir)
   } catch (err) {
@@ -495,61 +814,57 @@ export async function uploadInto(dir) {
   }
 }
 
-async function makeFolder(dir) {
-  const name = await ask({ title: t("New folder"), value: "", ok: t("Create"), cancel: t("Cancel") })
-  if (!name) return
-  try {
-    await post("/files/mkdir", { path: dir, name })
-    serverSaid("")
-    await reloadServer(dir)
-  } catch (err) {
-    serverSaid(why(err), true)
-  }
-}
-
-async function renameEntry(e) {
-  const name = await ask({ title: t("Rename"), value: e.name, ok: t("Rename"), cancel: t("Cancel") })
-  if (!name || name === e.name) return
-  try {
-    await post("/files/rename", { path: e.path, name })
-    serverSaid("")
-    await reloadServer(parentOf(e.path))
-  } catch (err) {
-    serverSaid(why(err), true)
-  }
-}
-
-async function deleteEntry(e) {
-  const yes = await ask({ title: t("Move to the trash"), text: t("Move “%(name)s” to the trash? It can be restored from there.", { name: e.name }), ok: t("Move to the trash"), cancel: t("Cancel"), danger: true })
-  if (!yes) return
-  try {
-    await del(`/files?path=${encodeURIComponent(e.path)}`)
-    serverSaid(t("Moved to the trash."))
-    await reloadServer(parentOf(e.path))
-  } catch (err) {
-    serverSaid(why(err), true)
-  }
-}
-
-/** What can be done to an entry of the server's tree: a mount (another store) is filled, never
- * renamed or deleted from here. A read-only place is refused by the server, in its words. */
-function serverActions(e) {
-  const items = []
-  if (isDir(e)) items.push({ label: t("Upload"), run: () => uploadInto(e.path) }, { label: t("New folder"), run: () => makeFolder(e.path) })
-  else items.push({ label: t("Open in the viewer"), run: () => openServerFile(e.path, e.name) })
-  if (e.kind !== "mount") items.push(null, { label: t("Rename"), run: () => renameEntry(e) }, { label: t("Delete"), danger: true, run: () => deleteEntry(e) })
-  return items
-}
-
-export function renderServer() {
+/** A download, to where the person chooses: said where it went, or why it did not. */
+async function saved(work) {
   serverSaid("")
-  const els = { crumbs: $("server-crumbs"), tree: $("server-tree"), list: $("server-list"), details: $("server-details") }
-  let first = true
-  server = explorer(els, {
+  try {
+    const r = await work()
+    if (r?.path) serverSaid(`${t("Saved.")} ${r.path}`)
+  } catch (err) {
+    serverSaid(why(err), true)
+  }
+}
+const downloadFile = (path, name, version = null) => saved(() => invoke("file_save_as", { path, name, version, title: t("Download") }))
+const downloadZip = (paths, name) => saved(() => invoke("files_zip_save", { paths, name: `${name || "files"}.zip`, title: t("Download as a zip") }))
+
+/** What the server says of several things at once (`POST /files/batch`), as the explorer takes it. */
+const batched = (r) => ({ done: Number(r?.done) || 0, failed: (r?.results || []).filter((x) => !x.ok).map((x) => ({ path: x.path, error: x.error || "" })) })
+
+function showVersions(e) {
+  const path = e.path
+  return versionsDialog({
+    name: e.name,
+    api: {
+      list: () => get(`/files/versions?path=${enc(path)}`),
+      restore: (version) => post("/files/versions/restore", { path, version }),
+      download: (version) => invoke("file_save_as", { path, name: e.name, version, title: t("Download") }),
+    },
+    changed: () => reloadServer(parentOf(path)),
+  })
+}
+
+function showTrash() {
+  return trashDialog({
+    api: {
+      list: () => get("/files/trash"),
+      restore: (id) => post("/files/restore", { id }),
+      remove: (id) => del(`/files/trash?id=${enc(id)}`),
+      empty: () => del("/files/trash"),
+    },
+    changed: () => server?.refresh(),
+  })
+}
+
+let firstListing = true
+
+/** The server's tree, as an explorer's (and a folder dialog's) place. */
+function serverSource() {
+  return {
     key: "server",
     top: () => serverRoot,
     // The top is asked as `/`, which is what the server opens a person at.
     ask: (path) => (!path || path === serverRoot ? "/" : path),
+    parent: parentOf,
     rootName: () => (serverRoot === "/" ? t("All files") : t("Home")),
     crumbs: (path) => {
       const out = [[serverRoot === "/" ? t("All files") : t("Home"), serverRoot]]
@@ -567,37 +882,109 @@ export function renderServer() {
       if (path === "/" && r.path && r.path !== serverRoot) {
         serverRoot = r.path
         // The top is known now: the tree and the crumbs start there.
-        if (first) queueMicrotask(() => server?.drawTree())
+        if (firstListing) queueMicrotask(() => server?.drawTree())
       }
-      first = false
+      firstListing = false
       return r
     },
     preview: (e) => readServer(e.path),
-    open: (e) => openServerFile(e.path, e.name),
-    actions: serverActions,
-  })
+    media: (e, kind) => invoke("media_open", { source: "server", kind, path: e.path }),
+    open: (e) => openServerFile(e.path, e.name, e),
+    ops: {
+      mkdir: (dir, name) => post("/files/mkdir", { path: dir, name }),
+      // A save to a path with no file makes one: an empty file of that name. A save to a path
+      // with a file would empty it, so the folder is read first and a taken name is refused here.
+      mkfile: async (dir, name) => {
+        if (name.includes("/")) throw { detail: t("A file needs a name without a slash.") }
+        const there = await get(SERVER_FILES.list(dir === serverRoot ? "/" : dir))
+        if ((there?.entries || []).some((e) => e.name === name)) throw { detail: t("There is already something called %(name)s here.", { name }) }
+        return api("PUT", "/files/content", { path: `${dir.replace(/\/$/, "")}/${name}`, text: "" })
+      },
+      rename: (e, name) => post("/files/rename", { path: e.path, name }),
+      move: async (paths, to) => (paths.length === 1 ? (await post("/files/move", { path: paths[0], to }), { done: 1, failed: [] }) : batched(await post("/files/batch", { op: "move", paths, to }))),
+      copy: async (paths, to) => {
+        if (paths.length > 1) return batched(await post("/files/batch", { op: "copy", paths, to }))
+        const r = await post("/files/copy", { path: paths[0], to })
+        return { done: 1, failed: [], copied: r?.copied?.name || "" }
+      },
+      remove: async (paths) => (paths.length === 1 ? (await del(`/files?path=${enc(paths[0])}`), { done: 1, failed: [] }) : batched(await post("/files/batch", { op: "delete", paths }))),
+    },
+    dirItems: (e) => [{ label: t("Upload"), run: () => uploadInto(e.path) }, ...(e.kind === "mount" ? [] : [{ label: t("Download as a zip"), run: () => downloadZip([e.path], e.name) }])],
+    fileItems: (e) => [
+      { label: t("Download"), details: true, run: () => downloadFile(e.path, e.name) },
+      { label: t("Versions"), run: () => showVersions(e) },
+    ],
+    // To this computer: into one of the agent's folders, chosen by walking to it.
+    acrossItems: (e) =>
+      isDir(e) || !local.root
+        ? []
+        : [
+            {
+              label: t("Copy to this computer…"),
+              run: async () => {
+                const root = local.root
+                const dir = await pickFolder({ source: localSource(root), start: "", title: t("Copy to which folder?"), ok: t("Copy here") })
+                if (dir === null || dir === undefined) return
+                serverSaid("")
+                try {
+                  const at = await invoke("local_download", { root, dir, path: e.path, name: e.name })
+                  serverSaid(t("Copied as %(name)s.", { name: baseName(at) }))
+                  localPane?.changed(dir)
+                } catch (err) {
+                  serverSaid(why(err), true)
+                }
+              },
+            },
+          ],
+    batchItems: (entries) => [{ label: t("Download as a zip"), run: () => downloadZip(entries.map((e) => e.path), entries.length === 1 ? entries[0].name : "") }],
+  }
+}
+
+export function renderServer() {
+  const els = { pane: $("pane-server"), crumbs: $("server-crumbs"), tree: $("server-tree"), list: $("server-list"), details: $("server-details"), status: $("server-status"), batch: $("server-batch") }
+  els.status.hidden = true
+  firstListing = true
+  server = explorer(els, serverSource())
   server.drawTree()
   return server.go(serverRoot)
 }
 
-/** A file in the server's tree, in the viewer: from the explorer and from a chat's outputs. */
-export async function openServerFile(path, name) {
+/**
+ * A file in the server's tree, in the viewer: from the explorer (`entry`: its row, which says
+ * its size and what it is) and from a chat's outputs. One the person may write is edited there.
+ */
+export async function openServerFile(path, name, entry) {
   const where = t("Server")
   try {
     const f = await readServer(path)
-    openViewer({
+    // The server's own word for what it is (its table and the viewer's are the same one).
+    const kind = fileKind(f.name || name, f.file_kind || f.kind || entry?.file_kind)
+    const at = f.path || path
+    const save = async (text, { base, force }) => {
+      const body = { path: at, text }
+      if (force) body.force = true
+      else if (base) body.base = base
+      return api("PUT", "/files/content", body)
+    }
+    return await openViewer({
       name: f.name || name,
-      path: f.path || path,
+      path: at,
       where,
       text: f.text,
-      // The server's own kind and language: its table and the viewer's are the same one.
-      kind: ["markdown", "code", "text", "html"].includes(f.kind) ? f.kind : undefined,
+      kind,
       language: f.language || undefined,
+      mime: f.mime || entry?.mime || "",
       withheld: f.withheld,
       size: f.size,
+      sha: f.sha,
+      media: () => invoke("media_open", { source: "server", kind, path: at }),
+      download: () => downloadFile(at, f.name || name),
+      // Only where the server says the person may write it (a server before that says nothing).
+      save: f.writable === true && !f.withheld ? save : undefined,
+      reload: () => openServerFile(path, name, entry),
     })
   } catch (err) {
-    openViewer({ name, path, where, error: why(err) })
+    return openViewer({ name, path, where, error: why(err) })
   }
 }
 
@@ -616,19 +1003,44 @@ export function showFilesTab(which) {
   }
 }
 
+/** Whether the server's files are what the window shows now: where dropped files are uploaded. */
+const serverShown = () => !$("page-files").hidden && tab === "server" && !!server
+
 export function initExplorer() {
   const tabBtn = (which, ico, label) =>
     h("button", { type: "button", role: "tab", class: "tabs__tab", dataset: { tab: which }, "aria-selected": String(which === tab), onclick: () => showFilesTab(which) }, icon(ico), h("span", { text: label }))
   $("files-tabs").replaceChildren(tabBtn("local", ICONS.folder, t("This computer")), tabBtn("server", ICONS.file, t("Server")))
-  $("server-refresh").replaceChildren(icon(ICONS.refresh))
-  $("server-refresh").addEventListener("click", () => {
+  const tool = (id, ico, run) => {
+    $(id).replaceChildren(icon(ico))
+    $(id).addEventListener("click", run)
+  }
+  const here = () => server?.current() ?? serverRoot
+  tool("server-refresh", ICONS.refresh, () => {
     serverSaid("")
     return server ? server.refresh() : renderServer()
   })
-  $("server-upload").replaceChildren(icon(ICONS.send))
-  $("server-upload").addEventListener("click", () => uploadInto(server?.current() ?? serverRoot))
-  $("server-mkdir").replaceChildren(icon(ICONS.folder))
-  $("server-mkdir").addEventListener("click", () => makeFolder(server?.current() ?? serverRoot))
-  $("local-refresh").replaceChildren(icon(ICONS.refresh))
-  $("local-refresh").addEventListener("click", () => (localPane ? localPane.refresh() : renderLocal()))
+  tool("server-upload", ICONS.send, () => uploadInto(here()))
+  tool("server-mkdir", ICONS.folder, () => server?.newIn(here(), true))
+  tool("server-mkfile", ICONS.fileText, () => server?.newIn(here(), false))
+  tool("server-trash", ICONS.trash, () => showTrash())
+  tool("local-refresh", ICONS.refresh, () => (localPane ? localPane.refresh() : renderLocal()))
+  tool("local-mkdir", ICONS.folder, () => localPane?.newIn(localPane.current(), true))
+  tool("local-mkfile", ICONS.fileText, () => localPane?.newIn(localPane.current(), false))
+  // Files dropped on the window while the server's files show are uploaded: into the folder
+  // they were dropped on, where that is one, else into the folder listed. Rust holds the drop
+  // and says where it landed; the page never names a path on this computer.
+  let at = null
+  listen("drop-at", (e) => {
+    at = e.payload && typeof e.payload === "object" ? e.payload : null
+  })
+  listen("drag", (e) => {
+    $("pane-server").dataset.drag = String(!!e.payload && serverShown())
+  })
+  listen("drop", () => {
+    $("pane-server").dataset.drag = "false"
+    if (!serverShown()) return
+    const dir = server.folderAt(Number(at?.x), Number(at?.y))
+    at = null
+    uploadInto(dir, true)
+  })
 }

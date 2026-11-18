@@ -754,6 +754,146 @@ pub fn upload_to_library(
     send_file(app, token, &path, "files", name, bytes)
 }
 
+// --- The person's files, as bytes --------------------------------------------------------------
+//
+// A download is written to disk as it arrives and never held whole: not in this process, and
+// not in the page, which is only told where it went. What a viewer plays or draws is asked for a
+// piece at a time (`raw_part`), with the app's token, by the media scheme (`media.rs`).
+
+/// `/files/raw?path=…` for a file in the server's tree: all of it, or one version, as a download
+/// or -- `inline` -- under its own type where the server allows that (a picture, sound, video).
+pub fn raw_path(path: &str, version: Option<&str>, inline: bool) -> Result<String, ApiError> {
+    if !path.starts_with('/') || path.chars().any(|c| c.is_control()) {
+        return Err(ApiError::new(400, format!("Not a file: {path}")));
+    }
+    let mut out = format!("/files/raw?path={}", crate::terminal::encode(path));
+    if let Some(version) = version {
+        let plain = !version.is_empty()
+            && version.len() <= 128
+            && version
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !plain {
+            return Err(ApiError::new(400, format!("Not a version: {version}")));
+        }
+        out.push_str(&format!("&version={version}"));
+    }
+    if inline {
+        out.push_str("&inline=1");
+    }
+    Ok(out)
+}
+
+/// Where a download is written until it is whole: beside where it is going.
+fn part_of(dest: &Path) -> PathBuf {
+    let mut name = dest
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".part");
+    dest.with_file_name(name)
+}
+
+/// Write an answer's body to `dest` as it arrives; how many bytes. A download that breaks off
+/// leaves nothing behind: it is written beside `dest` and takes its name only once whole.
+fn save_body(res: ureq::Response, dest: &Path) -> Result<u64, ApiError> {
+    let part = part_of(dest);
+    let written = fs::File::create(&part).and_then(|mut file| {
+        let n = std::io::copy(&mut res.into_reader(), &mut file)?;
+        file.flush()?;
+        Ok(n)
+    });
+    written
+        .and_then(|n| fs::rename(&part, dest).map(|_| n))
+        .map_err(|e| {
+            let _ = fs::remove_file(&part);
+            ApiError::new(0, format!("The file could not be saved: {e}"))
+        })
+}
+
+/// A file of the server's tree (or one version of it), written to `dest`.
+pub fn download(
+    app: &str,
+    token: &str,
+    path: &str,
+    version: Option<&str>,
+    dest: &Path,
+) -> Result<u64, ApiError> {
+    let raw = raw_path(path, version, false)?;
+    let res = agent(Duration::from_secs(120))
+        .get(&format!("{app}{}", checked_path(&raw)?))
+        .set("authorization", &format!("Bearer {token}"))
+        .call()?;
+    save_body(res, dest)
+}
+
+/// The chosen files and folders as one zip (`POST /files/zip`), written to `dest`. More than
+/// the instance allows is its 413, in its words.
+pub fn download_zip(
+    app: &str,
+    token: &str,
+    paths: &[String],
+    dest: &Path,
+) -> Result<u64, ApiError> {
+    let res = agent(Duration::from_secs(300))
+        .post(&format!("{app}/files/zip"))
+        .set("authorization", &format!("Bearer {token}"))
+        .send_json(serde_json::json!({ "paths": paths }))?;
+    save_body(res, dest)
+}
+
+/// A piece of a file as the server answered it: 200 (all of it) or 206 (the range asked for).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Part {
+    pub status: u16,
+    /// The media type, lower case, without parameters.
+    pub kind: String,
+    /// `Content-Range`, on a 206.
+    pub range: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+/// `raw` (from `raw_path`), or the `range` of it. Not read past `limit`: a longer answer is
+/// refused, not cut. A range past the end is the server's 416.
+pub fn raw_part(
+    app: &str,
+    token: &str,
+    raw: &str,
+    range: Option<&str>,
+    limit: u64,
+) -> Result<Part, ApiError> {
+    let mut req = agent(Duration::from_secs(60))
+        .get(&format!("{app}{}", checked_path(raw)?))
+        .set("authorization", &format!("Bearer {token}"));
+    if let Some(range) = range {
+        req = req.set("range", range);
+    }
+    let res = req.call()?;
+    let status = res.status();
+    let kind = res
+        .content_type()
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let range = res.header("content-range").map(str::to_string);
+    let mut bytes = Vec::new();
+    res.into_reader()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| ApiError::new(0, format!("The server's answer could not be read: {e}")))?;
+    if bytes.len() as u64 > limit {
+        return Err(ApiError::new(413, "The file is too large to show here."));
+    }
+    Ok(Part {
+        status,
+        kind,
+        range,
+        bytes,
+    })
+}
+
 // --- Voice and pictures: the OpenAI-compatible routes of `/v1`, under the `models` scope ------------
 
 /// The most a recording may be here: the server's own limit is 25 MB.
@@ -1192,6 +1332,33 @@ pub fn stream(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_files_bytes_are_asked_for_by_an_encoded_path() {
+        assert_eq!(
+            raw_path("/home/frodo/a b&c.png", None, true).unwrap(),
+            "/files/raw?path=%2Fhome%2Ffrodo%2Fa%20b%26c.png&inline=1"
+        );
+        assert_eq!(
+            raw_path("/home/frodo/lembas.md", Some("ver2"), false).unwrap(),
+            "/files/raw?path=%2Fhome%2Ffrodo%2Flembas.md&version=ver2"
+        );
+        // What is built is a path the app's door takes, whatever the file is called.
+        for name in ["/a/../b", "/a?x=1#y", "/a\\b", "/x y"] {
+            assert!(
+                checked_path(&raw_path(name, None, false).unwrap()).is_ok(),
+                "{name}"
+            );
+        }
+        assert!(raw_path("relative.md", None, false).is_err());
+        assert!(raw_path("/a\nb", None, false).is_err());
+        assert!(raw_path("/a", Some("v&inline=1"), false).is_err());
+        assert!(raw_path("/a", Some(""), false).is_err());
+        assert_eq!(
+            part_of(Path::new("/tmp/waybread.zip")),
+            Path::new("/tmp/waybread.zip.part")
+        );
+    }
 
     fn two_oh() -> Value {
         json!({

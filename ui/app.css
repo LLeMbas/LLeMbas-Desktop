@@ -1007,10 +1007,15 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* Its head, a line for what is so and what can be done (hidden when there is neither), and
+     the file: each on a row of its own by name, so a hidden line moves nothing. */
+  grid-template-rows: auto auto minmax(0, 1fr);
   border-left: var(--border-w) solid var(--border);
   background: var(--bg);
 }
+.viewer > .viewer__head { grid-row: 1; }
+.viewer > .viewer__bar { grid-row: 2; }
+.viewer > .viewer__body { grid-row: 3; }
 .viewer__head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto var(--control-h-sm);
@@ -1042,6 +1047,43 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .viewer__frame { width: 100%; height: 100%; border: 0; background: var(--surface); }
 .viewer__note { padding: var(--sp-4); font-size: var(--text-sm); color: var(--ink-muted); }
 .viewer__note.is-error { color: var(--warning); }
+/* What is so on the left, taking the room there is; the buttons after it, each its own width.
+   Too narrow for both, the buttons go under the words. */
+.viewer__bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); padding: var(--sp-1) var(--sp-3); border-bottom: var(--border-w) solid var(--border); background: var(--surface); }
+.viewer__bar[hidden] { display: none; }
+.viewer__bar.is-conflict { background: var(--warning-soft); }
+.viewer__said { flex: 1 1 12rem; min-width: 0; font-size: var(--text-sm); color: var(--ink-muted); overflow-wrap: anywhere; }
+.viewer__said.is-error { color: var(--warning); }
+/* A picture, sound, video: centred in the room there is, never larger than it. */
+.viewer__media { min-width: 0; min-height: 0; display: grid; place-items: center; overflow: auto; padding: var(--sp-4); }
+.viewer__image { display: block; max-width: 100%; max-height: 100%; object-fit: contain; background: var(--surface); }
+.viewer__video { display: block; max-width: 100%; max-height: 100%; background: var(--code-bg); }
+.viewer__audio { display: block; width: min(100%, var(--w-dialog)); }
+/* A table: the note about its length, then the table in a scroller of its own, both ways. */
+.viewer__table { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.viewer__cap { margin: 0; padding: var(--sp-2) var(--sp-4); font-size: var(--text-xs); color: var(--ink-muted); }
+.vtable__scroll { grid-row: 2; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.vtable { border-collapse: collapse; font: var(--text-xs) / var(--leading-normal) var(--font-mono); }
+.vtable th, .vtable td { max-width: 24rem; padding: var(--sp-1) var(--sp-3); text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; border: var(--border-w) solid var(--border); }
+.vtable th { position: sticky; top: 0; font-weight: 600; color: var(--ink); background: var(--surface); }
+/* A notebook: its cells one under another, each the same two tracks -- the count, the cell. */
+.viewer__nb { min-width: 0; overflow: auto; display: grid; align-content: start; gap: var(--sp-3); padding: var(--sp-4); }
+.nbcell { display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }
+.nbcell > * { grid-column: 2; min-width: 0; }
+.nbcell > .nbcell__n { grid-column: 1; grid-row: 1; font: var(--text-xs) / var(--leading-normal) var(--font-mono); color: var(--ink-faint); text-align: right; }
+.nbcell__words, .nbcell__code, .nbcell__out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.nbcell__words { font: var(--text-sm) / var(--leading-normal) var(--font-body); color: var(--ink); }
+.nbcell__code { grid-row: 1; padding: var(--sp-2) var(--sp-3); font: var(--text-xs) / var(--leading-normal) var(--font-mono); background: var(--code-bg); border: var(--border-w) solid var(--code-border); border-radius: var(--radius-sm); }
+.nbcell__outs { display: grid; gap: var(--sp-1); }
+.nbcell__out { font: var(--text-xs) / var(--leading-normal) var(--font-mono); color: var(--ink-muted); }
+.nbcell__out.is-error { color: var(--warning); }
+.nbcell__picture { display: block; max-width: 100%; height: auto; background: var(--surface); }
+/* A file that is not drawn: what it is, and a way to save it. */
+.viewer__facts { display: grid; align-content: start; justify-items: start; gap: var(--sp-3); padding: var(--sp-4); overflow: auto; }
+.viewer__facts .viewer__note { padding: 0; }
+.viewer__facts-icon { display: inline-flex; color: var(--ink-faint); }
+.viewer__facts-icon .icon { width: 24px; height: 24px; }
+.viewer__do { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 
 /* --- The activity panel -------------------------------------------------------------------------
    Beside the chat, the inspector's width; while the viewer is open too, the viewer goes over the
@@ -1678,10 +1720,11 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
    are the way up), then the type and date columns. */
 .page__body.files { display: grid; grid-template-rows: minmax(0, 1fr); padding: 0; overflow: hidden; }
 .page__body.files > * { max-width: none; margin: 0; }
-.fx { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; container: fx / inline-size; }
+.fx { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); min-width: 0; min-height: 0; container: fx / inline-size; }
 .fx > .fx__bar { grid-row: 1; }
 .fx > .fx__status { grid-row: 2; }
-.fx > .fx__panes { grid-row: 3; }
+.fx > .fx__batch { grid-row: 3; }
+.fx > .fx__panes { grid-row: 4; }
 .fx[hidden] { display: none; }
 .fx__bar {
   display: grid;
@@ -1700,6 +1743,19 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .fx__tools { grid-area: tools; display: flex; align-items: center; gap: var(--sp-1); }
 .fx__status { margin: 0; padding: var(--sp-2) var(--sp-4); border-bottom: var(--border-w) solid var(--border); white-space: pre-line; }
 .fx__status[hidden] { display: none; }
+.fx__status.is-error { color: var(--warning); }
+/* What is ticked: how many, then what can be done to them. The buttons wrap under the count
+   where the pane is narrow; nothing is cut off and nothing scrolls sideways. */
+.fx__batch { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); padding: var(--sp-2) var(--sp-4); border-bottom: var(--border-w) solid var(--border); background: var(--surface-active); }
+.fx__batch[hidden] { display: none; }
+.fx__count { font: 600 var(--text-sm) var(--font-ui); white-space: nowrap; }
+.fx__batch-do { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
+/* Files from the computer held over the server's pane: this is where they would land. */
+.fx[data-drag="true"] .fx__list { outline: var(--outline-w) dashed var(--accent); outline-offset: calc(-1 * var(--outline-w)); }
+/* A row being dragged: its name follows the pointer, and the folder under it says it would take it. */
+.fx.is-dragging { user-select: none; cursor: grabbing; }
+.fdrag { position: fixed; top: 0; left: 0; z-index: var(--z-toast); max-width: 16rem; padding: var(--sp-1) var(--sp-3); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--text-xs) var(--font-ui); color: var(--ink); background: var(--surface-raised); border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); pointer-events: none; }
+.frow.is-drop, .ftree__row.is-drop, .crumbs__link.is-drop { color: var(--ink); background: var(--accent-soft); outline: var(--outline-w) solid var(--accent); outline-offset: calc(-1 * var(--outline-w)); }
 .pane__pick { width: 100%; height: var(--control-h-sm); }
 
 .crumbs {
@@ -1765,9 +1821,13 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 /* The list. */
 .frows {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(3.5rem, auto) minmax(4.5rem, auto) minmax(6.5rem, auto) var(--control-h-sm);
+  /* A tick, the name, the type, the size, the date, the menu: the same six tracks on every row,
+     the head's included. The name's is the one that gives. */
+  grid-template-columns: 1rem minmax(0, 1fr) minmax(3.5rem, auto) minmax(4.5rem, auto) minmax(6.5rem, auto) var(--control-h-sm);
   column-gap: var(--sp-4);
 }
+.frow__tick { display: grid; place-items: center; width: 1rem; }
+.frow__pick { position: relative; z-index: 1; width: 1rem; height: 1rem; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .frow {
   position: relative;
   display: grid;
@@ -1815,7 +1875,8 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .frow__name .badge, .frow__actions { position: relative; z-index: 1; }
 .frow__icon { display: inline-flex; color: var(--ink-muted); }
 .frow__icon--dir, .frow__icon--mount { color: var(--accent); }
-.frow__icon--code, .frow__icon--html { color: var(--leaf); }
+.frow__icon--code, .frow__icon--html, .frow__icon--notebook { color: var(--leaf); }
+.frow__icon--image, .frow__icon--svg, .frow__icon--audio, .frow__icon--video { color: var(--accent-hover); }
 .frow__label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .frow__type { font: var(--text-xs) var(--font-mono); color: var(--ink-faint); white-space: nowrap; }
 .frow__size, .frow__when { font-size: var(--text-sm); color: var(--ink-muted); white-space: nowrap; text-align: right; }
@@ -1841,6 +1902,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .fdetails__preview { min-width: 0; }
 .fdetails__text { margin: 0; max-height: 24rem; overflow: auto; padding: var(--sp-3); font: var(--text-xs) / var(--leading-normal) var(--font-mono); white-space: pre; color: var(--ink); background: var(--bg); border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); }
 .fdetails__note { font-size: var(--text-sm); color: var(--ink-muted); }
+.fdetails__picture { display: block; max-width: 100%; max-height: 24rem; object-fit: contain; background: var(--bg); border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); }
 
 /* Loading, still waiting, refused: the words, then Try again on the same line when it fits. */
 .fnote { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-1); padding-inline-start: calc(var(--sp-1) + var(--depth, 0) * var(--sp-3)); font-size: var(--text-sm); color: var(--ink-muted); }
@@ -1863,11 +1925,53 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 /* A list narrower than its columns keeps the name and the size; the type and date go. */
 @container fxlist (max-width: 28rem) {
-  .frows { grid-template-columns: minmax(0, 1fr) auto var(--control-h-sm); column-gap: var(--sp-2); }
+  .frows { grid-template-columns: 1rem minmax(0, 1fr) auto var(--control-h-sm); column-gap: var(--sp-2); }
   .frows .frow__type, .frows .frow__when { display: none; }
 }
 @media (max-width: 48rem) {
   .frow, .frow__open { min-height: var(--tap-min); }
+}
+@container fx (max-width: 40rem) {
+  .fx__batch { padding: var(--sp-2) var(--sp-3); }
+}
+
+/* Choosing a folder (filedialogs.js): where the listing is, the folders, the one that would be
+   chosen, the two buttons. A row is three tracks -- icon, name, chevron -- on every row. */
+.fpick__where { padding: var(--sp-1) 0; }
+.fpick__list, .ftrash__list, .fvers__list { list-style: none; margin: 0; padding: var(--sp-1) 0; height: min(var(--h-list), 45vh); overflow-y: auto; border: var(--border-w) solid var(--border); border-radius: var(--radius-lg); }
+.fpick__list .fnote, .ftrash__list .fnote, .fvers__list .fnote { padding: var(--sp-2) var(--sp-3); }
+.fpick__row { display: grid; grid-template-columns: 1rem minmax(0, 1fr) 1rem; gap: var(--sp-2); align-items: center; width: 100%; min-height: var(--row-h); padding: 0 var(--sp-3); font: var(--text-sm) var(--font-body); text-align: left; color: var(--ink); background: transparent; border: 0; cursor: pointer; }
+.fpick__row:hover, .fpick__row:focus-visible { background: var(--surface-hover); outline: none; }
+.fpick__row:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.fpick__row .icon { color: var(--ink-faint); }
+.fpick__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fpick__said { display: grid; grid-template-columns: 1rem minmax(0, 1fr); gap: var(--sp-2); align-items: center; margin: 0; color: var(--ink-muted); }
+.fpick__chosen { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--text-sm) var(--font-mono); }
+/* The trash and a file's versions: one grid for the list and every row a subgrid of it, so the
+   buttons stand in columns whatever the names and dates are. */
+.ftrash__list { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-content: start; column-gap: var(--sp-3); }
+.fvers__list { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto auto; align-content: start; column-gap: var(--sp-3); }
+.ftrash__list .fnote, .fvers__list .fnote { grid-column: 1 / -1; }
+.ftrash__row, .fvers__row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-height: var(--row-h); padding: var(--sp-1) var(--sp-3); border-bottom: var(--border-w) solid var(--border); }
+.ftrash__id { display: grid; min-width: 0; }
+.ftrash__name, .ftrash__path, .fvers__when, .fvers__by { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ftrash__name { font-size: var(--text-sm); }
+.ftrash__path { font: var(--text-xs) var(--font-mono); color: var(--ink-faint); }
+.ftrash__when, .fvers__size { font-size: var(--text-xs); color: var(--ink-muted); white-space: nowrap; text-align: right; }
+.ftrash__said[hidden], .fvers__said[hidden] { display: none; }
+.ftrash__said.is-error, .fvers__said.is-error { color: var(--warning); }
+.fvers__when { font-size: var(--text-sm); }
+.fvers__by { font-size: var(--text-xs); color: var(--ink-muted); }
+.fvers__row.is-current .fvers__when { font-weight: 600; }
+.fvers__name { margin-inline-start: var(--sp-2); font-weight: 400; color: var(--ink-muted); overflow-wrap: anywhere; }
+.dialog__actions--one { grid-template-columns: minmax(0, 1fr); }
+/* A narrow window: a row's buttons go under what they are for, each half the width. */
+@media (max-width: 36rem) {
+  .ftrash__list { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ftrash__id, .ftrash__when { grid-column: 1 / -1; text-align: left; }
+  .fvers__list { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .fvers__when, .fvers__gap { grid-column: 1 / -1; }
+  .fvers__gap { display: none; }
 }
 
 /* An empty page: an icon, a heading, a sentence, centred. */

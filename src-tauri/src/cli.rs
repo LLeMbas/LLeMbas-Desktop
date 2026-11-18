@@ -101,6 +101,11 @@ pub fn state_dir() -> PathBuf {
     dir("XDG_STATE_HOME", ".local/state")
 }
 
+/// Where the CLI keeps its data (sessions, memory): never written from here (`files.rs`).
+pub fn data_dir() -> PathBuf {
+    dir("XDG_DATA_HOME", ".local/share")
+}
+
 /// Whether this computer is signed in to `server` (a base from `settings::normalise`).
 pub fn linked_to(server: &str) -> bool {
     linked_in(&config_dir(), server)

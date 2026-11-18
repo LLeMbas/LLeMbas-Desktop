@@ -36,6 +36,31 @@ const RUNNER_POLICY = /pub const POLICY: &str = "([^"]+)";/.exec(readFileSync(jo
 // what the frame and the policy must hold to is that it does not run.
 const SEALED = "http://sealed.test"
 const PAGE_POLICY = /pub const PAGE_POLICY: &str = "([^"]+)";/.exec(readFileSync(join(HERE, "..", "..", "src-tauri", "src", "sealed.rs"), "utf8"))[1]
+// Where the tests serve what the viewer draws and plays (`media_open` in the mock), and what:
+// a one-pixel PNG, an SVG that would run a script were it ever a document, a tenth of a second of
+// silence.
+const MEDIA = "http://media.test"
+const MEDIA_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64")
+const MEDIA_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" onload="document.title='an svg ran'"><script>document.title = "an svg ran"</script><rect width="40" height="20" fill="#888"/></svg>`
+const MEDIA_WAV = (() => {
+  const rate = 8000
+  const data = Buffer.alloc(rate / 10)
+  const head = Buffer.alloc(44)
+  head.write("RIFF", 0)
+  head.writeUInt32LE(36 + data.length, 4)
+  head.write("WAVEfmt ", 8)
+  head.writeUInt32LE(16, 16)
+  head.writeUInt16LE(1, 20)
+  head.writeUInt16LE(1, 22)
+  head.writeUInt32LE(rate, 24)
+  head.writeUInt32LE(rate, 28)
+  head.writeUInt16LE(1, 32)
+  head.writeUInt16LE(8, 34)
+  head.write("data", 36)
+  head.writeUInt32LE(data.length, 40)
+  data.fill(128)
+  return Buffer.concat([head, data])
+})()
 const RUNNER_TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".wasm": "application/wasm", ".zip": "application/zip", ".json": "application/json" }
 
 function playwright() {
@@ -233,6 +258,15 @@ async function page(config, { width = 1280, height = 860, clock = false, wait = 
   await context.route(`${SEALED}/**`, (route) => {
     const html = `${fixture("page").html}<script>document.title = "a script ran"; document.body.append("a script ran")</script>`
     return route.fulfill({ status: 200, headers: { "Content-Security-Policy": PAGE_POLICY, "X-Content-Type-Options": "nosniff" }, contentType: "text/html; charset=utf-8", body: html })
+  })
+  // What the viewer draws and plays, as Rust's media scheme would serve it: by the kind and the
+  // path the page asked `media_open` for. A name with "broken" in it is not served at all.
+  await context.route(`${MEDIA}/**`, (route) => {
+    const [, kind, name] = new URL(route.request().url()).pathname.split("/")
+    if (decodeURIComponent(name || "").includes("broken")) return route.fulfill({ status: 404, body: "" })
+    if (kind === "image") return route.fulfill({ status: 200, contentType: "image/png", body: MEDIA_PNG })
+    if (kind === "svg") return route.fulfill({ status: 200, contentType: "image/svg+xml", body: MEDIA_SVG })
+    return route.fulfill({ status: 200, contentType: "audio/wav", body: MEDIA_WAV })
   })
   await context.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname
@@ -2132,7 +2166,7 @@ test("FX: wide, the server's files are a tree, a list in columns and the chosen 
   assert.equal(await p.getAttribute("#server-tree .ftree__root", "aria-current"), "true")
   assert.deepEqual(await p.$$eval("#server-tree li[data-path]", (l) => l.map((x) => x.dataset.path)), ["/home", "/shared", "/skills"])
   // The columns, and the kinds' words.
-  assert.deepEqual(await p.$$eval("#server-list .frow--head [role=columnheader]", (l) => l.map((x) => x.textContent)), ["Name", "Type", "Size", "Changed", "Actions"])
+  assert.deepEqual(await p.$$eval("#server-list .frow--head [role=columnheader]", (l) => l.map((x) => x.textContent)), ["", "Name", "Type", "Size", "Changed", "Actions"])
   assert.equal(await p.textContent('#server-list .frow[data-path="/shared"] .frow__type'), "mount")
   assert.equal(await p.textContent('#server-list .frow[data-path="/home"] .frow__type'), "folder")
   assert.equal(await p.textContent('#server-list .frow[data-path="/test.py"] .frow__type'), "py")
@@ -5917,6 +5951,718 @@ test("A9: a chat on the second of two connections serving one id says that conne
   await p.click("#sched-save")
   await p.waitForFunction(() => window.__mock.api("PATCH", "/schedules/sched3").length === 1)
   assert.equal((await p.evaluate(() => window.__mock.api("PATCH", "/schedules/sched3")))[0].args.body.model, "plan/qwen")
+  assert.deepEqual(p.errors, [])
+})
+
+// --- F4: Files as a file manager ---------------------------------------------------------------
+//
+// The server's tab to parity with the web's explorer, on the routes the server gained after
+// 2.0.0-beta.15 (App-API, "Files"): copy, save with its 409, raw bytes, the trash, versions,
+// batch, zip. The shapes below are its contract fixtures of that day -- files_listing (with
+// `file_kind`), file_content (`sha`, `writable`), files_copied, file_save_conflict, files_trash,
+// files_restored, files_trash_emptied, file_versions, files_batch -- written out here because
+// the fixtures this repository pins are an older release's; they move with the pin.
+
+const HOME = "/home/frodo"
+const fileRow = (name, file_kind, mime, size = 27) => ({ name, path: `${HOME}/${name}`, kind: "file", file_kind, size, mime, updated_at: STAMP })
+const F4_HOME = {
+  path: HOME,
+  parent: "/home",
+  entries: [
+    { name: "recipes", path: `${HOME}/recipes`, kind: "dir", file_kind: null, size: 0, mime: "", updated_at: STAMP },
+    fileRow("lembas.md", "markdown", "text/markdown"),
+    fileRow("map.png", "image", "image/png", 2048),
+  ],
+}
+const SHA = "ab".repeat(32)
+const F4_CONTENT = { path: `${HOME}/lembas.md`, name: "lembas.md", size: 27, mime: "text/markdown", kind: "markdown", file_kind: "markdown", level: "commit", writable: true, language: "", sha: SHA, text: "# Lembas\n\nWrap it in a leaf.\n" }
+const F4_CONFLICT = { status: 409, detail: "This file changed since you opened it. Reload it, or save anyway." }
+const F4_TRASH = { items: [{ id: "node5", name: "old.md", path: `${HOME}/old.md`, kind: "file", size: 12, trashed_at: STAMP }] }
+const F4_VERSIONS = {
+  path: `${HOME}/lembas.md`,
+  sha: SHA,
+  versions: [
+    { id: "ver2", sha: SHA, size: 27, at: STAMP, by: "Frodo", chat_id: "chat1", current: true },
+    { id: "ver1", sha: "cd".repeat(32), size: 20, at: STAMP, by: "Frodo", chat_id: null, current: false },
+  ],
+}
+const F4_BATCH = { op: "move", to: `${HOME}/recipes`, atomic: false, results: [{ path: `${HOME}/lembas.md`, ok: true, to: `${HOME}/recipes/lembas.md` }, { path: `${HOME}/map.png`, ok: false, error: `Read-only: ${HOME}/map.png can be read in this session but not changed.` }], done: 1, failed: 1 }
+const q = (path) => `?path=${encodeURIComponent(path)}`
+
+function f4(over = {}, commands = {}, extra = {}) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /files": F4_HOME,
+      [`GET /files${q(`${HOME}/recipes`)}`]: { path: `${HOME}/recipes`, parent: HOME, entries: [{ name: "breads", path: `${HOME}/recipes/breads`, kind: "dir", file_kind: null, size: 0, mime: "", updated_at: STAMP }] },
+      [`GET /files${q(`${HOME}/recipes/breads`)}`]: { path: `${HOME}/recipes/breads`, parent: `${HOME}/recipes`, entries: [] },
+      "GET /files/content": F4_CONTENT,
+      ...over,
+    }),
+    commands: {
+      local_list: { root: "/home/dev/project", path: "", more: false, entries: [{ name: "src", path: "src", kind: "dir", size: 0, modified: 1767323045, file_kind: null }, { name: "README.md", path: "README.md", kind: "file", size: 10, modified: 1767323045, file_kind: "markdown" }, { name: "map.png", path: "map.png", kind: "file", size: 70, modified: 1767323045, file_kind: "image" }] },
+      local_read: { root: "/home/dev/project", path: "README.md", name: "README.md", size: 10, text: "# Project\n", withheld: null, kind: "markdown", mime: "text/markdown", sha: SHA, writable: true },
+      ...commands,
+    },
+    streams: {},
+    ...extra,
+  }
+}
+
+const serverRow = (name) => `#server-list .frow[data-path="${HOME}/${name}"]`
+const rowMenu = async (p, sel, item) => {
+  await p.click(`${sel} .frow__more`)
+  await p.locator(".menu .menu__item", { hasText: new RegExp(`^${item.replace(/[.…]/g, "\\$&")}$`) }).click()
+}
+const statusSays = (p, id, text) => p.waitForFunction(([i, want]) => document.getElementById(i).textContent === want && !document.getElementById(i).hidden, [id, text])
+const callsOf = (p, cmd) => p.evaluate((c) => window.__mock.calls.filter((x) => x.cmd === c).map((x) => x.args), cmd)
+const bodies = (p, method, path) => p.evaluate(([m, at]) => window.__mock.api(m, at).map((c) => c.args.body), [method, path])
+
+test("F4: Move and Copy to… walk to the folder in a dialog -- no path is typed -- and say how it went", async () => {
+  const p = await page(f4({ "POST /files/move": F4_HOME, "POST /files/copy": { ...F4_HOME, copied: fileRow("lembas (2).md", "markdown", "text/markdown") } }))
+  await serverPane(p)
+  await rowMenu(p, serverRow("lembas.md"), "Move")
+  await p.waitForSelector("dialog[open] .fpick__row")
+  assert.equal(await p.textContent("dialog[open] .dialog__title"), "Move to which folder?")
+  assert.equal(await p.locator("dialog[open] input").count(), 0, "there is nowhere to type a path")
+  // It opens where the list is, and names what would be chosen; a folder is entered with a click.
+  assert.equal(await p.textContent("dialog[open] .fpick__chosen"), "Home")
+  await p.click(`dialog[open] .fpick__row[data-path="${HOME}/recipes"]`)
+  await p.waitForSelector(`dialog[open] .fpick__row[data-path="${HOME}/recipes/breads"]`)
+  assert.equal(await p.textContent("dialog[open] .fpick__chosen"), "Home / recipes")
+  await p.click(`dialog[open] .fpick__row[data-path="${HOME}/recipes/breads"]`)
+  await p.waitForFunction(() => document.querySelector("dialog[open] .fpick__chosen").textContent === "Home / recipes / breads")
+  assert.match(await p.textContent("dialog[open] .fpick__list"), /No directories here\./)
+  // Back up through the crumbs, and chosen with the button.
+  await p.locator("dialog[open] .crumbs__link", { hasText: "recipes" }).click()
+  await p.waitForFunction(() => document.querySelector("dialog[open] .fpick__chosen").textContent === "Home / recipes")
+  await shot(p, "f4-pick-1280")
+  await p.click("#fpick-use")
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/move").length === 1)
+  assert.deepEqual(await bodies(p, "POST", "/files/move"), [{ path: `${HOME}/lembas.md`, to: `${HOME}/recipes` }])
+  await statusSays(p, "server-status", "Moved.")
+  // A copy: the same dialog, the server's name for the copy said. Cancel sends nothing.
+  await rowMenu(p, serverRow("lembas.md"), "Copy to…")
+  await p.waitForSelector("dialog[open] .fpick__row")
+  assert.equal(await p.textContent("dialog[open] .dialog__title"), "Copy to which folder?")
+  await p.keyboard.press("Escape")
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+  assert.equal((await bodies(p, "POST", "/files/copy")).length, 0)
+  await rowMenu(p, serverRow("lembas.md"), "Copy to…")
+  await p.waitForSelector("dialog[open] .fpick__row")
+  assert.equal(await p.textContent("#fpick-use"), "Copy here")
+  await p.click("#fpick-use")
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/copy").length === 1)
+  assert.deepEqual(await bodies(p, "POST", "/files/copy"), [{ path: `${HOME}/lembas.md`, to: HOME }])
+  await statusSays(p, "server-status", "Copied as lembas (2).md.")
+  // A refusal is the server's sentence, and stays.
+  await p.evaluate(() => window.__mock.answer("POST /files/move", { __error: { status: 400, detail: "A folder cannot be moved inside itself." } }))
+  await rowMenu(p, serverRow("recipes"), "Move")
+  await p.waitForSelector("dialog[open] .fpick__row")
+  await p.click("#fpick-use")
+  await statusSays(p, "server-status", "A folder cannot be moved inside itself.")
+  assert.ok(await p.$eval("#server-status", (x) => x.classList.contains("is-error") && x.getAttribute("role") === "alert"))
+  // The dialog at 390 px: inside the window.
+  await p.setViewportSize({ width: 390, height: 844 })
+  await rowMenu(p, serverRow("lembas.md"), "Move")
+  await p.waitForSelector("dialog[open] .fpick__row")
+  const box = await p.locator("dialog[open]").boundingBox()
+  assert.ok(box.x >= 0 && box.x + box.width <= 390, `the dialog is inside the window (${box.x}..${box.x + box.width})`)
+  assert.ok(await noSideways(p, 390))
+  await shot(p, "f4-pick-390")
+  assert.deepEqual(p.errors, [])
+})
+
+test("F4: several ticked at once: a bar counts them and moves, copies, deletes or downloads them as a zip, and says which the server refused", async () => {
+  const p = await page(f4({ "POST /files/batch": F4_BATCH }, { files_zip_save: { path: "/home/dev/Downloads/files.zip", size: 400 } }))
+  await serverPane(p)
+  assert.ok(await p.isHidden("#server-batch"), "no bar until something is ticked")
+  await p.check(`${serverRow("lembas.md")} .frow__pick`)
+  await p.waitForSelector("#server-batch:not([hidden])")
+  assert.equal(await p.textContent("#server-batch .fx__count"), "1 selected")
+  await p.check(`${serverRow("map.png")} .frow__pick`)
+  assert.equal(await p.textContent("#server-batch .fx__count"), "2 selected")
+  assert.deepEqual(await p.$$eval("#server-batch button", (l) => l.map((b) => b.textContent)), ["Move", "Copy to…", "Download as a zip", "Delete", "Clear the selection"])
+  assert.ok(await p.$eval("#server-list .frow--head .frow__pick", (x) => x.indeterminate), "some, not all")
+  // Every tick in one column, the head's with them.
+  const ticks = await p.$$eval("#server-list .frow__pick", (l) => [...new Set(l.map((x) => Math.round(x.getBoundingClientRect().left)))])
+  assert.equal(ticks.length, 1, `the ticks stand in one column: ${ticks}`)
+  await shot(p, "f4-batch-1280")
+  // Move: one request for all of them; what the server refused is said by its path.
+  await p.locator("#server-batch button", { hasText: /^Move$/ }).click()
+  await p.waitForSelector("dialog[open] .fpick__row")
+  await p.click(`dialog[open] .fpick__row[data-path="${HOME}/recipes"]`)
+  await p.waitForFunction(() => document.querySelector("dialog[open] .fpick__chosen").textContent === "Home / recipes")
+  await p.click("#fpick-use")
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/batch").length === 1)
+  assert.deepEqual(await bodies(p, "POST", "/files/batch"), [{ op: "move", paths: [`${HOME}/lembas.md`, `${HOME}/map.png`], to: `${HOME}/recipes` }])
+  await statusSays(p, "server-status", `${HOME}/map.png: Read-only: ${HOME}/map.png can be read in this session but not changed.`)
+  assert.ok(await p.$eval("#server-status", (x) => x.classList.contains("is-error")))
+  await p.waitForSelector("#server-batch", { state: "hidden" })
+  // Everything here, from the head's tick; a mount would not be among them.
+  await p.waitForSelector(`${serverRow("lembas.md")} .frow__pick`)
+  await p.check("#server-list .frow--head .frow__pick")
+  assert.equal(await p.textContent("#server-batch .fx__count"), "3 selected")
+  // As a zip, to where the person says: Rust is given the paths and nothing else.
+  await p.locator("#server-batch button", { hasText: "Download as a zip" }).click()
+  await statusSays(p, "server-status", "Saved. /home/dev/Downloads/files.zip")
+  assert.deepEqual((await callsOf(p, "files_zip_save"))[0].paths, [`${HOME}/recipes`, `${HOME}/lembas.md`, `${HOME}/map.png`])
+  // Delete: asked once for all, then one request.
+  await p.evaluate(() => window.__mock.answer("POST /files/batch", { op: "delete", to: null, atomic: false, results: [], done: 3, failed: 0 }))
+  await p.locator("#server-batch button", { hasText: /^Delete$/ }).click()
+  assert.match(await p.textContent("dialog[open]"), /Move the 3 selected to the trash\? They can be restored from there\./)
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/batch").length === 2)
+  assert.deepEqual((await bodies(p, "POST", "/files/batch"))[1], { op: "delete", paths: [`${HOME}/recipes`, `${HOME}/lembas.md`, `${HOME}/map.png`] })
+  await statusSays(p, "server-status", "Moved to the trash: 3.")
+  // Cleared, the bar goes.
+  await p.waitForSelector(`${serverRow("lembas.md")} .frow__pick`)
+  await p.check(`${serverRow("lembas.md")} .frow__pick`)
+  await p.locator("#server-batch button", { hasText: "Clear the selection" }).click()
+  await p.waitForSelector("#server-batch", { state: "hidden" })
+  assert.equal(await p.isChecked(`${serverRow("lembas.md")} .frow__pick`), false)
+  // At 390 px the bar wraps: every button of it inside the window, nothing scrolls sideways.
+  await p.setViewportSize({ width: 390, height: 844 })
+  await p.check("#server-list .frow--head .frow__pick")
+  await p.waitForSelector("#server-batch:not([hidden])")
+  const out = await p.$$eval("#server-batch button", (l) => l.filter((b) => b.getBoundingClientRect().left < 0 || b.getBoundingClientRect().right > 390).map((b) => b.textContent))
+  assert.deepEqual(out, [], "the bar's buttons are inside the window")
+  assert.ok(await noSideways(p, 390))
+  await shot(p, "f4-batch-390")
+  assert.deepEqual(p.errors, [])
+})
+
+test("F4: a row dragged onto a folder is moved there, with everything ticked when it is ticked; files dropped from the computer are uploaded into the folder under them", async () => {
+  const p = await page(f4({ "POST /files/move": F4_HOME, "POST /files/batch": { ...F4_BATCH, results: [], done: 2, failed: 0 } }, { library_upload_dropped: { listing: F4_HOME, sent: 2, failed: [] } }))
+  await serverPane(p)
+  const centre = async (sel) => {
+    const b = await p.locator(sel).boundingBox()
+    return [b.x + Math.min(b.width / 2, 120), b.y + b.height / 2]
+  }
+  const drag = async (from, to, check) => {
+    const [x, y] = await centre(from)
+    const [tx, ty] = await centre(to)
+    await p.mouse.move(x, y)
+    await p.mouse.down()
+    await p.mouse.move(x + 3, y + 3)
+    await p.mouse.move((x + tx) / 2, (y + ty) / 2, { steps: 4 })
+    await p.mouse.move(tx, ty, { steps: 4 })
+    await check?.()
+    await p.mouse.up()
+  }
+  // Onto a folder in the list: it says it would take it, and takes it.
+  await drag(`${serverRow("lembas.md")} .frow__label`, `${serverRow("recipes")} .frow__label`, async () => {
+    assert.equal(await p.textContent(".fdrag"), "lembas.md")
+    assert.ok(await p.$eval(`#server-list .frow[data-path="/home/frodo/recipes"]`, (x) => x.classList.contains("is-drop")))
+    await shot(p, "f4-drag-1280")
+  })
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/move").length === 1)
+  assert.deepEqual(await bodies(p, "POST", "/files/move"), [{ path: `${HOME}/lembas.md`, to: `${HOME}/recipes` }])
+  assert.equal(await p.locator(".fdrag").count(), 0)
+  await statusSays(p, "server-status", "Moved.")
+  assert.ok(await p.isHidden("#viewer"), "the click that ends a drag opens nothing")
+  // Let go over nothing that takes it -- a file, itself, the folder it is in -- and nothing is sent.
+  await p.waitForSelector(`${serverRow("map.png")} .frow__label`)
+  await drag(`${serverRow("lembas.md")} .frow__label`, `${serverRow("map.png")} .frow__label`)
+  await drag(`${serverRow("recipes")} .frow__label`, `${serverRow("recipes")} .frow__size`)
+  await drag(`${serverRow("lembas.md")} .frow__label`, "#server-tree .ftree__root")
+  await p.waitForTimeout(100)
+  assert.equal((await bodies(p, "POST", "/files/move")).length, 1)
+  // A ticked row carries the others ticked with it: onto the folder's line in the tree.
+  await p.check(`${serverRow("lembas.md")} .frow__pick`)
+  await p.check(`${serverRow("map.png")} .frow__pick`)
+  await drag(`${serverRow("map.png")} .frow__label`, `#server-tree .ftree__row[data-path="${HOME}/recipes"]`, async () => assert.equal(await p.textContent(".fdrag"), "2 selected"))
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/batch").length === 1)
+  assert.deepEqual(await bodies(p, "POST", "/files/batch"), [{ op: "move", paths: [`${HOME}/lembas.md`, `${HOME}/map.png`], to: `${HOME}/recipes` }])
+  // Files from the computer: held over the pane it shows where they would land; dropped on a
+  // folder's row they go into that folder, anywhere else into the folder listed. The page is
+  // told only where the drop was -- Rust has the paths.
+  await p.waitForSelector(`${serverRow("recipes")} .frow__label`)
+  await p.evaluate(() => window.__mock.emit("drag", true))
+  assert.equal(await p.getAttribute("#pane-server", "data-drag"), "true")
+  const [fx, fy] = await centre(`${serverRow("recipes")} .frow__label`)
+  await p.evaluate(([x, y]) => (window.__mock.emit("drop-at", { x, y }), window.__mock.emit("drop", ["a.txt", "b.txt"])), [fx, fy])
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "library_upload_dropped").length === 1)
+  await p.evaluate(() => (window.__mock.emit("drop-at", { x: 5, y: 5 }), window.__mock.emit("drop", ["c.txt"])))
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "library_upload_dropped").length === 2)
+  assert.deepEqual(await callsOf(p, "library_upload_dropped"), [{ dir: `${HOME}/recipes` }, { dir: HOME }])
+  assert.equal(await p.getAttribute("#pane-server", "data-drag"), "false")
+  assert.equal((await callsOf(p, "attach_dropped")).length, 0, "a drop on Files is not an attachment")
+  // While this computer's tab shows, a drop uploads nothing.
+  await p.click('#files-tabs [data-tab="local"]')
+  await p.evaluate(() => window.__mock.emit("drop", ["d.txt"]))
+  await p.waitForTimeout(50)
+  assert.equal((await callsOf(p, "library_upload_dropped")).length, 2)
+  assert.deepEqual(p.errors, [])
+})
+
+test("F4: a text file is edited in the viewer and saved from what was read; changed meanwhile, both ways on are offered -- read it again, or save anyway", async () => {
+  const p = await page(f4({ "PUT /files/content": { ...F4_CONTENT, sha: "ef".repeat(32), text: "# Lembas\n\nWrap it in a leaf. Twice.\n" } }), { width: 1280, height: 860 })
+  await serverPane(p)
+  await p.dblclick(`${serverRow("lembas.md")} .frow__open`)
+  await p.waitForSelector("#viewer:not([hidden]) .viewer__md")
+  assert.deepEqual(await p.$$eval("#viewer-modes .seg", (l) => l.map((b) => [b.textContent, b.getAttribute("aria-pressed")])), [["Preview", "true"], ["Source", "false"], ["Edit", "false"]])
+  assert.ok(await p.isDisabled("#viewer-save"), "nothing to save yet")
+  await p.locator("#viewer-modes .seg", { hasText: "Edit" }).click()
+  await p.waitForSelector("#viewer-body .cm-content[contenteditable=true]")
+  await p.click("#viewer-body .cm-content")
+  await p.keyboard.press("Control+End")
+  await p.keyboard.type("Twice.")
+  await p.waitForFunction(() => document.querySelector("#viewer-bar .viewer__said").textContent === "Not saved yet")
+  assert.ok(await p.isEnabled("#viewer-save"))
+  // Seen drawn before it is saved: the edit is kept across the modes.
+  await p.locator("#viewer-modes .seg", { hasText: "Preview" }).click()
+  await p.waitForSelector("#viewer-body .viewer__md")
+  assert.match(await p.textContent("#viewer-body .viewer__md"), /Twice\./)
+  await shot(p, "f4-edit-1280")
+  await p.click("#viewer-save")
+  await p.waitForFunction(() => window.__mock.api("PUT", "/files/content").length === 1)
+  const first = (await bodies(p, "PUT", "/files/content"))[0]
+  assert.deepEqual(Object.keys(first).sort(), ["base", "path", "text"])
+  assert.equal(first.base, SHA, "saved from the sha that was read")
+  assert.equal(first.path, `${HOME}/lembas.md`)
+  assert.match(first.text, /Wrap it in a leaf\.\nTwice\.$/)
+  // The server's answer is what is held now: its text differs from what was typed, so it is still unsaved.
+  await p.waitForFunction(() => document.querySelector("#viewer-bar .viewer__said").textContent === "Not saved yet")
+  // Someone else saved meanwhile: nothing is written, and the server's sentence offers both ways.
+  await p.evaluate((refusal) => window.__mock.answer("PUT /files/content", { __error: refusal }), F4_CONFLICT)
+  await p.click("#viewer-save")
+  await p.waitForSelector("#viewer-bar.is-conflict")
+  assert.equal(await p.textContent("#viewer-bar .viewer__said"), F4_CONFLICT.detail)
+  assert.equal(await p.getAttribute("#viewer-bar .viewer__said", "role"), "alert")
+  assert.deepEqual(await p.$$eval("#viewer-bar button", (l) => l.map((b) => b.textContent)), ["Reload", "Save anyway"])
+  assert.equal((await bodies(p, "PUT", "/files/content"))[1].base, "ef".repeat(32), "from the sha the last save answered")
+  await shot(p, "f4-conflict-1280")
+  // Save anyway: the same text, forced, with no base.
+  await p.evaluate((ok) => window.__mock.answer("PUT /files/content", ok), { ...F4_CONTENT, sha: "12".repeat(32), text: "forced" })
+  await p.click("#viewer-force")
+  await p.waitForFunction(() => window.__mock.api("PUT", "/files/content").length === 3)
+  const forced = (await bodies(p, "PUT", "/files/content"))[2]
+  assert.deepEqual(Object.keys(forced).sort(), ["force", "path", "text"])
+  assert.equal(forced.force, true)
+  await p.waitForFunction(() => !document.querySelector("#viewer-bar").classList.contains("is-conflict"))
+  // Reload: the file as the server has it now, the edit gone.
+  await p.evaluate((refusal) => window.__mock.answer("PUT /files/content", { __error: refusal }), F4_CONFLICT)
+  await p.click("#viewer-save")
+  await p.waitForSelector("#viewer-reload")
+  const reads = await p.evaluate(() => window.__mock.api("GET", "/files/content").length)
+  await p.click("#viewer-reload")
+  await p.waitForFunction((n) => window.__mock.api("GET", "/files/content").length === n + 1, reads)
+  await p.waitForSelector("#viewer-body .viewer__md")
+  assert.equal(await p.textContent("#viewer-body .viewer__md h1"), "Lembas")
+  assert.equal(await p.textContent("#viewer-bar .viewer__said"), "")
+  // An edit that was not saved is not thrown away without a word: Close asks, and Cancel keeps it.
+  await p.locator("#viewer-modes .seg", { hasText: "Edit" }).click()
+  await p.waitForSelector("#viewer-body .cm-content[contenteditable=true]")
+  await p.click("#viewer-body .cm-content")
+  await p.keyboard.type("x")
+  await p.waitForFunction(() => document.querySelector("#viewer-bar .viewer__said").textContent === "Not saved yet")
+  await p.click("#viewer-close")
+  assert.equal(await p.textContent("dialog[open] .dialog__title"), "Not saved yet")
+  await p.locator("dialog[open] .btn", { hasText: "Cancel" }).click()
+  assert.ok(await p.isVisible("#viewer"))
+  // Ctrl+S in the editor saves.
+  const before = (await bodies(p, "PUT", "/files/content")).length
+  await p.click("#viewer-body .cm-content")
+  await p.keyboard.press("Control+s")
+  await p.waitForFunction((n) => window.__mock.api("PUT", "/files/content").length === n + 1, before)
+  await p.click("#viewer-close")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForSelector("#viewer", { state: "hidden" })
+  // A file the person may not write has no Edit and no Save.
+  await p.evaluate((c) => window.__mock.answer("GET /files/content", c), { ...F4_CONTENT, writable: false, level: "ro" })
+  await p.dblclick(`${serverRow("lembas.md")} .frow__open`)
+  await p.waitForSelector("#viewer:not([hidden]) .viewer__md")
+  assert.deepEqual(await p.$$eval("#viewer-modes .seg", (l) => l.map((b) => b.textContent)), ["Preview", "Source"])
+  assert.equal(await p.locator("#viewer-save").count(), 0)
+  // At 390 px the line of the viewer and its buttons stay inside the window.
+  await p.setViewportSize({ width: 390, height: 844 })
+  assert.ok(await noSideways(p, 390))
+  const out = await p.$$eval("#viewer button", (l) => l.filter((b) => b.getBoundingClientRect().width > 0 && (b.getBoundingClientRect().left < 0 || b.getBoundingClientRect().right > 390)).map((b) => b.textContent || b.id))
+  assert.deepEqual(out, [])
+  assert.deepEqual(p.errors, [])
+})
+
+test("F4: the trash lists what was deleted: restored, removed for good one by one, or emptied; a file's versions are listed, an older one restored or downloaded", async () => {
+  const p = await page(
+    f4(
+      {
+        "GET /files/trash": F4_TRASH,
+        "POST /files/restore": { restored: `${HOME}/old.md`, items: [] },
+        "DELETE /files/trash": { removed: 1, items: [] },
+        "GET /files/versions": F4_VERSIONS,
+        "POST /files/versions/restore": { ...F4_VERSIONS, versions: [{ ...F4_VERSIONS.versions[1], id: "ver3", current: true }, { ...F4_VERSIONS.versions[0], current: false }, F4_VERSIONS.versions[1]] },
+      },
+      { file_save_as: { path: "/home/dev/Downloads/lembas.md", size: 20 } },
+    ),
+  )
+  await serverPane(p)
+  await p.click("#server-trash")
+  await p.waitForSelector("dialog[open] .ftrash__row")
+  assert.equal(await p.textContent("dialog[open] .dialog__title"), "Trash")
+  assert.equal(await p.textContent("dialog[open] .ftrash__name"), "old.md")
+  assert.equal(await p.textContent("dialog[open] .ftrash__path"), `${HOME}/old.md`)
+  await shot(p, "f4-trash-1280")
+  // Removed for good only after asking.
+  await p.click("dialog[open] .ftrash__remove")
+  await p.waitForSelector("dialog[open] .btn--danger >> text=Remove for good")
+  assert.match(await p.textContent("dialog[open]:has(.dialog__input, .muted) .muted"), /Remove “old\.md” for good\? This cannot be undone\./)
+  await p.locator("dialog[open]:not(.dialog--wide) .btn", { hasText: "Cancel" }).click()
+  assert.equal(await p.evaluate(() => window.__mock.api("DELETE", "/files/trash").length), 0)
+  await p.click("dialog[open] .ftrash__remove")
+  await p.click("dialog[open]:not(.dialog--wide) .btn--danger")
+  await p.waitForFunction(() => window.__mock.api("DELETE", "/files/trash?id=node5").length === 1)
+  await p.waitForFunction(() => /The trash is empty\./.test(document.querySelector(".ftrash__list").textContent))
+  assert.equal(await p.textContent(".ftrash__said"), "Removed for good.")
+  assert.ok(await p.isDisabled("#ftrash-empty"), "nothing left to empty")
+  await p.locator(".ftrash .dialog__actions .btn", { hasText: "Close" }).click()
+  // Restored: it is back, and the list behind is read again.
+  const lists = await p.evaluate(() => window.__mock.api("GET", "/files?path=%2F").length)
+  await p.click("#server-trash")
+  await p.waitForSelector("dialog[open] .ftrash__row")
+  await p.click("dialog[open] .ftrash__restore")
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/restore").length === 1)
+  assert.deepEqual(await bodies(p, "POST", "/files/restore"), [{ id: "node5" }])
+  await p.waitForFunction(() => document.querySelector(".ftrash__said").textContent === "Restored.")
+  await p.waitForFunction((n) => window.__mock.api("GET", "/files?path=%2F").length > n, lists)
+  await p.keyboard.press("Escape")
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+  // Emptied, after asking.
+  await p.click("#server-trash")
+  await p.waitForSelector("dialog[open] .ftrash__row")
+  await p.click("#ftrash-empty")
+  assert.match(await p.textContent("dialog[open]:not(.dialog--wide)"), /Remove everything in the trash for good\? This cannot be undone\./)
+  await p.click("dialog[open]:not(.dialog--wide) .btn--danger")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "api" && c.args.method === "DELETE" && c.args.path === "/files/trash"))
+  await p.keyboard.press("Escape")
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+  // Versions: newest first, the current one marked and with nothing to restore; the columns hold.
+  await rowMenu(p, serverRow("lembas.md"), "Versions")
+  await p.waitForSelector("dialog[open] .fvers__row")
+  assert.match(await p.textContent("dialog[open] .dialog__title"), /Versions.*lembas\.md/)
+  assert.deepEqual(await p.$$eval(".fvers__row", (l) => l.map((r) => [r.dataset.id, r.getAttribute("aria-current"), r.querySelectorAll("button").length])), [["ver2", "true", 0], ["ver1", null, 2]])
+  const sizes = await p.$$eval(".fvers__size", (l) => [...new Set(l.map((x) => Math.round(x.getBoundingClientRect().right)))])
+  assert.equal(sizes.length, 1, `sizes end on one line: ${sizes}`)
+  await shot(p, "f4-versions-1280")
+  await p.click(".fvers__row[data-id=ver1] .fvers__get")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "file_save_as"))
+  assert.deepEqual((await callsOf(p, "file_save_as"))[0], { path: `${HOME}/lembas.md`, name: "lembas.md", version: "ver1", title: "Download" })
+  await p.click(".fvers__row[data-id=ver1] .fvers__restore")
+  assert.match(await p.textContent("dialog[open]:not(.dialog--wide)"), /Make this version the current one\? The current one stays in the list\./)
+  await p.click("dialog[open]:not(.dialog--wide) .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/files/versions/restore").length === 1)
+  assert.deepEqual(await bodies(p, "POST", "/files/versions/restore"), [{ path: `${HOME}/lembas.md`, version: "ver1" }])
+  await p.waitForFunction(() => document.querySelectorAll(".fvers__row").length === 3)
+  assert.equal(await p.textContent(".fvers__said"), "That version is the current one again.")
+  assert.equal(await p.getAttribute(".fvers__row[data-id=ver3]", "aria-current"), "true")
+  // Both dialogs at 390 px: inside the window, their buttons too.
+  await p.setViewportSize({ width: 390, height: 844 })
+  const inside = () => p.$$eval("dialog[open], dialog[open] button", (l) => l.filter((b) => b.getBoundingClientRect().width > 0 && (b.getBoundingClientRect().left < 0 || b.getBoundingClientRect().right > 390)).map((b) => b.className))
+  assert.deepEqual(await inside(), [])
+  await shot(p, "f4-versions-390")
+  await p.keyboard.press("Escape")
+  await p.click("#server-trash")
+  await p.waitForSelector("dialog[open] .ftrash__row")
+  assert.deepEqual(await inside(), [])
+  await shot(p, "f4-trash-390")
+  assert.deepEqual(p.errors, [])
+})
+
+test("F4: a file is drawn by what the server says it is: a picture and an SVG as images only, sound and video in the webview's players, a table, a notebook as text, the rest as details and a download", async () => {
+  const csv = `name,note\n"Sam, the gardener","said ""hello"""\n<script>document.title = "a cell ran"</script>,2\n${Array.from({ length: 600 }, (_, i) => `row${i},${i}`).join("\n")}\n`
+  const nb = JSON.stringify({
+    cells: [
+      { cell_type: "markdown", source: ["# Baking\n", "<img src=x onerror=\"document.title='a cell ran'\">"] },
+      { cell_type: "code", execution_count: 3, source: "print('<b>hot</b>')", outputs: [{ output_type: "stream", text: ["<b>hot</b>\n"] }, { output_type: "display_data", data: { "text/html": "<script>document.title = 'a cell ran'</script>", "text/plain": "<Figure>", "image/png": MEDIA_PNG.toString("base64") } }, { output_type: "error", ename: "ValueError", evalue: "too dry", traceback: ["\u001b[31mValueError\u001b[0m: too dry"] }] },
+    ],
+  })
+  const rows = [
+    fileRow("map.png", "image", "image/png", 70),
+    fileRow("mark.svg", "svg", "image/svg+xml", 200),
+    fileRow("song.wav", "audio", "audio/wav", 844),
+    fileRow("broken.mp4", "video", "video/mp4", 844),
+    fileRow("stock.csv", "table", "text/csv", csv.length),
+    fileRow("bake.ipynb", "notebook", "application/x-ipynb+json", nb.length),
+    fileRow("all.zip", "archive", "application/zip", 5000),
+    fileRow("plan.pdf", "pdf", "application/pdf", 9000),
+    fileRow("cup.glb", "model3d", "model/gltf-binary", 9000),
+    // What it is called is not believed: a "picture" the server found to be a binary.
+    fileRow("fake.png", "binary", "application/octet-stream", 12),
+  ]
+  const none = (name, kind, mime, size) => ({ path: `${HOME}/${name}`, name, size, mime, kind, file_kind: kind, level: "commit", writable: true, language: "", sha: SHA, text: "", withheld: { reason: "not_text", message: "This is not a text file, so it is not shown here." } })
+  const content = Object.fromEntries(rows.map((r) => [`GET /files/content${q(r.path)}`, none(r.name, r.file_kind, r.mime, r.size)]))
+  content[`GET /files/content${q(`${HOME}/mark.svg`)}`] = { ...none("mark.svg", "svg", "image/svg+xml", 200), text: MEDIA_SVG, withheld: undefined, language: "xml" }
+  content[`GET /files/content${q(`${HOME}/stock.csv`)}`] = { ...none("stock.csv", "table", "text/csv", csv.length), text: csv, withheld: undefined }
+  content[`GET /files/content${q(`${HOME}/bake.ipynb`)}`] = { ...none("bake.ipynb", "notebook", "application/x-ipynb+json", nb.length), text: nb, withheld: undefined, language: "json" }
+  const p = await page(f4({ "GET /files": { ...F4_HOME, entries: rows }, ...content }, { file_save_as: { path: "/home/dev/Downloads/all.zip", size: 5000 } }, { mediaBytes: [...MEDIA_WAV] }), { width: 1600, height: 900 })
+  await p.evaluate(() => document.getElementById("nav-files").click())
+  await p.click('#files-tabs [data-tab="server"]')
+  const open = async (name) => {
+    await p.waitForSelector(serverRow(name))
+    await p.dblclick(`${serverRow(name)} .frow__open`)
+    await p.waitForFunction((n) => !document.getElementById("viewer").hidden && document.getElementById("viewer-name").textContent === n, name)
+  }
+  // A picture: an <img> at the address Rust serves -- asked for by its path and kind, never a token.
+  await open("map.png")
+  await p.waitForFunction(() => document.querySelector("#viewer-body img.viewer__image")?.naturalWidth === 1)
+  const asked = (await callsOf(p, "media_open")).at(-1)
+  assert.deepEqual(asked, { source: "server", kind: "image", path: `${HOME}/map.png` })
+  assert.equal(await p.getAttribute("#viewer-body img", "alt"), "map.png")
+  // The row's icon is the kind's, and the details show the picture.
+  assert.ok(await p.$eval(serverRow("map.png"), (r) => r.querySelector(".frow__icon").classList.contains("frow__icon--image")))
+  await p.click(`${serverRow("map.png")} .frow__open`)
+  await p.waitForFunction(() => document.querySelector("#server-details .fdetails__picture")?.naturalWidth === 1)
+  // An SVG: an image and nothing else -- no frame, no inline <svg>, and what it carries does not run.
+  await open("mark.svg")
+  await p.waitForFunction(() => document.querySelector("#viewer-body img.viewer__image")?.naturalWidth === 40)
+  assert.equal(await p.locator("#viewer-body iframe, #viewer-body svg:not(.icon), #viewer-body object, #viewer-body embed").count(), 0)
+  assert.equal((await callsOf(p, "media_open")).at(-1).kind, "svg")
+  // ... and its source can be read, as text.
+  await p.locator("#viewer-modes .seg", { hasText: "Source" }).click()
+  await p.waitForSelector("#viewer-body .cm-content")
+  assert.match(await p.textContent("#viewer-body .cm-content"), /<script>document\.title = "an svg ran"<\/script>/)
+  assert.equal(await p.locator("#viewer-body img").count(), 0)
+  // Sound: the webview's own player, on the address; it knows the length, so it can seek.
+  await open("song.wav")
+  await p.waitForFunction(() => document.querySelector("#viewer-body audio")?.duration > 0)
+  assert.ok(await p.$eval("#viewer-body audio", (a) => a.controls && a.src.startsWith("http://media.test/audio/")))
+  assert.equal(await p.textContent("#viewer-bar .btn"), "Download")
+  await shot(p, "f4-audio-1600")
+  // A player that will not take the address is handed the file whole, once: a blob, which plays.
+  await open("broken.mp4")
+  await p.waitForFunction(() => document.querySelector("#viewer-body video")?.src.startsWith("blob:"))
+  await p.waitForFunction(() => document.querySelector("#viewer-body video").duration > 0)
+  assert.equal((await callsOf(p, "media_bytes")).length, 1)
+  // A table: the first row its head, quoted fields whole, markup as the text it is, and a cap.
+  await open("stock.csv")
+  await p.waitForSelector("#viewer-body table.vtable")
+  assert.deepEqual(await p.$$eval("#viewer-body thead th", (l) => l.map((x) => x.textContent)), ["name", "note"])
+  assert.deepEqual(await p.$$eval("#viewer-body tbody tr:nth-child(-n+2) td", (l) => l.map((x) => x.textContent)), ["Sam, the gardener", 'said "hello"', '<script>document.title = "a cell ran"</script>', "2"])
+  assert.equal(await p.locator("#viewer-body tbody tr").count(), 499, "500 rows with the head")
+  assert.equal(await p.textContent("#viewer-body .viewer__cap"), "Only the first 500 rows are shown.")
+  // The table scrolls in its own box, both ways; the viewer does not.
+  assert.ok(await p.$eval("#viewer-body .vtable__scroll", (x) => x.scrollHeight > x.clientHeight && getComputedStyle(x).overflowY === "auto"))
+  assert.ok(await p.$eval("#viewer-body", (x) => x.scrollHeight <= x.clientHeight + 1))
+  await shot(p, "f4-table-1600")
+  // A notebook: its cells as text -- markup shown, not made -- and a picture among the outputs.
+  await open("bake.ipynb")
+  await p.waitForSelector("#viewer-body .viewer__nb")
+  assert.match(await p.textContent("#viewer-body .nbcell--words"), /# Baking\n<img src=x onerror=/)
+  assert.equal(await p.textContent("#viewer-body .nbcell__code"), "print('<b>hot</b>')")
+  assert.deepEqual(await p.$$eval("#viewer-body .nbcell__out", (l) => l.map((x) => x.textContent)), ["<b>hot</b>\n", "ValueError: too dry"])
+  assert.equal(await p.textContent("#viewer-body .nbcell__n"), "[3]")
+  assert.equal(await p.locator("#viewer-body .nbcell b, #viewer-body script, #viewer-body .nbcell--words img, #viewer-body iframe").count(), 0)
+  await p.waitForFunction(() => document.querySelector("#viewer-body .nbcell__picture")?.naturalWidth === 1)
+  assert.ok((await p.getAttribute("#viewer-body .nbcell__picture", "src")).startsWith("data:image/png;base64,"))
+  await shot(p, "f4-notebook-1600")
+  // An archive, a PDF, a 3D model, a binary: what it is, and a way to save it -- to a place the
+  // person chooses in the system's dialog, written there by Rust.
+  for (const [name, mime] of [["all.zip", "application/zip"], ["plan.pdf", "application/pdf"], ["cup.glb", "model/gltf-binary"], ["fake.png", "application/octet-stream"]]) {
+    await open(name)
+    await p.waitForSelector("#viewer-body .viewer__facts")
+    assert.match(await p.textContent("#viewer-body .viewer__facts"), new RegExp(mime.replace(/[.+/]/g, "\\$&")), name)
+    assert.equal(await p.locator("#viewer-body img, #viewer-body iframe, #viewer-body embed, #viewer-body object").count(), 0, `${name} is not drawn`)
+    assert.equal(await p.textContent("#viewer-body .viewer__do .btn"), "Download")
+  }
+  await open("all.zip")
+  await p.click("#viewer-body .viewer__do .btn")
+  await statusSays(p, "server-status", "Saved. /home/dev/Downloads/all.zip")
+  assert.deepEqual((await callsOf(p, "file_save_as")).at(-1), { path: `${HOME}/all.zip`, name: "all.zip", version: null, title: "Download" })
+  // Nothing any of them carried ran.
+  assert.equal(await p.title(), "LLeMbas")
+  assert.deepEqual(p.errors, [])
+})
+
+// This computer's tab: the same hands, each a command Rust answers inside the agent's folders
+// (src-tauri/src/files.rs checks every path, and its tests say what is refused). The page names
+// the folder it shows and paths inside it, never a path of its own making.
+
+const ROOT = "/home/dev/project"
+const localRow = (name) => `#local-list .frow[data-path="${name}"]`
+async function localPaneOpen(p) {
+  await p.evaluate(() => document.getElementById("nav-files").click())
+  await p.waitForSelector(localRow("README.md"))
+}
+
+test("F4: this computer's folder is managed like the server's: new file and folder, rename, move and copy through the dialog, several at once, delete to the system's trash -- each said as Rust answered it", async () => {
+  const ok = (path, to) => ({ path, ok: true, to: to ?? null, error: null })
+  const p = await page(f4({}, { local_make: "notes.md", local_rename: "READ.md", local_transfer: [ok("README.md", "src/README.md")], local_delete: [ok("README.md")] }))
+  await localPaneOpen(p)
+  assert.ok(await p.isVisible("#local-mkdir") && (await p.isVisible("#local-mkfile")))
+  // New file and new folder, in the folder listed and in a folder's own menu.
+  await p.click("#local-mkfile")
+  assert.match(await p.textContent("dialog[open]"), /What should the file be called\? With its extension, such as notes\.md\./)
+  await p.fill("dialog[open] .dialog__input", "notes.md")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_make"))
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "local_list").length >= 2 && !document.querySelector("dialog[open]"))
+  await p.waitForSelector(`${localRow("src")} .frow__more`)
+  await rowMenu(p, localRow("src"), "New folder")
+  await p.fill("dialog[open] .dialog__input", "lib")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "local_make").length === 2)
+  assert.deepEqual(await callsOf(p, "local_make"), [{ root: ROOT, dir: "", name: "notes.md", folder: false }, { root: ROOT, dir: "src", name: "lib", folder: true }])
+  await statusSays(p, "local-status", "Folder made.")
+  // Rename.
+  await p.waitForSelector(`${localRow("README.md")} .frow__more`)
+  await rowMenu(p, localRow("README.md"), "Rename")
+  await p.fill("dialog[open] .dialog__input", "READ.md")
+  await p.click("dialog[open] .btn--primary")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_rename"))
+  assert.deepEqual(await callsOf(p, "local_rename"), [{ root: ROOT, path: "README.md", name: "READ.md" }])
+  // Move, through the dialog: it walks this folder and nothing above it.
+  await p.waitForSelector(`${localRow("README.md")} .frow__more`)
+  await rowMenu(p, localRow("README.md"), "Move")
+  await p.waitForSelector('dialog[open] .fpick__row[data-path="src"]')
+  assert.equal(await p.textContent("dialog[open] .fpick__chosen"), "project")
+  assert.equal(await p.locator("dialog[open] .crumbs__link").count(), 0, "the top is the agent's folder: no way above it")
+  await p.click('dialog[open] .fpick__row[data-path="src"]')
+  await p.waitForFunction(() => document.querySelector("dialog[open] .fpick__chosen").textContent === "project / src")
+  await p.click("#fpick-use")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_transfer"))
+  assert.deepEqual((await callsOf(p, "local_transfer"))[0], { root: ROOT, paths: ["README.md"], to: "src", copy: false })
+  await statusSays(p, "local-status", "Moved.")
+  // Copy: the name Rust gave the copy is said.
+  await p.evaluate((r) => (window.__mockConfig.commands.local_transfer = r), [ok("README.md", "README (2).md")])
+  await p.waitForSelector(`${localRow("README.md")} .frow__more`)
+  await rowMenu(p, localRow("README.md"), "Copy to…")
+  await p.waitForSelector('dialog[open] .fpick__row[data-path="src"]')
+  await p.click("#fpick-use")
+  await statusSays(p, "local-status", "Copied as README (2).md.")
+  assert.deepEqual((await callsOf(p, "local_transfer"))[1], { root: ROOT, paths: ["README.md"], to: "", copy: true })
+  // Several at once; what Rust refused is said by its path, and the rest is done.
+  await p.evaluate((r) => (window.__mockConfig.commands.local_transfer = r), [ok("README.md", "src/README.md"), { path: "map.png", ok: false, to: null, error: "There is already something called map.png here." }])
+  await p.waitForSelector(`${localRow("README.md")} .frow__pick`)
+  await p.check(`${localRow("README.md")} .frow__pick`)
+  await p.check(`${localRow("map.png")} .frow__pick`)
+  assert.deepEqual(await p.$$eval("#local-batch button", (l) => l.map((b) => b.textContent)), ["Move", "Copy to…", "Delete", "Clear the selection"])
+  await p.locator("#local-batch button", { hasText: /^Move$/ }).click()
+  await p.waitForSelector('dialog[open] .fpick__row[data-path="src"]')
+  await p.click('dialog[open] .fpick__row[data-path="src"]')
+  await p.waitForFunction(() => document.querySelector("dialog[open] .fpick__chosen").textContent === "project / src")
+  await p.click("#fpick-use")
+  await statusSays(p, "local-status", "map.png: There is already something called map.png here.")
+  assert.deepEqual((await callsOf(p, "local_transfer"))[2], { root: ROOT, paths: ["README.md", "map.png"], to: "src", copy: false })
+  // A row dragged onto a folder.
+  await p.evaluate((r) => (window.__mockConfig.commands.local_transfer = r), [ok("map.png", "src/map.png")])
+  await p.waitForSelector(`${localRow("map.png")} .frow__label`)
+  const from = await p.locator(`${localRow("map.png")} .frow__label`).boundingBox()
+  const to = await p.locator(`${localRow("src")} .frow__label`).boundingBox()
+  await p.mouse.move(from.x + 10, from.y + 5)
+  await p.mouse.down()
+  await p.mouse.move(from.x + 20, from.y + 15, { steps: 3 })
+  await p.mouse.move(to.x + 10, to.y + 5, { steps: 4 })
+  assert.equal(await p.locator(".fdrag").count(), 1, "one thing is dragged, however often the pane was drawn")
+  await p.mouse.up()
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "local_transfer").length === 4)
+  assert.deepEqual((await callsOf(p, "local_transfer"))[3], { root: ROOT, paths: ["map.png"], to: "src", copy: false })
+  // Delete: asked first; a refusal (the CLI's own file, say) is Rust's sentence, as an error.
+  await p.waitForSelector(`${localRow("README.md")} .frow__more`)
+  await rowMenu(p, localRow("README.md"), "Delete")
+  assert.match(await p.textContent("dialog[open]"), /Move “README\.md” to the trash\? It can be restored from there\./)
+  await p.click("dialog[open] .btn--danger")
+  await statusSays(p, "local-status", "Moved to the trash.")
+  assert.deepEqual(await callsOf(p, "local_delete"), [{ root: ROOT, paths: ["README.md"] }])
+  await p.evaluate((r) => (window.__mockConfig.commands.local_delete = r), [{ path: "README.md", ok: false, to: null, error: "/home/dev/project/README.md belongs to the LLeMbas CLI: the app reads it and never changes it." }])
+  await p.waitForSelector(`${localRow("README.md")} .frow__more`)
+  await rowMenu(p, localRow("README.md"), "Delete")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => /belongs to the LLeMbas CLI/.test(document.getElementById("local-status").textContent))
+  assert.ok(await p.$eval("#local-status", (x) => x.classList.contains("is-error")))
+  await p.evaluate(() => (window.__mockConfig.commands.local_make = { __error: { status: 400, detail: "There is already something called notes.md here." } }))
+  await p.click("#local-mkfile")
+  await p.fill("dialog[open] .dialog__input", "notes.md")
+  await p.click("dialog[open] .btn--primary")
+  await statusSays(p, "local-status", "There is already something called notes.md here.")
+  // At 390 px: the bar's tools and the status inside the window.
+  await p.setViewportSize({ width: 390, height: 844 })
+  assert.ok(await noSideways(p, 390))
+  const out = await p.$$eval("#pane-local button", (l) => l.filter((b) => b.getBoundingClientRect().width > 0 && (b.getBoundingClientRect().left < -1 || b.getBoundingClientRect().right > 391)).map((b) => b.id || b.className))
+  assert.deepEqual(out, [])
+  await shot(p, "f4-local-390")
+  assert.deepEqual(p.errors, [])
+})
+
+test("F4: a file on this computer is edited and saved, a picture drawn from its own bytes; a file is copied to the server and one brought from it, each into a folder walked to", async () => {
+  const p = await page(
+    f4(
+      {},
+      {
+        local_write: { root: ROOT, path: "README.md", name: "README.md", size: 14, text: "# Project\nnew\n", withheld: null, kind: "markdown", mime: "text/markdown", sha: "ef".repeat(32), writable: true },
+        local_upload: { listing: F4_HOME, sent: 1, failed: [] },
+        local_download: "src/lembas.md",
+      },
+    ),
+    { width: 1280, height: 860 },
+  )
+  await localPaneOpen(p)
+  // Edited and saved: from the sha Rust read; a file changed meanwhile offers both ways on.
+  await p.dblclick(`${localRow("README.md")} .frow__open`)
+  await p.waitForSelector("#viewer:not([hidden]) .viewer__md")
+  assert.equal(await p.textContent("#viewer-where"), "This computer")
+  await p.locator("#viewer-modes .seg", { hasText: "Edit" }).click()
+  await p.waitForSelector("#viewer-body .cm-content[contenteditable=true]")
+  await p.click("#viewer-body .cm-content")
+  await p.keyboard.press("Control+End")
+  await p.keyboard.type("new")
+  await p.click("#viewer-save")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_write"))
+  assert.deepEqual((await callsOf(p, "local_write"))[0], { root: ROOT, path: "README.md", text: "# Project\nnew", base: SHA, force: false })
+  await p.evaluate((refusal) => (window.__mockConfig.commands.local_write = { __error: refusal }), F4_CONFLICT)
+  await p.click("#viewer-body .cm-content")
+  await p.keyboard.type("!")
+  await p.click("#viewer-save")
+  await p.waitForSelector("#viewer-bar.is-conflict")
+  assert.deepEqual(await p.$$eval("#viewer-bar button", (l) => l.map((b) => b.textContent)), ["Reload", "Save anyway"])
+  assert.equal((await callsOf(p, "local_write"))[1].base, "ef".repeat(32))
+  await p.evaluate(() => (window.__mockConfig.commands.local_write = { root: "/home/dev/project", path: "README.md", name: "README.md", size: 15, text: "forced", sha: "12".repeat(32), writable: true, kind: "markdown", mime: "text/markdown", withheld: null }))
+  await p.click("#viewer-force")
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "local_write").length === 3)
+  const forced = (await callsOf(p, "local_write"))[2]
+  assert.deepEqual([forced.base, forced.force], [null, true])
+  await p.click("#viewer-close")
+  if (await p.locator("dialog[open]").count()) await p.click("dialog[open] .btn--danger")
+  // One of the CLI's own files, as Rust says it: read, with no Edit.
+  await p.evaluate(() => (window.__mockConfig.commands.local_read = { root: "/home/dev/project", path: "README.md", name: "README.md", size: 10, text: "# Project\n", withheld: null, kind: "markdown", mime: "text/markdown", sha: "ab".repeat(32), writable: false }))
+  await p.dblclick(`${localRow("README.md")} .frow__open`)
+  await p.waitForSelector("#viewer:not([hidden]) .viewer__md")
+  assert.deepEqual(await p.$$eval("#viewer-modes .seg", (l) => l.map((b) => b.textContent)), ["Preview", "Source"])
+  // A picture: drawn from the file's own bytes, at an address asked for by folder and path.
+  await p.evaluate(() => (window.__mockConfig.commands.local_read = { root: "/home/dev/project", path: "map.png", name: "map.png", size: 70, text: null, withheld: "binary", kind: "image", mime: "image/png", sha: null, writable: true }))
+  await p.dblclick(`${localRow("map.png")} .frow__open`)
+  await p.waitForFunction(() => document.querySelector("#viewer-body img.viewer__image")?.naturalWidth === 1)
+  assert.deepEqual((await callsOf(p, "media_open")).at(-1), { source: "local", kind: "image", root: ROOT, path: "map.png" })
+  assert.equal(await p.locator("#viewer-bar .btn").count(), 0, "it is on this computer already: nothing to download")
+  await p.click("#viewer-close")
+  // To the server: the folder there is walked to, and Rust sends the file (checked against the folders first).
+  await rowMenu(p, localRow("README.md"), "Copy to the server…")
+  await p.waitForSelector(`dialog[open] .fpick__row[data-path="${HOME}/recipes"]`)
+  assert.equal(await p.textContent("dialog[open] .fpick__chosen"), "Home")
+  await p.click(`dialog[open] .fpick__row[data-path="${HOME}/recipes"]`)
+  await p.waitForFunction(() => document.querySelector("dialog[open] .fpick__chosen").textContent === "Home / recipes")
+  await p.click("#fpick-use")
+  await statusSays(p, "local-status", "Uploaded.")
+  assert.deepEqual(await callsOf(p, "local_upload"), [{ root: ROOT, paths: ["README.md"], dir: `${HOME}/recipes` }])
+  // What the server did not take is said.
+  await p.evaluate(() => (window.__mockConfig.commands.local_upload = { listing: null, sent: 0, failed: [{ name: "README.md", error: "README.md is larger than 20 MB, the most that can be uploaded here." }] }))
+  await rowMenu(p, localRow("README.md"), "Copy to the server…")
+  await p.waitForSelector("dialog[open] .fpick__row")
+  await p.click("#fpick-use")
+  await statusSays(p, "local-status", "README.md: README.md is larger than 20 MB, the most that can be uploaded here.")
+  // From the server: into one of the agent's folders, under the name Rust found free there.
+  await p.click('#files-tabs [data-tab="server"]')
+  await p.waitForSelector(serverRow("lembas.md"))
+  await rowMenu(p, serverRow("lembas.md"), "Copy to this computer…")
+  await p.waitForSelector('dialog[open] .fpick__row[data-path="src"]')
+  await p.click('dialog[open] .fpick__row[data-path="src"]')
+  await p.waitForFunction(() => document.querySelector("dialog[open] .fpick__chosen").textContent === "project / src")
+  await p.click("#fpick-use")
+  await statusSays(p, "server-status", "Copied as lembas.md.")
+  assert.deepEqual(await callsOf(p, "local_download"), [{ root: ROOT, dir: "src", path: `${HOME}/lembas.md`, name: "lembas.md" }])
+  // A folder is not offered either way.
+  await p.click(`${serverRow("recipes")} .frow__more`)
+  assert.equal(await p.locator(".menu .menu__item", { hasText: "Copy to this computer…" }).count(), 0)
+  await p.keyboard.press("Escape")
   assert.deepEqual(p.errors, [])
 })
 

@@ -111,9 +111,13 @@
             <div class="fx__where" id="local-where"></div>
             <nav class="crumbs" id="local-crumbs" aria-label="Where you are" data-i18n-aria-label></nav>
             <div class="fx__tools">
+              <button type="button" class="tool" id="local-mkdir" aria-label="New folder" title="New folder" data-i18n-aria-label data-i18n-title></button>
+              <button type="button" class="tool" id="local-mkfile" aria-label="New file" title="New file" data-i18n-aria-label data-i18n-title></button>
               <button type="button" class="tool" id="local-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button>
             </div>
           </div>
+          <p class="status fx__status" id="local-status" hidden></p>
+          <div class="fx__batch" id="local-batch" role="toolbar" aria-label="Selected" data-i18n-aria-label hidden></div>
           <div class="fx__panes">
             <aside class="fx__tree" id="local-tree" aria-label="Folders" data-i18n-aria-label></aside>
             <div class="fx__list" id="local-list"></div>
@@ -127,10 +131,13 @@
             <div class="fx__tools">
               <button type="button" class="tool" id="server-upload" aria-label="Upload" title="Upload" data-i18n-aria-label data-i18n-title></button>
               <button type="button" class="tool" id="server-mkdir" aria-label="New folder" title="New folder" data-i18n-aria-label data-i18n-title></button>
+              <button type="button" class="tool" id="server-mkfile" aria-label="New file" title="New file" data-i18n-aria-label data-i18n-title></button>
+              <button type="button" class="tool" id="server-trash" aria-label="Trash" title="Trash" data-i18n-aria-label data-i18n-title></button>
               <button type="button" class="tool" id="server-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button>
             </div>
           </div>
           <p class="status fx__status" id="server-status" hidden></p>
+          <div class="fx__batch" id="server-batch" role="toolbar" aria-label="Selected" data-i18n-aria-label hidden></div>
           <div class="fx__panes">
             <aside class="fx__tree" id="server-tree" aria-label="Folders" data-i18n-aria-label></aside>
             <div class="fx__list" id="server-list"></div>
@@ -229,6 +236,7 @@
         <div class="viewer__modes" id="viewer-modes"></div>
         <button type="button" class="tool" id="viewer-close" aria-label="Close" title="Close" data-i18n-aria-label data-i18n-title></button>
       </header>
+      <div class="viewer__bar" id="viewer-bar" hidden></div>
       <div class="viewer__body" id="viewer-body"></div>
     </aside>
   </div>

@@ -6,6 +6,56 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+For LLeMbas server after 2.0.0-beta.15 (its files routes on `/api/v2`); with an older server the
+server's tab keeps what it had, and what the server does not have says so in its own words.
+
+### Added
+
+- **Files › Server is a file manager.** **Move** and **Copy to…** open a dialog that walks to the
+  folder -- no path is typed. Tick several things and a bar counts them and moves, copies or
+  deletes them at once, or downloads them **as a zip**; what the server refused is said by its
+  path, and the rest is done. A row dragged onto a folder (in the list, the tree or the crumbs) is
+  moved there, with everything ticked when it is ticked. **Download** saves a file, a folder (as
+  a zip) or one older version to a place chosen in the system's dialog; it is written there as it
+  arrives, never held in memory. Files dropped on the window from the computer are uploaded into
+  the folder they were dropped on. **New file** beside New folder. **Trash**: what was deleted,
+  restored or removed for good one by one, or emptied. **Versions** of a file: listed, an older
+  one made the current one again or downloaded.
+- **A text file is edited in the viewer.** *Edit* beside Preview and Source, *Save* (Ctrl+S), and
+  the edit can be looked at drawn before it is saved. A file somebody else changed meanwhile is
+  not overwritten: the server's sentence is shown with both ways on, **Reload** or **Save
+  anyway**. Closing an edit that was not saved asks first. A file you may not write has no Edit.
+- **The viewer draws a file by what it is** -- the server's own word for it, read from the file's
+  bytes, not from its name. Pictures; an SVG, only ever as a picture; sound and video in the
+  system's own players, which can seek; CSV and TSV as a table that scrolls in its own box (the
+  first 500 rows); a notebook, read-only, every cell and output as text; an archive or any other
+  file as its details and Download. The details pane shows a picture's thumbnail.
+- **Files › This computer is one too**, inside the agent's folders and nowhere else: new file and
+  folder, rename, move, copy, delete, several at once, drag onto a folder, edit and save with the
+  same care for a file changed meanwhile, and the same viewers from the file's own bytes. A
+  delete goes to the system's trash (on Linux, the desktop's own, through GIO); where a disk has
+  no trash the file is left alone and that is said. Every path is resolved and checked again in
+  Rust; a link that leads out of the folder is not followed for any write; and the LLeMbas CLI's
+  own files -- its configuration, data and state, and a project's `.lembas` or `.agent` -- can be
+  read here and are never changed.
+- **A file is copied between the two.** *Copy to the server…* on a file of this computer and
+  *Copy to this computer…* on a file of the server's, each into a folder walked to; a copy never
+  replaces what is there.
+
+### Changed
+
+- A PDF and a 3D model are shown as their details and Download for now; viewers for them come
+  with the server's own.
+
+### Security
+
+- A picture, sound or video reaches the viewer on a scheme of the app's own
+  (`llembas-media:`), a piece at a time: the page holds an address that names one file it was
+  allowed to open, never the app's sign-in, and Rust asks the server for exactly the piece the
+  player wanted. Only what a webview decodes and never runs is served there, each answer
+  sandboxed by its own policy. The page's policy gains that scheme for images and media, and
+  `blob:` for media (a player that will not take the address is handed the file whole, once).
+
 ### Fixed
 
 - **A chat on a model that two connections serve named the wrong connection.** The line under a

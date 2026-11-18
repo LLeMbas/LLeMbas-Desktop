@@ -16,9 +16,15 @@ an app of its own.
   **Chat**, which runs on the server, and **Agentic**, which runs as an agent on one of your
   computers, in a folder you choose there.
 - **Files**, two trees kept apart: the agent's folders on this computer, and your files on the
-  server.
+  server. Both are file managers: new, rename, move and copy (the folder is chosen by walking to
+  it), delete, several things at once, a row dragged onto a folder, and a copy from one tree to
+  the other. The server's has its trash, a file's versions, downloads to a place you choose, and
+  files dropped from the computer; on this computer nothing outside the agent's folders is
+  touched, a delete goes to the system's trash, and the CLI's own files are read, never changed.
 - **A viewer** for what you open and for what the agent shows you: Markdown drawn, code
-  highlighted, text, and HTML in a sealed frame that can reach neither the app nor the network.
+  highlighted, text, HTML in a sealed frame that can reach neither the app nor the network,
+  pictures (an SVG only ever as a picture), sound and video, a table for CSV and TSV, a notebook
+  read as text. A text file you may write is edited and saved there.
 - **Attachments** from the file dialog, a drop on the window or a paste; **edit** a message,
   **regenerate** a reply, rename, archive or delete a chat, and open it in the web interface.
 - **A command palette** (Ctrl+K) for commands and every chat by its title.
@@ -86,9 +92,17 @@ device.
 - The app's sign-in token stays in the app's Rust half (`account.json` in the app's config
   directory, readable by you only); the page asks for the server's `/api/v2` through it and never
   holds the token.
-- The explorer reads only inside the agent's folders.
+- The explorer reads and writes only inside the agent's folders: every path is resolved, links
+  included, and checked in Rust before anything is opened or changed. The LLeMbas CLI's own
+  files are read there and never written.
 - A file goes to the server as an attachment only when you choose it in the file dialog, drop it
-  on the window or paste it: the page cannot name a path for the app to send.
+  on the window or paste it: the page cannot name a path for the app to send. The one path it
+  can name is a file inside the agent's folders, which *Copy to the server…* uploads into your
+  own files there.
+- A picture, sound or video in the viewer comes from a scheme of the app's own
+  (`llembas-media:`, `src-tauri/src/media.rs`): the page holds an address that names one file,
+  never the token, and only what a webview decodes and never runs is served there. An SVG is
+  drawn as an image, never as a document.
 - HTML is shown in a sealed frame on an address of its own: scripts in it run, but it has no
   access to the app, no network and no way to navigate anywhere.
 - Links in a reply open in your browser, and only web and mail links.

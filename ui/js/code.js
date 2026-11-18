@@ -1,4 +1,4 @@
-// Source in the viewer: CodeMirror, read-only, from the server's own vendored build (ui/vendor,
+// Source in the viewer: CodeMirror, read-only or -- a file being edited -- not, from the server's own vendored build (ui/vendor,
 // copied and pinned by scripts/fetch-vendor.sh). The look is the server's editor's: colours from
 // the theme's tokens, never CodeMirror's own. Loaded the first time a file is shown.
 
@@ -43,6 +43,7 @@ async function load() {
   cm = {
     state,
     view,
+    commands,
     base: [
       view.lineNumbers(),
       view.highlightActiveLine(),
@@ -50,8 +51,6 @@ async function load() {
       view.drawSelection(),
       view.keymap.of([...search.searchKeymap, ...commands.defaultKeymap]),
       search.highlightSelectionMatches(),
-      state.EditorState.readOnly.of(true),
-      view.EditorView.editable.of(false),
       view.EditorView.lineWrapping,
       look,
       syntaxHighlighting(colours),
@@ -89,12 +88,35 @@ async function language(name) {
   }
 }
 
-/** Show `text` in `parent`, read-only, at `line` when given. Returns something to `destroy()`. */
-export async function codeView(parent, text, { lang = "", line = 0 } = {}) {
-  const { state, view, base } = await load()
+/**
+ * Show `text` in `parent`, at `line` when given: read-only, or -- `editable` -- to be changed,
+ * with undo, `onChange()` after every change and `onSave()` on Ctrl+S. Returns the editor:
+ * `state.doc.toString()` is what it holds, `destroy()` lets it go.
+ */
+export async function codeView(parent, text, { lang = "", line = 0, editable = false, onChange, onSave } = {}) {
+  const { state, view, base, commands } = await load()
+  const mode = editable
+    ? [
+        commands.history(),
+        view.keymap.of([
+          {
+            key: "Mod-s",
+            run: () => {
+              onSave?.()
+              return true
+            },
+          },
+          ...commands.historyKeymap,
+          commands.indentWithTab,
+        ]),
+        view.EditorView.updateListener.of((u) => {
+          if (u.docChanged) onChange?.()
+        }),
+      ]
+    : [state.EditorState.readOnly.of(true), view.EditorView.editable.of(false)]
   const ed = new view.EditorView({
     parent,
-    state: state.EditorState.create({ doc: text, extensions: [base, await language(lang)] }),
+    state: state.EditorState.create({ doc: text, extensions: [mode, base, await language(lang)] }),
   })
   if (line > 0 && line <= ed.state.doc.lines) {
     const at = ed.state.doc.line(line).from

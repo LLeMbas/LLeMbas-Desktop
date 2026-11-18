@@ -46,12 +46,26 @@ ctx--*              messages|system|memory|instructions|tools|mcp_tools|since|bu
 call--*             shell|edit|read|search|web|task|tool|hidden  hook: a call's kind, for the tests; the row is styled as .call, its icon chosen in the script
 job--*              running|done|failed|stopped  hook: a job's state, for the tests; the state is said in its chip
 ask--*              approval|question|plan|phone_action  hook: a card's kind, for the tests; every card is styled as .ask
-frow__icon--*       dir|mount|code|html|markdown|text  a file's kind in the explorer: each has its rule, or is listed here
+frow__icon--*       dir|mount|code|html|markdown|text|image|svg|pdf|audio|video|table|notebook|model3d|archive|binary  a file's kind in the explorer: each has its rule, or is listed here
 frow__icon--markdown a plain file: the icon in the row's own colour
 frow__icon--text    a plain file: the icon in the row's own colour
+frow__icon--pdf     a file with no colour of its own: the icon in the row's own colour
+frow__icon--table   a file with no colour of its own: the icon in the row's own colour
+frow__icon--model3d a file with no colour of its own: the icon in the row's own colour
+frow__icon--archive a file with no colour of its own: the icon in the row's own colour
+frow__icon--binary  a file with no colour of its own: the icon in the row's own colour
 range2__input--*    min|max  hook: which end of the two-ended slider, for the script and the tests; styled as .range2__input
 msg__again          a hook: the one Read again of a reply that could not be followed; styled as .btn
 dirs                the folder dialog's body; styled as .dialog__body and by its parts
 dirs__typed         a hook for the tests; styled as .dialog__input
 dirs__row--recent   says a row is a folder worked in before, for the tests; styled as .dirs__row
 run__name           a hook for the tests: a run's model; styled by .run__model's children
+fpick               the folder dialog's form, for the tests; styled as .dialog__body and by its parts
+ftrash              the trash dialog's body, for the tests; styled as .dialog__body and by its parts
+ftrash__restore     a hook for the tests; styled as .btn
+ftrash__remove      a hook for the tests; styled as .btn
+fvers               the versions dialog's body, for the tests; styled as .dialog__body and by its parts
+fvers__get          a hook for the tests; styled as .btn
+fvers__restore      a hook for the tests; styled as .btn
+nbcell--words       a notebook's cell of words; styled as .nbcell and by its parts
+nbcell--code        a notebook's cell of code; styled as .nbcell and by its parts

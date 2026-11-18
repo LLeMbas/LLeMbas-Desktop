@@ -169,7 +169,8 @@ export function initAttach(context) {
   $("attach").replaceChildren(icon(ICONS.attach))
   $("attach").addEventListener("click", pick)
   $("composer-text").addEventListener("paste", paste)
-  const usable = () => !$("composer").hidden && !$("shell").hidden && ctx.allowed()
+  // Only while the chat is what the window shows: on the Files page a drop is an upload there.
+  const usable = () => !$("composer").hidden && !$("shell").hidden && !$("main").hidden && ctx.allowed()
   listen("drag", (e) => {
     $("composer").dataset.drag = String(!!e.payload && usable())
   })

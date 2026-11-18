@@ -17,6 +17,7 @@
 //            More with `__mock.shell(kind, data)`; `{ refuse: {status, detail} }` makes
 //            `terminal_open` fail; `terminalDelay` (ms) is how long the socket takes to open
 //            (the id comes at once, as from Rust; the frames after that long).
+//   mediaBytes [byte, …] -- what `media_bytes` answers (a file handed over whole).
 //   python   { url, version } -- where `python_prepare` says the `python` tool's runner frame is.
 //   takes    { "/chats/c1/page/take": [call, …] } -- what a runner's long poll is handed, one
 //            call a poll, each answered after `takeDelay` ms; with none left the poll is held
@@ -160,6 +161,16 @@
         if (pg.__error) return Promise.reject(pg.__error)
         return { url: `http://sealed.test/${args.kind}/${args.owner}/${args.digest}`, title: "" }
       }
+      case "media_open": {
+        // The address Rust would serve a file's bytes at (src-tauri/src/media.rs); tests/ui serves
+        // `media.test` by the kind and the path asked for. `commands: { media_open }` overrides.
+        const own = (config.commands || {}).media_open
+        if (own && own.__error) return Promise.reject(own.__error)
+        return own || `http://media.test/${args.kind}/${encodeURIComponent(args.path)}`
+      }
+      case "media_bytes":
+        // The whole file, for a player that would not take the address: `mediaBytes` (numbers).
+        return new Uint8Array(config.mediaBytes || []).buffer
       case "model_image":
         return ""
       case "terminal_word":

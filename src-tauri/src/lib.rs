@@ -18,6 +18,8 @@
 mod agent;
 mod cli;
 mod files;
+mod kinds;
+mod media;
 mod python;
 mod remote;
 mod sealed;
@@ -121,6 +123,8 @@ struct App {
     /// The terminal panel's sockets (`terminal.rs`), by the page's id for each.
     terminals: terminal::Sessions,
     sealed: sealed::Pages,
+    /// The files the viewer may draw or play (`media.rs`), by ticket.
+    media: media::Tickets,
     /// The Pyodide release the `python` tool's runner is served from, once verified (`python.rs`).
     python: python::Runtime,
     watch: watch::Watch,
@@ -165,6 +169,11 @@ impl App {
         let server = self.server.lock().unwrap().clone()?;
         let account = self.account.lock().unwrap().clone()?;
         Some((server.base, account.token))
+    }
+
+    /// The CLI's own directories: read from here, never written (`files::may_write`).
+    fn kept(&self) -> Vec<PathBuf> {
+        files::kept_dirs(&[cli::config_dir(), cli::state_dir(), cli::data_dir()])
     }
 
     /// The folders the agent may use: what the explorer and the viewer may read.
@@ -292,6 +301,7 @@ async fn set_server(handle: AppHandle, address: String) -> Result<Status, String
         // Another server: its Pyodide is not the one made ready, and is not served any more.
         app.python.clear();
         app.sealed.clear_pages();
+        app.media.clear();
     }
     *app.account.lock().unwrap() = server::load_account(&app.config_dir, &d.base);
     *app.server.lock().unwrap() = Some(d);
@@ -404,6 +414,7 @@ fn sign_out(handle: AppHandle) {
     app.terminals.close_all();
     app.python.clear();
     app.sealed.clear_pages();
+    app.media.clear();
     if let Some(a) = account {
         std::thread::spawn(move || server::sign_out(&a.server, &a.token));
     }
@@ -418,6 +429,7 @@ fn token_refused(handle: &AppHandle) {
         app.terminals.close_all();
         app.python.clear();
         app.sealed.clear_pages();
+        app.media.clear();
         announce(handle);
     }
 }
@@ -806,6 +818,56 @@ struct LibraryUpload {
     failed: Vec<Uploaded>,
 }
 
+/// Send these files into the person's library, into the directory `dir`, one by one. Only ever
+/// called with paths the person chose: in the file dialog, by dropping them on the window, or
+/// in this computer's pane (checked against the agent's folders first).
+fn send_to_library(
+    handle: &AppHandle,
+    paths: Vec<PathBuf>,
+    dir: &str,
+) -> Result<LibraryUpload, ApiError> {
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let mut out = LibraryUpload {
+        listing: None,
+        sent: 0,
+        failed: Vec::new(),
+    };
+    for path in paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let sent = match read_for_upload(&path) {
+            Ok(bytes) => {
+                server::upload_to_library(&app_url, &token, dir, &name, &bytes).map_err(|e| {
+                    if e.status == 401 {
+                        token_refused(handle);
+                    }
+                    (None, e.detail)
+                })
+            }
+            Err((reason, message)) => Err((Some(reason), message)),
+        };
+        match sent {
+            Ok(listing) => {
+                out.listing = Some(listing);
+                out.sent += 1;
+            }
+            Err((reason, message)) => out.failed.push(Uploaded {
+                name,
+                size,
+                attachment: None,
+                error: Some(message),
+                reason,
+            }),
+        }
+    }
+    Ok(out)
+}
+
 /// Choose files with the system's dialog and send them into the person's library, into the
 /// directory `dir`. Nothing is sent when the dialog is cancelled.
 #[tauri::command]
@@ -822,48 +884,104 @@ async fn library_upload(
             .into_iter()
             .filter_map(|p| p.into_path().ok())
             .collect();
-        let Some((app_url, token)) = h.state::<App>().door() else {
-            return Err(ApiError::new(401, "Not signed in."));
-        };
-        let mut out = LibraryUpload {
-            listing: None,
-            sent: 0,
-            failed: Vec::new(),
-        };
-        for path in paths {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "file".into());
-            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            let sent = match read_for_upload(&path) {
-                Ok(bytes) => server::upload_to_library(&app_url, &token, &dir, &name, &bytes)
-                    .map_err(|e| {
-                        if e.status == 401 {
-                            token_refused(&h);
-                        }
-                        (None, e.detail)
-                    }),
-                Err((reason, message)) => Err((Some(reason), message)),
-            };
-            match sent {
-                Ok(listing) => {
-                    out.listing = Some(listing);
-                    out.sent += 1;
-                }
-                Err((reason, message)) => out.failed.push(Uploaded {
-                    name,
-                    size,
-                    attachment: None,
-                    error: Some(message),
-                    reason,
-                }),
-            }
-        }
-        Ok(out)
+        send_to_library(&h, paths, &dir)
     })
     .await
     .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// Send the files just dropped on the window into the person's library, into `dir`. Each drop
+/// can be sent once; the page never names a path.
+#[tauri::command]
+async fn library_upload_dropped(handle: AppHandle, dir: String) -> Result<LibraryUpload, ApiError> {
+    let paths = std::mem::take(&mut *handle.state::<App>().dropped.lock().unwrap());
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || send_to_library(&h, paths, &dir))
+        .await
+        .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// Where a download went, and how much of it there was.
+#[derive(Clone, Serialize)]
+struct Saved {
+    path: String,
+    size: u64,
+}
+
+/// A name the save dialog may suggest: the last part of whatever was given, never a path.
+fn suggested(name: &str) -> String {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    let clean: String = last.chars().filter(|c| !c.is_control()).collect();
+    if clean.is_empty() || clean == "." || clean == ".." {
+        "file".into()
+    } else {
+        clean
+    }
+}
+
+/// Run a download off the page's thread: the person chooses where in the system's save dialog
+/// (nothing is fetched when it is cancelled: `None`), and `fetch` writes there as it arrives.
+async fn save_with_dialog(
+    handle: AppHandle,
+    name: String,
+    title: String,
+    fetch: impl FnOnce(&str, &str, &std::path::Path) -> Result<u64, ApiError> + Send + 'static,
+) -> Result<Option<Saved>, ApiError> {
+    let h = handle.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let Some((app_url, token)) = h.state::<App>().door() else {
+            return Err(ApiError::new(401, "Not signed in."));
+        };
+        let picked = h
+            .dialog()
+            .file()
+            .set_title(title)
+            .set_file_name(suggested(&name))
+            .blocking_save_file();
+        let Some(dest) = picked.and_then(|p| p.into_path().ok()) else {
+            return Ok(None);
+        };
+        let size = fetch(&app_url, &token, &dest)?;
+        Ok(Some(Saved {
+            path: dest.to_string_lossy().into_owned(),
+            size,
+        }))
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(&handle);
+    }
+    result
+}
+
+/// Download a file of the server's tree (or one version of it) to where the person chooses.
+#[tauri::command]
+async fn file_save_as(
+    handle: AppHandle,
+    path: String,
+    name: String,
+    version: Option<String>,
+    title: String,
+) -> Result<Option<Saved>, ApiError> {
+    save_with_dialog(handle, name, title, move |app_url, token, dest| {
+        server::download(app_url, token, &path, version.as_deref(), dest)
+    })
+    .await
+}
+
+/// Download the chosen files and folders of the server's tree as one zip.
+#[tauri::command]
+async fn files_zip_save(
+    handle: AppHandle,
+    paths: Vec<String>,
+    name: String,
+    title: String,
+) -> Result<Option<Saved>, ApiError> {
+    save_with_dialog(handle, name, title, move |app_url, token, dest| {
+        server::download_zip(app_url, token, &paths, dest)
+    })
+    .await
 }
 
 /// `%XX` escapes undone (the page sends a file's name as `encodeURIComponent` gives it).
@@ -926,17 +1044,248 @@ async fn local_list(
         .map_err(|e| e.to_string())?
 }
 
-/// A file of the agent's, for the viewer: as text, or why not.
+/// A file of the agent's, for the viewer: as text, or why not; what it is; whether it may be
+/// saved from here.
 #[tauri::command]
 async fn local_read(
     handle: AppHandle,
     root: String,
     path: String,
 ) -> Result<files::Opened, String> {
-    let roots = handle.state::<App>().roots();
-    tauri::async_runtime::spawn_blocking(move || files::read(&roots, &root, &path))
+    let (roots, kept) = {
+        let app = handle.state::<App>();
+        (app.roots(), app.kept())
+    };
+    tauri::async_runtime::spawn_blocking(move || files::read_as(&roots, &kept, &root, &path))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// Run a change to the agent's folders off the page's thread, with the folders as they are now
+/// and the CLI's own directories, which nothing here writes.
+async fn on_local<T: Send + 'static>(
+    handle: &AppHandle,
+    f: impl FnOnce(&[String], &[PathBuf]) -> Result<T, ApiError> + Send + 'static,
+) -> Result<T, ApiError> {
+    let (roots, kept) = {
+        let app = handle.state::<App>();
+        (app.roots(), app.kept())
+    };
+    tauri::async_runtime::spawn_blocking(move || f(&roots, &kept))
+        .await
+        .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// A new empty file, or a new folder, called `name` in `dir`.
+#[tauri::command]
+async fn local_make(
+    handle: AppHandle,
+    root: String,
+    dir: String,
+    name: String,
+    folder: bool,
+) -> Result<String, ApiError> {
+    on_local(&handle, move |roots, kept| {
+        let made = if folder {
+            files::make_dir(roots, kept, &root, &dir, &name)
+        } else {
+            files::make_file(roots, kept, &root, &dir, &name)
+        };
+        made.map_err(|e| ApiError::new(400, e))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn local_rename(
+    handle: AppHandle,
+    root: String,
+    path: String,
+    name: String,
+) -> Result<String, ApiError> {
+    on_local(&handle, move |roots, kept| {
+        files::rename(roots, kept, &root, &path, &name).map_err(|e| ApiError::new(400, e))
+    })
+    .await
+}
+
+/// Move (or `copy`) each of `paths` into the folder `to`: what became of each.
+#[tauri::command]
+async fn local_transfer(
+    handle: AppHandle,
+    root: String,
+    paths: Vec<String>,
+    to: String,
+    copy: bool,
+) -> Result<Vec<files::Outcome>, ApiError> {
+    on_local(&handle, move |roots, kept| {
+        files::transfer(roots, kept, &root, &paths, &to, copy).map_err(|e| ApiError::new(400, e))
+    })
+    .await
+}
+
+/// The system's trash, where this system has one the app can reach: on Linux the desktop's own
+/// (GIO's `g_file_trash`, the freedesktop.org trash every file manager there shows), through the
+/// library the app's window already brings. A file the system cannot put there -- a disk with no
+/// trash -- is not deleted: the refusal is said.
+#[cfg(target_os = "linux")]
+fn to_trash(path: &std::path::Path) -> Result<(), String> {
+    use webkit2gtk::gio::prelude::FileExt;
+    webkit2gtk::gio::File::for_path(path)
+        .trash(webkit2gtk::gio::Cancellable::NONE)
+        .map_err(|e| format!("{} could not be moved to the trash: {e}", path.display()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn to_trash(path: &std::path::Path) -> Result<(), String> {
+    Err(format!(
+        "{} was not deleted: moving to the trash is not available on this system yet.",
+        path.display()
+    ))
+}
+
+/// Move each of `paths` to the system's trash: what became of each.
+#[tauri::command]
+async fn local_delete(
+    handle: AppHandle,
+    root: String,
+    paths: Vec<String>,
+) -> Result<Vec<files::Outcome>, ApiError> {
+    on_local(&handle, move |roots, kept| {
+        Ok(files::delete(roots, kept, &root, &paths, &to_trash))
+    })
+    .await
+}
+
+/// Save a text file of the agent's. A 409 when it changed since the page read it (`base`).
+#[tauri::command]
+async fn local_write(
+    handle: AppHandle,
+    root: String,
+    path: String,
+    text: String,
+    base: Option<String>,
+    force: Option<bool>,
+) -> Result<files::Opened, ApiError> {
+    on_local(&handle, move |roots, kept| {
+        files::write(
+            roots,
+            kept,
+            &root,
+            &path,
+            &text,
+            base.as_deref(),
+            force.unwrap_or(false),
+        )
+    })
+    .await
+}
+
+/// Send files of the agent's folders into the person's library on the server, into `dir`.
+#[tauri::command]
+async fn local_upload(
+    handle: AppHandle,
+    root: String,
+    paths: Vec<String>,
+    dir: String,
+) -> Result<LibraryUpload, ApiError> {
+    let roots = handle.state::<App>().roots();
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut found = Vec::new();
+        for path in &paths {
+            let (_, at) = files::resolve(&roots, &root, path).map_err(|e| ApiError::new(400, e))?;
+            found.push(at);
+        }
+        send_to_library(&h, found, &dir)
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// Bring a file of the server's tree into a folder of the agent's: written as it arrives, under
+/// a free name there. Where it went, from the folder the page named.
+#[tauri::command]
+async fn local_download(
+    handle: AppHandle,
+    root: String,
+    dir: String,
+    path: String,
+    name: String,
+) -> Result<String, ApiError> {
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let result = on_local(&handle, move |roots, kept| {
+        let (base, dest) = files::incoming(roots, kept, &root, &dir, &suggested(&name))
+            .map_err(|e| ApiError::new(400, e))?;
+        server::download(&app_url, &token, &path, None, &dest)?;
+        Ok(files::relative_to(&base, &dest))
+    })
+    .await;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(&handle);
+    }
+    result
+}
+
+// --- What the viewer draws and plays (`media.rs`) --------------------------------------------------
+
+/// Let the page draw or play one file: a file of the server's tree (`source` "server", `path`
+/// in the tree) or of a folder of the agent's ("local", `root` and `path`), as `kind` (image,
+/// svg, audio, video). The address to give an `<img>`, `<audio>` or `<video>`.
+#[tauri::command]
+fn media_open(
+    app: tauri::State<'_, App>,
+    source: String,
+    kind: String,
+    path: String,
+    root: Option<String>,
+) -> Result<String, ApiError> {
+    let Some(shown) = media::Shown::parse(&kind) else {
+        return Err(ApiError::new(
+            400,
+            format!("Not something to draw or play: {kind}"),
+        ));
+    };
+    let held = match (source.as_str(), root) {
+        ("server", _) => media::Source::Server {
+            raw: server::raw_path(&path, None, true)?,
+        },
+        ("local", Some(root)) => {
+            files::resolve(&app.roots(), &root, &path).map_err(|e| ApiError::new(400, e))?;
+            media::Source::Local { root, path }
+        }
+        _ => return Err(ApiError::new(400, "No such place.")),
+    };
+    Ok(media::url(&app.media.hold(held, shown)))
+}
+
+#[tauri::command]
+fn media_close(app: tauri::State<'_, App>, url: String) {
+    if let Some(id) = media::id_of_url(&url) {
+        app.media.forget(id);
+    }
+}
+
+/// The whole of a file the page was let to play, as bytes: for a webview whose player will not
+/// take the scheme's address. At most `media::WHOLE`; the page makes a `blob:` of them.
+#[tauri::command]
+async fn media_bytes(handle: AppHandle, url: String) -> Result<tauri::ipc::Response, ApiError> {
+    let Some(id) = media::id_of_url(&url).map(str::to_string) else {
+        return Err(ApiError::new(400, "No such file."));
+    };
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app = h.state::<App>();
+        let res = media::respond(&app.media, app.door(), &app.roots(), &id, None);
+        match res.status().as_u16() {
+            200 => Ok(tauri::ipc::Response::new(res.into_body())),
+            status => Err(ApiError::new(status, "The file could not be read.")),
+        }
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?
 }
 
 /// What the page needs to run the `python` tool for the chat it shows: whether the server has
@@ -2203,6 +2552,21 @@ pub fn run() {
                     .and_then(|v| v.to_str().ok()),
             )
         })
+        // What the viewer draws and plays: answered off the main thread, a piece at a time.
+        .register_asynchronous_uri_scheme_protocol(media::SCHEME, |ctx, request, responder| {
+            let handle = ctx.app_handle().clone();
+            std::thread::spawn(move || {
+                let app = handle.state::<App>();
+                let range = request.headers().get("range").and_then(|v| v.to_str().ok());
+                responder.respond(media::respond(
+                    &app.media,
+                    app.door(),
+                    &app.roots(),
+                    request.uri().path(),
+                    range,
+                ));
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             recheck_server,
@@ -2222,6 +2586,19 @@ pub fn run() {
             terminal_close,
             local_list,
             local_read,
+            local_make,
+            local_rename,
+            local_transfer,
+            local_delete,
+            local_write,
+            local_upload,
+            local_download,
+            media_open,
+            media_close,
+            media_bytes,
+            library_upload_dropped,
+            file_save_as,
+            files_zip_save,
             sealed_open,
             sealed_close,
             page_open,
@@ -2292,6 +2669,7 @@ pub fn run() {
                 next_stream: AtomicU64::new(0),
                 terminals: terminal::Sessions::default(),
                 sealed: sealed::Pages::default(),
+                media: media::Tickets::default(),
                 python: python::Runtime::default(),
                 watch: watch::Watch::default(),
                 dropped: Mutex::new(Vec::new()),
@@ -2343,7 +2721,11 @@ pub fn run() {
                 DragDropEvent::Leave => {
                     let _ = window.emit("drag", false);
                 }
-                DragDropEvent::Drop { paths, .. } => {
+                DragDropEvent::Drop { paths, position } => {
+                    // Where they were dropped, in the page's own pixels: a folder's row takes
+                    // them, where the page shows files.
+                    let at = position.to_logical::<f64>(window.scale_factor().unwrap_or(1.0));
+                    let _ = window.emit("drop-at", serde_json::json!({ "x": at.x, "y": at.y }));
                     let names: Vec<String> = paths
                         .iter()
                         .map(|p| {
