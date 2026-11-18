@@ -67,7 +67,8 @@ computers; an older one of either leaves things as they were.
 - **Scrolling up slowly while a reply is written is no longer undone.** A move up of a pixel
   or two at the thread's end still counted as "at the end", and the next frame took the thread
   back. Any move up by the person ends following, however small, also when the reply grows in
-  the same moment.
+  the same moment. The wheel turned up ends it at once: under WebKit a frame drawn before a
+  smooth scroll's first step cancelled the scroll.
 - Two readings of the open chat at once (a stream that ends as a notification is clicked) no
   longer follow the reply twice, and two that fail leave the chat as it was. A card waiting for
   an answer is not taken away by a reading that fails.

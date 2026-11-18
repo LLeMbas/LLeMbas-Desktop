@@ -305,6 +305,23 @@ function toBottom() {
 function initFollowing() {
   const th = $("thread")
   th.addEventListener("scroll", noticed, { passive: true })
+  // The wheel turned up over the thread is the person leaving the end, said before the thread
+  // has moved: an engine that scrolls smoothly takes its first step a moment later, and a frame
+  // drawn in between -- which would put the thread at its end again -- cancels that scroll
+  // before it began (seen under WebKit). Not when something inside the thread takes the wheel
+  // (a long block scrolled within itself), nor when the thread cannot go up at all.
+  th.addEventListener(
+    "wheel",
+    (e) => {
+      if (!(e.deltaY < 0) || e.ctrlKey || th.scrollTop <= 0) return
+      for (let el = e.target; el && el !== th; el = el.parentElement) {
+        if (el.scrollTop > 0 && el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(el).overflowY)) return
+      }
+      noticed()
+      following = false
+    },
+    { passive: true },
+  )
   // What changes a size without a frame of a reply: a picture that arrived, a block opened, the
   // dock grown by a card or a longer message, the window; and the thread back on the screen
   // after another page, with what was written meanwhile.
