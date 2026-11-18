@@ -6,6 +6,8 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.12] — 2026-11-18
+
 ### Added
 
 - **Dictation and Read aloud say which chat they are for.** A server whose connections carry speech models of their own (LLeMbas after 2.0.0-beta.14) answers with the one of the chat's connection; the app now tells it the chat — the open chat (`chat_id`), or the model chosen for a chat not made yet (`chat_model`, by its ref) — on `/v1/audio/transcriptions` and `/v1/audio/speech`. Where the chat's own speech model did not answer and the instance's default did, a note above the message box says so (*Transcribed by … / Read by …: this chat's own speech model did not answer*), once for that chat, and goes by itself. A server up to 2.0.0-beta.14 reads neither field and answers with its one speech service, as before.
