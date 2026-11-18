@@ -1310,6 +1310,45 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .dialog__input { width: 100%; }
 .dialog__actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
 
+/* A folder on a linked computer (dirpick.js): where the listing is, the list, the path, the two
+   buttons. The list has a fixed share of the height and scrolls on its own, so the dialog does
+   not jump as folders are walked. Every row is the same four tracks -- icon, name, a quieter
+   word (the model last used there, or that the computer will not work there), chevron -- so the
+   names start on one line and the words end on one, whatever a row has to say. */
+.dirs__where { display: grid; grid-template-columns: 1rem minmax(0, 1fr); gap: var(--sp-2); align-items: center; min-width: 0; color: var(--ink-muted); }
+.dirs__path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--text-sm) var(--font-mono); }
+.dirs__model[hidden], .dirs__said[hidden] { display: none; }
+.dirs__said { overflow-wrap: anywhere; color: var(--warning); }
+.dirs__list { list-style: none; margin: 0; padding: var(--sp-1) 0; height: min(var(--h-list), 45vh); overflow-y: auto; border: var(--border-w) solid var(--border); border-radius: var(--radius-lg); }
+.dirs__list[aria-busy="true"] { opacity: var(--opacity-dim); }
+.dirs__row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) fit-content(45%) 1rem;
+  gap: var(--sp-2);
+  align-items: center;
+  width: 100%;
+  min-height: var(--control-h);
+  padding: var(--sp-1) var(--sp-3);
+  font: var(--text-sm) var(--font-ui);
+  color: var(--ink);
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.dirs__row:hover, .dirs__row:focus-visible { background: var(--surface-hover); outline: none; }
+.dirs__row:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.dirs__lead, .dirs__chev { display: grid; place-items: center; color: var(--ink-faint); }
+.dirs__name { display: grid; min-width: 0; }
+.dirs__label, .dirs__under, .dirs__hint { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dirs__under { font: var(--text-xs) var(--font-mono); color: var(--ink-faint); }
+.dirs__hint { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); text-align: right; }
+.dirs__row.is-refused .dirs__label { color: var(--ink-muted); }
+.dirs__row.is-refused .dirs__hint { color: var(--warning); }
+.dirs__row--up .dirs__chev { visibility: hidden; }
+.dirs__group { padding: var(--sp-2) var(--sp-3) var(--sp-1); font: 600 var(--text-xs) / var(--leading-tight) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); }
+.dirs__empty { padding: var(--sp-2) var(--sp-3); }
+
 .palette { align-self: start; margin-top: 12vh; }
 .palette__line { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; padding: 0 var(--sp-3); border-bottom: var(--border-w) solid var(--border); color: var(--ink-muted); }
 .palette__input { height: var(--control-h-lg) !important; border: 0 !important; background: none !important; outline: none; font-size: var(--text-base); }
@@ -1892,7 +1931,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 /* A run's row: how it went · when · on what · its note or Open. The tracks are the list's, shared
    by every row (subgrid): the first is as wide as the longest status in the list -- whatever its
    words are in a language -- so no status is cut short and every date starts on one line. */
-.runs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content max-content fit-content(var(--w-field-sm)) minmax(0, 1fr); column-gap: var(--sp-3); }
+.runs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content max-content fit-content(var(--w-field)) minmax(0, 1fr); column-gap: var(--sp-3); }
 .run {
   display: grid;
   grid-column: 1 / -1;
@@ -1906,8 +1945,11 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .run__when { display: flex; gap: var(--sp-2); align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
 .run__late { font: var(--text-xs) var(--font-ui); color: var(--warning); }
-.run__model { display: inline-grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-2); align-items: center; min-width: 0; color: var(--ink-muted); }
-.run__model > span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* The model's track: its name, and under it -- each on a line of its own, cut with an ellipsis,
+   whole in its title -- how it was chosen and where an Agentic run ran. */
+.run__model { display: grid; min-width: 0; color: var(--ink-muted); }
+.run__model > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.run__how, .run__where { font: var(--text-xs) / var(--leading-tight) var(--font-ui); color: var(--ink-faint); }
 /* The end of a run's row has what the row has left: the run's one line (what went wrong, in the
    warning's colour; or what it found), on one line where it fits and two where it does not,
    then the report it filed and its result as buttons that never give. */
@@ -1917,11 +1959,23 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .run__error.is-note { color: var(--ink-muted); }
 .field[hidden] { display: none; }
 .sched--new { gap: var(--sp-3); }
+/* The type, asked first: two choices side by side where there is room, one under the other
+   where there is not. Each is a radio and its words on two tracks; the two start on one line
+   and nothing in one is lined up with the other's inside. */
+.stype { min-width: 0; margin: 0; padding: 0; border: 0; }
+.stype legend { padding: 0; }
+.stype__choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--w-field)), 1fr)); gap: var(--sp-3); align-items: start; }
+.stype__choice { display: grid; grid-template-columns: var(--check-size) minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-height: var(--control-h-lg); padding: var(--sp-3) var(--sp-4); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); cursor: pointer; }
+.stype__choice input { width: var(--check-size); height: var(--check-size); margin: 0; accent-color: var(--accent); }
+.stype__choice:has(input:checked) { border-color: var(--accent); }
+.stype__choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.stype__choice.is-off { cursor: default; }
+.stype__choice.is-off strong { color: var(--ink-muted); }
+.stype__words { display: grid; gap: var(--sp-1); min-width: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .sched__words { width: 100%; font-size: var(--text-base); border-radius: var(--radius-soft); padding: var(--sp-3) var(--sp-4); }
 .sched__card { display: grid; gap: var(--sp-4); padding: var(--sp-4); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
 /* A run's row opens its result under it, across every track. */
 .run__open { justify-self: end; }
-.run__switched { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); }
 .run__detail { grid-column: 1 / -1; display: grid; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
 .run__detail[hidden] { display: none; }
 .run__report { font: var(--text-xs) var(--font-ui); color: var(--ink-muted); overflow-wrap: anywhere; }

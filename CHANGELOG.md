@@ -6,7 +6,56 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+For LLeMbas server 2.0.0-beta.14 and a LLeMbas CLI with harness spec 3.9.0 on the linked
+computers; an older one of either leaves things as they were.
+
+### Added
+
+- **A folder on another computer is chosen, not typed.** A new agent chat on a linked computer
+  used to offer the folders its chats had worked in and a box for the path. The folder's chip
+  now opens the computer's own directories (`GET /api/v2/devices/{id}/directories`): its places
+  first, each folder opened with a click, the directory stood in chosen with Use this
+  directory. A directory the computer would not open a session in can be walked into but not
+  chosen, and says why. Beside a folder is the model last used in it, where the computer
+  remembers one. The folders worked in before and the typed path are still there -- in the
+  chip's menu and in the dialog -- and are all there is where the computer cannot list (it is
+  not linked, its CLI is too old, it does not answer or refuses): the server's sentence says
+  which. With the keys: the arrows walk the list, Enter or the right arrow opens a folder, the
+  left arrow or Backspace goes up, Tab reaches the path and the buttons, Escape closes and the
+  focus is back on the chip. This computer's own folders are chosen as before.
+- **A new agent chat starts on the model last used in its folder.** Once the computer and the
+  folder are chosen, the draft's model is the one the server says a chat there starts on
+  (`start` of `/api/v2/models?kind=agent&device=&directory=`): the folder's usual model, else
+  the default. It is asked again when the folder or the computer changes, and never replaces a
+  model picked in the draft. Only a picked model is sent with the first message; without one
+  the server starts the chat on the folder's model itself. The app keeps none of it.
+- **Scheduled tasks have two types, Chat and Agentic.** The form asks the type first. Chat runs
+  on the server, as before. Agentic belongs to one of your computers and a folder on it: the
+  computer, the folder (browsed there with the same dialog, or typed), the mode, how long an
+  approval waits, and the model -- "The folder's usual model" unless one is chosen. Agentic
+  cannot be chosen while none of your computers accepts scheduled work, and says so. A task's
+  page says its type, computer, folder and model; each run in its history says where it ran and
+  how its model was chosen (the folder's usual model, the default, the continued conversation's
+  own, or another because the first was busy). The models offered are the server's scheduling
+  models; a model it refuses for scheduled work is refused in its own words.
+
+### Changed
+
+- New agent chats no longer name the default model in their first message: the server chooses
+  (the folder's usual model, else the default) unless a model was picked in the draft.
+- A scheduled task's page says Type, Computer and Folder where it said "Where it runs".
+- tests/ui: the fixtures are the server's at its development branch (`SOURCE`), with the new
+  ones for a device's directories, the model a folder starts on, the scheduling models and an
+  Agentic run; tests for the folder dialog (DP), the draft's model (DM), the two types (ST) and
+  a chat that cannot be read again (RR).
+
 ### Fixed
+
+- **A chat that cannot be read again keeps what is drawn.** When the chat that is open was read
+  again (a reply ended, a message was edited) and the server could not be had, the thread was
+  emptied and only the error shown. The thread now stays, the chat is still the open one, and
+  the error is said beside it: on the reply that was being written, with Read again, where
+  there is one, else in the line above the message box.
 
 - **A reply can be followed as it is written.** The thread kept to its end only while the last
   frame had left it within 80 px of it -- measured after the frame was drawn, so one part of a

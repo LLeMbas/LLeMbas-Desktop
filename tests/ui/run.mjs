@@ -1931,16 +1931,18 @@ const bagEnd = (over = {}) => ({ id: "tok1", name: "bag-end", host: "bag-end", p
 async function openTask(p) {
   await p.waitForSelector("#composer")
   await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" }))
-  await p.waitForSelector(".fact >> text=Where it runs")
+  await p.waitForSelector("#sched-type-said")
 }
 
 test("L8: a task on a linked computer says the computer, the folder and mode; a run waits for it", async () => {
   const p = await page(l8([bagEnd()]))
   await openTask(p)
-  const where = await p.textContent(".fact:has-text('Where it runs')")
-  assert.match(where, /bag-end/)
+  assert.equal(await p.textContent("#sched-type-said"), "Agentic")
+  assert.match(await p.textContent("#sched-computer-said"), /bag-end/)
+  const where = await p.textContent("#sched-folder-said")
   assert.match(where, /\/home\/frodo\/waybread/)
   assert.match(where, /Edit — asks before commands · approvals wait 30 min/)
+  assert.match(await p.textContent(".fact:has(.fact__label:text-is('Model'))"), /The folder's usual model/, "no model of its own: its folder's")
   assert.equal(await p.locator(".fact.is-warning").count(), 0)
   assert.match(await p.textContent(".run[data-id='run5']"), /Waiting for the computer/)
   assert.match(await p.textContent(".run[data-id='run5']"), /Waiting for bag-end to be linked\./)
@@ -1969,12 +1971,14 @@ test("L8: a new task can run on this computer, in a folder and mode; one not acc
   await p.keyboard.press("Control+k")
   await p.fill(".palette__input", "New scheduled")
   await p.keyboard.press("Enter")
+  // The type first: Chat until Agentic is chosen, which starts on the computer that accepts.
+  assert.ok(await p.isChecked("#sched-type-chat"))
+  await p.check("#sched-type-agentic")
   await p.fill("#sched-words", "every day at 7:30 check the build")
   await p.click(".sched--new button[type=submit]")
-  await p.waitForSelector("#sched-where")
-  const options = await p.$$eval("#sched-where option", (l) => l.map((o) => [o.textContent, o.disabled]))
-  assert.deepEqual(options, [["On this server", false], ["bag-end — does not accept scheduled work", true], ["This computer (workbench)", false]])
-  await p.selectOption("#sched-where", "token1")
+  await p.waitForSelector("#sched-device")
+  const options = await p.$$eval("#sched-device option", (l) => l.map((o) => [o.textContent, o.disabled, o.selected]))
+  assert.deepEqual(options, [["bag-end — does not accept scheduled work", true, false], ["This computer (workbench)", false, true]])
   assert.equal(await p.inputValue("#sched-cwd"), "/home/dev/project")
   await p.selectOption("#sched-runmode", "auto")
   await p.fill("#sched-wait", "45")
@@ -1990,7 +1994,7 @@ test("L8: at 390 px the form with a computer chosen stays inside the window", as
   const p = await page(l8([bagEnd()]), { width: 390, height: 844 })
   await p.waitForSelector("#composer")
   await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" }))
-  await p.waitForSelector(".fact >> text=Where it runs")
+  await p.waitForSelector("#sched-type-said")
   assert.ok(await noSideways(p, 390), "nothing scrolls sideways")
   await shot(p, "l8-task-390")
   await p.click("#sched-edit")
@@ -4956,6 +4960,443 @@ test("W1: the moment a reply is finished the thread is still at its end: a finis
   await followed("read again, the next reply begun")
   assert.equal(await p.locator('.msg--user[data-id="m3"]').count(), 1, "the queued message is in the thread")
   w1End(p)
+})
+
+// --- DP: a folder on a linked computer, chosen from the computer's own listing -------------------
+//
+// The server's fixtures device_directories*.json (`GET /devices/{id}/directories?path=`): the
+// places, one directory with three in it -- one with a remembered model, one the computer will
+// not open a session in -- and the answers without a listing (`code`).
+
+const DIRS = "/devices/token9/directories?path="
+const PROJECT = "/home/user/project"
+
+/** A directory of the fixture's shape: `path`, with `over` what differs. */
+function dirAt(path, over = {}) {
+  const base = fixture("device_directories")
+  return { ...base, device: "token9", path, name: path.split("/").pop(), parent: path.slice(0, path.lastIndexOf("/")), model: null, entries: [], ...over }
+}
+
+function dp(over = {}) {
+  const refused = fixture("device_directories").entries.find((e) => !e.accepted)
+  return d4({
+    "GET /chats": { chats: [chatRow(), agentChat()], more: false },
+    [`GET ${DIRS}`]: { ...fixture("device_directories_places"), device: "token9" },
+    [`GET ${DIRS}${encodeURIComponent(PROJECT)}`]: { ...fixture("device_directories"), device: "token9" },
+    [`GET ${DIRS}${encodeURIComponent("/home/user")}`]: dirAt("/home/user", { parent: "", entries: [{ path: PROJECT, name: "project", accepted: true, reason: "", model: { id: "qwen", name: "Qwen" } }] }),
+    [`GET ${DIRS}${encodeURIComponent(`${PROJECT}/server`)}`]: dirAt(`${PROJECT}/server`, { model: { id: "gpt-oss", name: "gpt-oss" } }),
+    [`GET ${DIRS}${encodeURIComponent(`${PROJECT}/vendor`)}`]: dirAt(`${PROJECT}/vendor`, { accepted: false, reason: refused.reason }),
+    "POST /chats": { chat: agentChat({ id: "chat8", running: false, device: { token_id: "token9", directory: `${PROJECT}/server` } }), message: userMessage("m9", "Check the logs"), reply: null },
+    ...over,
+  })
+}
+
+/** A new agent chat on the other computer, its folder dialog open. */
+async function openPicker(p) {
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await pickDevice(p, "studio")
+  await p.waitForSelector("#target-chips .cchip--folder.is-warn")
+  await p.click("#target-chips .cchip--folder")
+  await p.waitForSelector("dialog[open] .dirs__list:not([aria-busy]) .dirs__row")
+}
+
+const dirRows = (p) => p.$$eval("dialog[open] .dirs__row", (l) => l.map((b) => [b.querySelector(".dirs__label").textContent, b.querySelector(".dirs__hint").textContent]))
+const dirWhere = (p, path) => p.waitForFunction((want) => document.querySelector("dialog[open] .dirs__path")?.textContent === want && !document.querySelector("dialog[open] .dirs__list[aria-busy]"), path)
+const focused = (p) => p.evaluate(() => document.activeElement?.querySelector?.(".dirs__label")?.textContent || document.activeElement?.className || "")
+
+test("DP: a folder on another computer is walked with the keys from its places, the model last used beside a folder; the one stood in is chosen, and Escape gives the focus back", async () => {
+  const p = await page(dp())
+  await openPicker(p)
+  assert.equal(await p.textContent("dialog[open] .dirs__path"), "Places on this device")
+  assert.deepEqual(await dirRows(p), [["user", ""], ["project", "Qwen"]], "the places, a remembered model beside its folder")
+  assert.equal(await focused(p), "user", "the first folder has the focus")
+  assert.ok(await p.isDisabled("#dirs-use"), "nothing to use before a folder is stood in or typed")
+  // Every row on the same tracks: the names start on one line, the quieter words end on one.
+  const edges = await p.$$eval("dialog[open] .dirs__row", (l) => l.map((b) => [Math.round(b.querySelector(".dirs__name").getBoundingClientRect().left), Math.round(b.querySelector(".dirs__hint").getBoundingClientRect().right)]))
+  assert.equal(new Set(edges.map((e) => e.join())).size, 1, `rows share their tracks: ${JSON.stringify(edges)}`)
+  await p.keyboard.press("ArrowDown")
+  assert.equal(await focused(p), "project")
+  await p.keyboard.press("Enter")
+  await dirWhere(p, PROJECT)
+  assert.deepEqual(await dirRows(p), [["Up a level", ""], ["docs", ""], ["server", "gpt-oss"], ["vendor", "Not trusted on the device"]])
+  assert.match(await p.textContent("dialog[open] .dirs__model"), /Last used here: Qwen\./)
+  assert.equal(await focused(p), "docs", "the first folder, not the way up")
+  await shot(p, "dp-picker-1280")
+  await p.keyboard.press("End")
+  assert.equal(await focused(p), "vendor")
+  await p.keyboard.press("ArrowUp")
+  await p.keyboard.press("ArrowRight")
+  await dirWhere(p, `${PROJECT}/server`)
+  assert.match(await p.textContent("dialog[open] .dirs__list"), /No directories here\./)
+  await p.keyboard.press("Backspace")
+  await dirWhere(p, PROJECT)
+  assert.equal(await focused(p), "server", "back up, on the folder just left")
+  await p.keyboard.press("ArrowLeft")
+  await dirWhere(p, "/home/user")
+  assert.equal(await focused(p), "project")
+  await p.keyboard.press("Enter")
+  await dirWhere(p, PROJECT)
+  await p.keyboard.press("ArrowDown")
+  await p.keyboard.press("Enter")
+  await dirWhere(p, `${PROJECT}/server`)
+  // The list is one stop for Tab; the next is the path, where Enter uses the folder stood in.
+  await p.keyboard.press("Tab")
+  assert.match(await focused(p), /dirs__typed/)
+  assert.equal(await p.inputValue("dialog[open] .dirs__typed"), `${PROJECT}/server`)
+  await p.keyboard.press("Enter")
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+  await p.waitForFunction(() => /server/.test(document.querySelector("#target-chips .cchip--folder")?.textContent || ""))
+  assert.ok(await p.evaluate(() => document.activeElement?.classList.contains("cchip--folder")), "the focus is on the folder's chip")
+  // Again, from the chip's menu (recent folders, Browse…, Type a folder…): Escape closes it and
+  // the focus is back on the chip; the folder stays.
+  await p.click("#target-chips .cchip--folder")
+  assert.deepEqual(await p.$$eval(".menu .menu__item", (l) => l.map((x) => x.textContent)), ["Browse…", "Type a folder…"])
+  await p.locator(".menu .menu__item", { hasText: "Browse…" }).click()
+  await dirWhere(p, `${PROJECT}/server`)
+  await p.keyboard.press("Escape")
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+  assert.ok(await p.evaluate(() => document.activeElement?.classList.contains("cchip--folder")), "Escape: the focus is back on the chip")
+  assert.match(await p.textContent("#target-chips .cchip--folder"), /server/)
+  await p.fill("#composer-text", "Check the logs")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  const [made] = await p.evaluate(() => window.__mock.api("POST", "/chats"))
+  assert.equal(made.args.body.directory, `${PROJECT}/server`)
+  assert.equal(made.args.body.device, "token9")
+  assert.deepEqual(p.errors, [])
+})
+
+test("DP: a directory the computer will not open a session in can be walked into but not chosen, and its reason is said; at 390 px the dialog is inside the window", async () => {
+  const p = await page(dp(), { width: 390, height: 844 })
+  await p.evaluate(() => document.getElementById("new-chat-btn").click())
+  await p.click(".kind__tab >> text=Agent")
+  await pickDevice(p, "studio")
+  await targetChips(p)
+  await p.click("#target-chips .cchip--folder")
+  await p.waitForSelector("dialog[open] .dirs__list:not([aria-busy]) .dirs__row")
+  await p.locator("dialog[open] .dirs__row", { hasText: "project" }).click()
+  await dirWhere(p, PROJECT)
+  assert.ok(await p.isEnabled("#dirs-use"), "an accepted directory can be used")
+  assert.ok(await p.isHidden("dialog[open] .dirs__said"))
+  const refused = p.locator("dialog[open] .dirs__row.is-refused")
+  assert.match(await refused.getAttribute("title"), /This directory is not trusted on the device\./, "the reason, on the row")
+  await refused.click()
+  await dirWhere(p, `${PROJECT}/vendor`)
+  assert.equal(await p.textContent("dialog[open] .dirs__said"), "This directory is not trusted on the device.")
+  assert.ok(await p.isDisabled("#dirs-use"), "not to be chosen")
+  await p.focus("dialog[open] .dirs__typed")
+  await p.keyboard.press("Enter")
+  assert.equal(await p.locator("dialog[open]").count(), 1, "Enter in the path does not choose it either")
+  assert.equal(await p.textContent("dialog[open] .dirs__path"), `${PROJECT}/vendor`)
+  const box = await p.locator("dialog[open]").boundingBox()
+  assert.ok(box.x >= 0 && box.x + box.width <= 390 && box.y >= 0 && box.y + box.height <= 844, `the dialog is inside the window: ${JSON.stringify(box)}`)
+  assert.ok(await p.$$eval("dialog[open] .dirs__row", (l) => l.every((b) => b.getBoundingClientRect().height >= 36)), "rows a finger can press")
+  assert.ok(await noSideways(p, 390))
+  await shot(p, "dp-picker-refused-390")
+  // A typed path is still the person's to try: the computer decides when the chat starts.
+  await p.fill("dialog[open] .dirs__typed", "/home/user/elsewhere")
+  assert.ok(await p.isEnabled("#dirs-use"))
+  await p.locator("dialog[open] .dirs__row--up").click()
+  await dirWhere(p, PROJECT)
+  assert.ok(await p.isEnabled("#dirs-use"))
+  await p.click("#dirs-use")
+  await p.waitForFunction(() => /project/.test(document.getElementById("chat-target").textContent))
+  assert.equal(await p.evaluate(() => window.__mock.api("POST", "/chats").length), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("DP: a computer whose CLI is too old to list, or that is not linked, says so and leaves the recent folders and the typed path", async () => {
+  for (const name of ["device_directories_cli_too_old", "device_directories_not_linked"]) {
+    const answer = { ...fixture(name), device: "token9" }
+    // A chat in the sidebar worked in /srv/site there: the recent folder, and the draft's first.
+    const p = await page(d4({ "GET /devices/token9/directories": answer }))
+    await p.click("#new-chat-btn")
+    await p.click(".kind__tab >> text=Agent")
+    await pickDevice(p, "studio")
+    await p.waitForFunction(() => /site/.test(document.querySelector("#target-chips .cchip--folder")?.textContent || ""))
+    await p.click("#target-chips .cchip--folder")
+    assert.deepEqual(await p.$$eval(".menu .menu__item", (l) => l.map((x) => (x.querySelector(".menu__label--two > :first-child") || x.querySelector(".menu__label")).textContent)), ["site", "Browse…", "Type a folder…"], "recent, browse, typed")
+    await p.locator(".menu .menu__item", { hasText: "Browse…" }).click()
+    await p.waitForSelector("dialog[open] .dirs__said:not([hidden])")
+    assert.equal(await p.textContent("dialog[open] .dirs__said"), answer.error, "the server's sentence")
+    assert.deepEqual(await dirRows(p), [["site", ""]], "only the folder worked in before")
+    assert.equal(await p.textContent("dialog[open] .dirs__group"), "Recent")
+    assert.equal(await p.inputValue("dialog[open] .dirs__typed"), "/srv/site")
+    await p.fill("dialog[open] .dirs__typed", "/home/user/other")
+    await p.keyboard.press("Enter")
+    await p.waitForSelector("dialog[open]", { state: "detached" })
+    await p.waitForFunction(() => /other/.test(document.querySelector("#target-chips .cchip--folder")?.textContent || ""))
+    // And the recent one from the dialog: it becomes the path, ready to be used.
+    await p.click("#target-chips .cchip--folder")
+    await p.locator(".menu .menu__item", { hasText: "Browse…" }).click()
+    await p.waitForSelector("dialog[open] .dirs__row--recent")
+    await p.click("dialog[open] .dirs__row--recent")
+    assert.equal(await p.inputValue("dialog[open] .dirs__typed"), "/srv/site")
+    await p.click("#dirs-use")
+    await p.waitForFunction(() => /site/.test(document.querySelector("#target-chips .cchip--folder")?.textContent || ""))
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+// --- DM: the model a new agent chat starts on is its folder's usual one ---------------------------
+//
+// `start { model, from }` of `/models?kind=agent&device=&directory=` (fixture
+// models_agent_directory.json): shown as the draft's model, asked again when the folder or the
+// computer changes, never over a model picked in the draft -- the only model `POST /chats` names.
+
+const AGENT_MODELS = (start) => {
+  const { start: said, ...rest } = fixture("models_agent_directory")
+  return start === undefined ? { ...rest, start: said } : start ? { ...rest, start } : rest
+}
+const startAt = (device, dir) => `GET /models?kind=agent&device=${device}&directory=${encodeURIComponent(dir)}`
+
+function dm(over = {}) {
+  return dp({
+    "GET /models": AGENT_MODELS(null),
+    [startAt("token9", PROJECT)]: AGENT_MODELS(),
+    [startAt("token9", "/home/user")]: AGENT_MODELS({ model: "qwen", from: "default" }),
+    "POST /chats": { chat: agentChat({ id: "chat8", running: false, model: "gpt-oss", device: { token_id: "token9", directory: PROJECT } }), message: userMessage("m9", "Check the logs"), reply: null },
+    "GET /chats/chat8": { chat: agentChat({ id: "chat8", running: false, model: "gpt-oss", device: { token_id: "token9", directory: PROJECT } }), messages: [userMessage("m9", "Check the logs")], more: false, live: null },
+    ...over,
+  })
+}
+
+const modelSaid = (p, name) => p.waitForFunction((want) => document.querySelector("#chat-settings .cchip--model .cchip__label")?.textContent === want, name)
+/** Choose the draft's folder in the dialog: the places, then `rows` clicked in turn. */
+async function folderBy(p, ...rows) {
+  await p.click("#target-chips .cchip--folder")
+  if (await p.locator(".menu .menu__item", { hasText: "Browse…" }).count()) await p.locator(".menu .menu__item", { hasText: "Browse…" }).click()
+  await p.waitForSelector("dialog[open] .dirs__list:not([aria-busy]) .dirs__row")
+  for (const row of rows) {
+    const from = await p.textContent("dialog[open] .dirs__path")
+    await p.locator("dialog[open] .dirs__row", { hasText: row }).first().click()
+    await p.waitForFunction((was) => document.querySelector("dialog[open] .dirs__path")?.textContent !== was && !document.querySelector("dialog[open] .dirs__list[aria-busy]"), from)
+  }
+  await p.click("#dirs-use")
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+}
+
+test("DM: a new agent chat's model is its folder's usual one, read again when the folder changes; none is sent unless one was picked, and a picked one stays", async () => {
+  const p = await page(dm())
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await modelSaid(p, "Qwen")
+  await pickDevice(p, "studio")
+  await p.waitForSelector("#target-chips .cchip--folder.is-warn")
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/models?kind=agent&device=token9&directory=").length), 0, "no folder, nothing to ask")
+  await folderBy(p, "project")
+  await modelSaid(p, "gpt-oss")
+  assert.match(await p.getAttribute("#chat-settings .cchip--model", "title"), /the folder's usual model/)
+  // Another folder: asked again; the server says the default there.
+  await folderBy(p, "Up a level")
+  await modelSaid(p, "Qwen")
+  assert.doesNotMatch(await p.getAttribute("#chat-settings .cchip--model", "title"), /usual model/)
+  await folderBy(p, "project")
+  await modelSaid(p, "gpt-oss")
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/models?kind=agent&device=token9&directory=").length), 3, "once for each change of folder")
+  await p.fill("#composer-text", "Check the logs")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  const first = (await p.evaluate(() => window.__mock.api("POST", "/chats")))[0].args.body
+  assert.equal(first.directory, PROJECT)
+  assert.ok(!("model" in first) && !("effort" in first), `the server starts it on the folder's model itself: ${JSON.stringify(first)}`)
+  // A model picked in the draft is the draft's, whatever the folder says, and is sent.
+  await p.waitForSelector('.msg--user[data-id="m9"]')
+  await p.click("#new-chat-btn")
+  await p.click(".kind__tab >> text=Agent")
+  await pickDevice(p, "studio")
+  await p.waitForSelector("#target-chips .cchip--folder.is-warn")
+  await folderBy(p, "project")
+  await modelSaid(p, "gpt-oss")
+  await p.click("#chat-settings .cchip--model")
+  await p.locator(".menu .menu__item", { hasText: "Vision" }).click()
+  await modelSaid(p, "Vision")
+  await folderBy(p, "Up a level")
+  await p.waitForFunction(() => /user/.test(document.querySelector("#target-chips .cchip--folder")?.textContent || ""))
+  await p.waitForTimeout(150)
+  assert.equal(await p.textContent("#chat-settings .cchip--model .cchip__label"), "Vision", "the picked model stays")
+  await p.fill("#composer-text", "Check the logs")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 2)
+  const second = (await p.evaluate(() => window.__mock.api("POST", "/chats")))[1].args.body
+  assert.equal(second.model, "vision-small")
+  assert.equal(second.directory, "/home/user")
+  // Nothing of a folder's model is kept by the app.
+  assert.deepEqual(await p.evaluate(() => Object.keys(localStorage).filter((k) => /model|director|folder/i.test(k))), [])
+  assert.deepEqual(p.errors, [])
+})
+
+// --- ST: the two types of schedule, Chat and Agentic ----------------------------------------------
+//
+// Fixtures schedule_on_device.json (Agentic: `runs_on`), schedule.json (Chat), schedule_models.json
+// (`GET /schedules/models`), schedule_run_agentic.json (a run's `ran_on` and `model.reason`).
+
+const WORKSTATION = { id: "tok1", name: "workstation", host: "workstation", platform: "linux", terminal: true, scheduled: true, max_mode: "edit", directory_model: true }
+
+function st(devices, over = {}) {
+  const cfg = l8(devices)
+  const tok = "/devices/tok1/directories?path="
+  Object.assign(cfg.routes, {
+    "GET /schedules/models": fixture("schedule_models"),
+    [`GET ${tok}`]: { ...fixture("device_directories_places"), device: "tok1" },
+    [`GET ${tok}${encodeURIComponent(PROJECT)}`]: { ...fixture("device_directories"), device: "tok1" },
+    ...over,
+  })
+  return cfg
+}
+
+async function newTask(p) {
+  await p.waitForSelector("#composer")
+  await p.evaluate(() => window.__mock.emit("open-schedule", { schedule: "sched3", run: "run5" }))
+  await p.waitForSelector("#page-scheduled:not([hidden])")
+  await p.keyboard.press("Control+k")
+  await p.fill(".palette__input", "New scheduled")
+  await p.keyboard.press("Enter")
+  await p.waitForSelector("#sched-type")
+}
+
+const saved = async (p, n = 1) => {
+  await p.waitForFunction((want) => window.__mock.api("POST", "/schedules").filter((c) => c.args.path === "/schedules").length === want, n)
+  return (await p.evaluate(() => window.__mock.api("POST", "/schedules").filter((c) => c.args.path === "/schedules"))).at(-1).args.body
+}
+
+test("ST: the form asks the type first; Agentic has its computer, a folder browsed there, mode, approval wait and the folder's usual model; the server's refusal of a model is said as it is", async () => {
+  const p = await page(st([WORKSTATION], { "POST /schedules": { __error: { status: 400, detail: "Qwen Plan is for interactive use only: its provider does not allow scheduled work on it." } } }))
+  await newTask(p)
+  // The type is the first thing in the form, before the words.
+  assert.ok(await p.evaluate(() => document.getElementById("sched-type").compareDocumentPosition(document.getElementById("sched-words")) & Node.DOCUMENT_POSITION_FOLLOWING))
+  assert.deepEqual(await p.$$eval("#sched-type input", (l) => l.map((i) => [i.value, i.checked, i.disabled])), [["chat", true, false], ["agentic", false, false]])
+  assert.equal(await p.locator("#sched-type-off").count(), 0)
+  // The two choices start on one line.
+  const tops = await p.$$eval(".stype__choice", (l) => l.map((x) => Math.round(x.getBoundingClientRect().top)))
+  assert.equal(new Set(tops).size, 1, `${tops}`)
+  await p.check("#sched-type-agentic")
+  await p.fill("#sched-words", "every day at 7:30 check the build")
+  await p.click(".sched--new button[type=submit]")
+  await p.waitForSelector("#sched-device")
+  assert.deepEqual(await p.$$eval("#sched-device option", (l) => l.map((o) => [o.textContent, o.selected])), [["workstation", true]])
+  // The models are the scheduling ones, the empty choice the folder's usual model.
+  assert.deepEqual(await p.$$eval("#sched-model option", (l) => l.map((o) => [o.value, o.textContent, o.selected])), [["", "The folder's usual model", true], ["gpt-oss", "gpt-oss · busy", false], ["qwen", "Qwen", false]])
+  assert.match(await p.textContent(".field:has(#sched-model) .hint"), /A run never changes the folder's model\./)
+  // The folder: typed, or browsed on the computer.
+  assert.equal(await p.inputValue("#sched-cwd"), "")
+  await p.click("#sched-save")
+  await p.waitForSelector(".sched__card > .status.is-error:not([hidden])")
+  assert.equal(await p.textContent(".sched__card > .status.is-error"), "Choose a folder first.")
+  assert.equal(await p.evaluate(() => window.__mock.api("POST", "/schedules").filter((c) => c.args.path === "/schedules").length), 0)
+  await p.click("#sched-browse")
+  await p.waitForSelector("dialog[open] .dirs__list:not([aria-busy]) .dirs__row")
+  assert.match(await p.textContent("dialog[open] .dialog__title"), /workstation/)
+  await p.locator("dialog[open] .dirs__row", { hasText: "project" }).click()
+  await dirWhere(p, PROJECT)
+  await p.click("#dirs-use")
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+  assert.equal(await p.inputValue("#sched-cwd"), PROJECT)
+  assert.ok(await p.evaluate(() => document.activeElement?.id === "sched-cwd"), "the focus is on the folder's field")
+  // The folder's field and its button are one control on the form's shared line.
+  const line = await p.$$eval("#sched-device, #sched-cwd, #sched-browse", (l) => l.map((x) => Math.round(x.getBoundingClientRect().top)))
+  assert.equal(new Set(line).size, 1, `controls on one line: ${line}`)
+  await shot(p, "st-form-agentic-1280")
+  await p.click("#sched-save")
+  await p.waitForFunction(() => /interactive use only/.test(document.querySelector(".sched__card > .status.is-error")?.textContent || ""))
+  assert.equal(await p.textContent(".sched__card > .status.is-error"), "Qwen Plan is for interactive use only: its provider does not allow scheduled work on it.", "the server's sentence")
+  const on = fixture("schedule_on_device").schedule
+  await p.evaluate((schedule) => window.__mock.answer("POST /schedules", { schedule }), { ...on, id: "sched9" })
+  await p.click("#sched-save")
+  const body = await saved(p, 2)
+  assert.deepEqual(body.runs_on, { device: "tok1", cwd: PROJECT, mode: "edit", approval_wait_minutes: 30 })
+  assert.equal(body.model, "", "no model named: the folder's usual one")
+  assert.deepEqual(p.errors, [])
+})
+
+test("ST: a Chat schedule is one without a computer; Agentic cannot be chosen while no computer accepts scheduled work, and says why, at 1280 and 390 px", async () => {
+  for (const [width, height] of [[1280, 860], [390, 844]]) {
+    const p = await page(st([{ ...WORKSTATION, scheduled: false }]), { width, height })
+    await newTask(p)
+    assert.deepEqual(await p.$$eval("#sched-type input", (l) => l.map((i) => [i.value, i.checked, i.disabled])), [["chat", true, false], ["agentic", false, true]])
+    assert.match(await p.textContent("#sched-type-off"), /None of your computers accepts scheduled work now\./)
+    assert.ok(await noSideways(p, width), `${width}: nothing scrolls sideways`)
+    const boxes = await p.$$eval(".stype__choice", (l) => l.map((x) => { const r = x.getBoundingClientRect(); return [r.left, r.right, x.scrollWidth <= x.clientWidth + 1] }))
+    assert.ok(boxes.every(([left, right, whole]) => left >= 0 && right <= width && whole), `${width}: ${JSON.stringify(boxes)}`)
+    await shot(p, `st-form-type-${width}`)
+    await p.fill("#sched-words", "every day at 7:30 check the build")
+    await p.click(".sched--new button[type=submit]")
+    await p.waitForSelector("#sched-model")
+    assert.equal(await p.locator("#sched-device, #sched-cwd").count(), 0, "no computer, no folder")
+    assert.equal(await p.$eval("#sched-model option", (o) => o.textContent), "The first free scheduling model")
+    await p.click("#sched-save")
+    const body = await saved(p)
+    assert.equal(body.runs_on, null)
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
+})
+
+test("ST: a task's page says its type, computer, folder and model; a run says where it ran and how its model was chosen", async () => {
+  const agentic = fixture("schedule_run_agentic").run
+  const cfg = st([WORKSTATION])
+  const chat = fixture("schedule")
+  Object.assign(cfg.routes, {
+    "GET /schedules/sched3/runs": {
+      runs: [
+        agentic,
+        { ...agentic, id: "run7", model: { ...agentic.model, reason: "default" } },
+        { ...agentic, id: "run8", model: { ...agentic.model, reason: "session" } },
+        { ...agentic, id: "run9", model: { id: "gpt-oss", name: "gpt-oss", reason: "pinned", switched_from: null } },
+      ],
+      more: false,
+    },
+    [`GET /schedules/${chat.schedule.id}`]: chat,
+    [`GET /schedules/${chat.schedule.id}/runs`]: { runs: [fixture("schedule_run").run], more: false },
+  })
+  const p = await page(cfg)
+  await openTask(p)
+  assert.equal(await p.textContent("#sched-type-said"), "Agentic")
+  assert.match(await p.textContent("#sched-computer-said"), /workstation/)
+  assert.equal(await p.locator("#sched-computer-said.is-warning").count(), 0)
+  assert.match(await p.textContent("#sched-folder-said"), /\/home\/frodo\/waybread/)
+  assert.match(await p.textContent(".fact:has(.fact__label:text-is('Model'))"), /The folder's usual model/)
+  const rows = await p.$$eval(".run", (l) => l.map((r) => [r.dataset.id, ...[".run__name", ".run__how", ".run__where"].map((s) => r.querySelector(s)?.textContent ?? null)]))
+  assert.deepEqual(rows, [
+    ["run6", "Qwen", "the folder's usual model", "workstation · project"],
+    ["run7", "Qwen", "default model", "workstation · project"],
+    ["run8", "Qwen", "the conversation's own model", "workstation · project"],
+    ["run9", "gpt-oss", null, "workstation · project"],
+  ])
+  assert.match(await p.getAttribute(".run[data-id='run6'] .run__where", "title"), /\/home\/user\/project/, "the whole folder in the title")
+  // The rows' tracks are shared: every model starts on one line.
+  assert.equal(new Set(await p.$$eval(".run__model", (l) => l.map((x) => Math.round(x.getBoundingClientRect().left)))).size, 1)
+  await shot(p, "st-task-agentic-1280")
+  // A Chat task: its type, no computer or folder, and a run that ran nowhere but the server.
+  await p.evaluate((id) => window.__mock.emit("open-schedule", { schedule: id, run: "" }), chat.schedule.id)
+  await p.waitForFunction(() => document.getElementById("sched-type-said")?.textContent === "Chat")
+  assert.equal(await p.locator("#sched-computer-said, #sched-folder-said, .run__where").count(), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+// --- RR: a chat read again that cannot be had ------------------------------------------------------
+
+test("RR: a chat read again and not had keeps the thread that is drawn, and the error is said beside it", async () => {
+  const p = await page(w1Chat([["status", { text: "Writing…" }]]))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector(".msg.is-live")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  const before = await p.locator("#messages .msg").count()
+  assert.ok(before >= 14)
+  // The reply ends with another queued behind it: the chat is read again -- and the server is away.
+  await p.evaluate(() => window.__mock.answer("GET /chats/chat2", { __error: { status: 502, detail: "The server did not answer." } }))
+  const message = { ...fixture("message_stopped"), id: "m2" }
+  await w1Send(p, "done", { message, chat: { id: "chat2", title: "Tidy the build" }, next: true })
+  await p.waitForSelector("#thread-note:not([hidden])")
+  assert.equal(await p.textContent("#thread-note"), "The server did not answer.")
+  assert.equal(await p.locator("#messages .msg").count(), before, "the thread is still there")
+  assert.equal(await p.locator('.msg--assistant[data-id="m2"]:not(.is-live)').count(), 1, "the finished reply too")
+  assert.equal(await p.locator(".thread__loading").count(), 0)
+  // The chat is still the open one: a message can be sent to it.
+  assert.match(await p.textContent("#chat-title"), /Tidy the build/)
+  assert.deepEqual(p.errors, [])
 })
 
 // --- Run ----------------------------------------------------------------------------------------

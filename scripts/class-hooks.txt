@@ -50,3 +50,8 @@ frow__icon--*       dir|mount|code|html|markdown|text  a file's kind in the expl
 frow__icon--markdown a plain file: the icon in the row's own colour
 frow__icon--text    a plain file: the icon in the row's own colour
 range2__input--*    min|max  hook: which end of the two-ended slider, for the script and the tests; styled as .range2__input
+msg__again          a hook: the one Read again of a reply that could not be followed; styled as .btn
+dirs                the folder dialog's body; styled as .dialog__body and by its parts
+dirs__typed         a hook for the tests; styled as .dialog__input
+dirs__row--recent   says a row is a folder worked in before, for the tests; styled as .dirs__row
+run__name           a hook for the tests: a run's model; styled by .run__model's children

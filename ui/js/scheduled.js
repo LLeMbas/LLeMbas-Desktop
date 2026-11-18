@@ -31,10 +31,19 @@
 //                                              the linked computers, each saying whether it
 //                                              accepts scheduled work
 //
-// Where it runs (`runs_on`, server 2.0.0-beta.9): null on the server, else `{ device, device_name,
-// cwd, mode, approval_wait_minutes }` -- an agent chat on that linked computer, in that folder and
-// mode (never Plan). A run waiting for the computer says `waiting_for: "device"`; one it refused
-// (it does not accept scheduled work) fails with the computer's own words.
+// The two types (harness spec 3.9.0). There is no field for the type: **Agentic** is a schedule
+// with `runs_on { device, device_name, cwd, mode, approval_wait_minutes }` -- it belongs to that
+// linked computer and that folder, and runs there as an agent (never in Plan) -- and **Chat** one
+// with `runs_on: null`, which runs on the server. The form asks the type first. An Agentic
+// schedule's `model` may be empty: the folder's usual model, asked of the computer as each run
+// starts. A run says where it ran (`ran_on { device, device_name, cwd, mode }`, null for Chat)
+// and how its model was chosen (`model.reason`: pinned, switched, directory, default, session).
+// A run waiting for the computer says `waiting_for: "device"`; one it refused (it does not
+// accept scheduled work) fails with the computer's own words. Agentic is offered only while a
+// device of `GET /devices` says `scheduled: true`.
+//
+// A schedule's models are `GET /schedules/models`, which never lists a model that is for
+// interactive use only; one sent all the same is the server's 400, said as it is.
 //
 // A server without them answers 404: the page says this server has no scheduled tasks yet.
 // Everything a task says (its title, instruction, a run's result or error) is the person's or a
@@ -45,6 +54,9 @@ import { api, get, post, patch, del, why, listen } from "./bridge.js"
 import { ask, menu, popover } from "./popup.js"
 import { avatar, levelsOf, levelWord } from "./models.js"
 import { markdown } from "./markdown.js"
+import { pickDirectory } from "./dirpick.js"
+import { knownFolders } from "./chat.js"
+import { folderName } from "./list.js"
 
 let ctx = null // { status(), models(), me(), thisDevices(), openChat(id), show() }
 let view = { name: "list" } // { name: "list" } | { name: "task", id } | { name: "form", task? }
@@ -355,12 +367,13 @@ async function drawTask(id) {
         fact(t("When"), h("span", { text: task.description || "" }), task.timezone ? t("Times in %(zone)s", { zone: task.timezone }) : ""),
         fact(t("Next run"), h("span", { text: nextWords(task) })),
         fact(t("Last run"), statusChip(task.last_run, task.running)),
-        fact(t("Model"), modelWords(models, task.model)),
+        "runs_on" in task ? fact(t("Type"), h("span", { id: "sched-type-said", text: task.runs_on ? t("Agentic") : t("Chat") })) : null,
+        ...(task.runs_on ? whereFacts(task.runs_on, devices) : []),
+        fact(t("Model"), modelWords(models, task.model, !!task.runs_on)),
         fact(t("Reasoning effort"), h("span", { text: task.effort ? levelWord(task.effort) : t("The model's own") })),
         fact(t("Subagents"), h("span", { text: task.agents ? t("Up to %(n)s at once", { n: task.agents }) : t("None") })),
         fact(t("Notify when"), h("span", { id: "sched-notify-said", text: notifyOf(task) === "when" ? task.notify_when || task.notify_default || NOTIFY.when() : NOTIFY[notifyOf(task)]() })),
         fact(t("Runs"), h("span", { text: MODE[task.mode]?.() || MODE.fresh() })),
-        "runs_on" in task ? whereFact(task.runs_on, devices) : null,
       ),
       h("div", { class: "sched__what" }, h("h2", { class: "sched__h", text: t("What it does") }), h("p", { class: "sched__instruction", text: task.instruction || task.request || "" }), task.request && task.request !== task.instruction ? h("p", { class: "sched__asked", text: t("You asked: “%(text)s”", { text: task.request }) }) : null),
       upcoming(task.next_runs || []),
@@ -391,30 +404,31 @@ function deviceLabel(d) {
   return (ctx.thisDevices?.() || []).includes(d.id) ? t("This computer (%(name)s)", { name }) : name
 }
 
-/** "Where it runs": the server, or a computer and a folder, with what it is doing about it now. */
-function whereFact(on, devices) {
-  if (!on) return fact(t("Where it runs"), h("span", { text: t("On this server") }))
+/** An Agentic task's computer and folder: two facts, with what stands in a run's way now. */
+function whereFacts(on, devices) {
   const d = (devices || []).find((x) => x.id === on.device)
-  const name = d ? deviceLabel(d) : on.device_name || t("A linked computer")
+  const name = d ? deviceLabel(d) : on.device_name || t("a computer no longer signed in")
   let state = ""
   if (devices && !d) state = t("Away now: a run waits for it, then counts as missed.")
   else if (d && d.scheduled === false) state = t("It does not accept scheduled work: turn on Accept scheduled work there.")
-  const hint = [RUN_MODES[on.mode]?.() || on.mode, t("approvals wait %(n)s min", { n: on.approval_wait_minutes }), state].filter(Boolean).join(" · ")
-  return h(
-    "div",
-    { class: `fact${state ? " is-warning" : ""}` },
-    h("span", { class: "fact__label", text: t("Where it runs") }),
-    h("span", { class: "fact__value" }, h("bdi", { text: name }), h("span", { class: "fact__path", title: on.cwd }, h("bdi", { text: on.cwd }))),
-    h("span", { class: "fact__hint", text: hint }),
-  )
+  return [
+    h("div", { class: `fact${state ? " is-warning" : ""}`, id: "sched-computer-said" }, h("span", { class: "fact__label", text: t("Computer") }), h("span", { class: "fact__value" }, h("bdi", { text: name })), state ? h("span", { class: "fact__hint", text: state }) : null),
+    h(
+      "div",
+      { class: "fact", id: "sched-folder-said" },
+      h("span", { class: "fact__label", text: t("Folder") }),
+      h("span", { class: "fact__value" }, h("span", { class: "fact__path", title: on.cwd }, h("bdi", { text: on.cwd }))),
+      h("span", { class: "fact__hint", text: [RUN_MODES[on.mode]?.() || on.mode, t("approvals wait %(n)s min", { n: on.approval_wait_minutes })].join(" · ") }),
+    ),
+  ]
 }
 
 function fact(label, value, hint) {
   return h("div", { class: "fact" }, h("span", { class: "fact__label", text: label }), h("span", { class: "fact__value" }, value), hint ? h("span", { class: "fact__hint", text: hint }) : null)
 }
 
-function modelWords(models, id) {
-  if (!id) return h("span", { text: t("The first free scheduling model") })
+function modelWords(models, id, agentic) {
+  if (!id) return h("span", { text: agentic ? t("The folder's usual model") : t("The first free scheduling model") })
   const m = models.find((x) => x.id === id)
   return m ? h("span", { class: "sched__model" }, avatar(m), h("span", { text: m.name })) : h("span", { text: id })
 }
@@ -483,6 +497,11 @@ function runCost(run) {
 function runRow(task, run) {
   const model = run.model || {}
   const switched = model.reason === "switched" && model.switched_from ? t("%(model)s was busy, so it ran on this one.", { model: model.switched_from }) : ""
+  // How the model was chosen, where that says something: the folder's usual one, the person's
+  // default (the folder had none), the continued conversation's own, or another for a busy one.
+  const how = { directory: () => t("the folder's usual model"), default: () => t("default model"), session: () => t("the conversation's own model"), switched: () => t("switched") }[model.reason]?.() || ""
+  const on = run.ran_on?.device ? run.ran_on : null
+  const where = on ? [on.device_name || t("a computer no longer signed in"), folderName(on.cwd || "")].filter(Boolean).join(" · ") : ""
   const hasResult = run.message_id || run.report_path || run.preview
   const detail = h("div", { class: "run__detail", hidden: true })
   const open = hasResult
@@ -519,7 +538,14 @@ function runRow(task, run) {
       h("span", { text: stamp(run.started_at || run.due_at) }),
       TIMING[run.timing] ? h("span", { class: "run__late", text: TIMING[run.timing]() }) : null,
     ),
-    h("span", { class: "run__model", title: switched }, h("span", { text: model.name || (task.runs_on ? task.runs_on.device_name || "" : "") }), switched ? h("span", { class: "run__switched", text: t("switched") }) : null),
+    // The model's track: its name, how it was chosen, and -- an Agentic run -- where it ran.
+    h(
+      "span",
+      { class: "run__model" },
+      h("span", { class: "run__name", title: model.name || "", text: model.name || (on ? "" : task.runs_on?.device_name || "") }),
+      how ? h("span", { class: "run__how", title: switched || how, text: how }) : null,
+      where ? h("span", { class: "run__where", title: `${on.device_name || ""} · ${on.cwd || ""} · ${RUN_MODES[on.mode]?.() || on.mode || ""}`, text: where }) : null,
+    ),
     h(
       "span",
       { class: "run__end" },
@@ -568,8 +594,11 @@ async function drawForm(task) {
   clear($("scheduled-tools"))
   const [sm, devices] = await Promise.all([schedulingModels(), linkedDevices()])
   const smodels = sm?.models || []
-  // Offered where the server can run a schedule on a computer: its devices say whether they accept.
+  // The two types, where the server has them: its devices say whether they accept scheduled work.
   const canPlace = !!devices && (devices.some((d) => "scheduled" in d) || !!task?.runs_on)
+  // Agentic is offered only while a computer accepts scheduled work (one that already is stays so).
+  const accepting = (devices || []).filter((d) => d.scheduled === true)
+  const agenticOffered = accepting.length > 0 || !!task?.runs_on
   // What will be saved: the rule only from the server's reading of words (or the task's own).
   const draft = {
     request: task?.request || "",
@@ -638,45 +667,106 @@ async function drawForm(task) {
     saveBtn.disabled = !(draft.rule && Object.keys(draft.rule).length)
   }
 
-  /** Where it runs: the server, or a linked computer that accepts scheduled work, its folder and mode. */
+  /** A computer's folder to start from: this computer's first project folder, else none. */
+  const startFolder = (id) => ((ctx.thisDevices?.() || []).includes(id) ? ctx.status?.()?.remote?.roots?.[0] || "" : "")
+
+  // The type, asked first: Chat or Agentic. Two radios on one track each, the word and what it
+  // means; Agentic cannot be chosen while no computer accepts scheduled work, and says so.
+  const typeChoice = () => {
+    const choice = (value, word, hint, off) =>
+      h(
+        "label",
+        { class: `stype__choice${off ? " is-off" : ""}` },
+        h("input", {
+          type: "radio",
+          name: "sched-type",
+          id: `sched-type-${value}`,
+          value,
+          checked: (value === "agentic") === !!draft.runs_on,
+          disabled: !!off,
+          "aria-describedby": `sched-type-${value}-hint`,
+          onchange: () => {
+            if (value === "chat") draft.runs_on = null
+            else if (!draft.runs_on) {
+              const id = accepting[0]?.id || ""
+              draft.runs_on = { device: id, cwd: startFolder(id), mode: "edit", approval_wait_minutes: 30 }
+            }
+            // A model chosen for one type is not carried to the other: their empty choices differ.
+            draft.model = ""
+            draft.effort = ""
+            drawSettings()
+          },
+        }),
+        h("span", { class: "stype__words" }, h("strong", { text: word }), h("span", { class: "hint", id: `sched-type-${value}-hint`, text: hint }), off ? h("span", { class: "hint is-warn", id: "sched-type-off", text: off }) : null),
+      )
+    return h(
+      "fieldset",
+      { class: "stype", id: "sched-type" },
+      h("legend", { class: "sched__h", text: t("Type") }),
+      h(
+        "div",
+        { class: "stype__choices", role: "radiogroup", "aria-label": t("Type") },
+        choice("chat", t("Chat"), t("Runs on this server, like a chat: with the server's tools (search, your files here, memory) and on a scheduling model.")),
+        choice(
+          "agentic",
+          t("Agentic"),
+          t("Runs on one of your computers, in one folder there, as an agent: with the agent's tools on that computer — its files and its shell — under the computer's own limits. It belongs to that computer and folder."),
+          agenticOffered ? "" : t("None of your computers accepts scheduled work now. Link one and switch on “Accept scheduled work” in its LLeMbas CLI (lembas service scheduled on)."),
+        ),
+      ),
+    )
+  }
+
+  /** An Agentic task's own fields: the computer, the folder (browsed there, or typed), mode, approval wait. */
   const whereFields = () => {
     const on = draft.runs_on
+    if (!on) return []
     const listed = devices || []
     const where = h(
       "select",
       {
-        id: "sched-where",
+        id: "sched-device",
         onchange: (e) => {
           const id = e.target.value
-          if (!id) draft.runs_on = null
-          else {
-            const mine = (ctx.thisDevices?.() || []).includes(id)
-            const roots = ctx.status?.()?.remote?.roots || []
-            draft.runs_on = { device: id, cwd: draft.runs_on?.cwd || (mine ? roots[0] || "" : ""), mode: draft.runs_on?.mode || "edit", approval_wait_minutes: draft.runs_on?.approval_wait_minutes || 30 }
-          }
+          // Another computer: the folder was the other one's.
+          on.device = id
+          on.cwd = startFolder(id)
           drawSettings()
-          settings.querySelector(draft.runs_on ? "#sched-cwd" : "#sched-where")?.focus()
+          settings.querySelector("#sched-device")?.focus()
         },
       },
-      h("option", { value: "", text: t("On this server"), selected: !on }),
-      listed.map((d) => h("option", { value: d.id, text: d.scheduled === false ? `${deviceLabel(d)} — ${t("does not accept scheduled work")}` : deviceLabel(d), disabled: d.scheduled === false && on?.device !== d.id, selected: on?.device === d.id })),
-      on && !listed.some((d) => d.id === on.device) ? h("option", { value: on.device, text: `${task?.runs_on?.device_name || on.device} — ${t("not linked now")}`, selected: true }) : null,
+      listed.map((d) => h("option", { value: d.id, text: d.scheduled === false ? `${deviceLabel(d)} — ${t("does not accept scheduled work")}` : deviceLabel(d), disabled: d.scheduled === false && on.device !== d.id, selected: on.device === d.id })),
+      on.device && !listed.some((d) => d.id === on.device) ? h("option", { value: on.device, text: `${task?.runs_on?.device_name || on.device} — ${t("not linked now")}`, selected: true }) : null,
     )
-    const out = [field(t("Where it runs"), where, on ? t("A run on a computer is an agent chat there. The computer must allow it: “Accept scheduled work” in its LLeMbas CLI (lembas service scheduled on).") : "", "sched-where")]
-    if (!on) return out
     const cwd = h("input", { type: "text", id: "sched-cwd", value: on.cwd, placeholder: "/home/…", spellcheck: "false", oninput: (e) => (on.cwd = e.target.value.trim()) })
+    const linked = listed.find((d) => d.id === on.device)
+    const browse = h("button", {
+      type: "button",
+      class: "btn",
+      id: "sched-browse",
+      text: t("Browse…"),
+      // A computer that is not linked now cannot be asked: its path is typed.
+      disabled: !linked,
+      onclick: async () => {
+        const dir = await pickDirectory({ device: on.device, name: deviceLabel(linked), value: on.cwd, recent: knownFolders(on.device) })
+        if (!dir) return
+        on.cwd = dir
+        cwd.value = dir
+        cwd.focus()
+      },
+    })
     const mode = h(
       "select",
       { id: "sched-runmode", onchange: (e) => (on.mode = e.target.value) },
       Object.entries(RUN_MODES).map(([v, word]) => h("option", { value: v, text: word(), selected: on.mode === v })),
     )
     const wait = h("input", { type: "number", id: "sched-wait", min: "1", max: "1440", step: "1", value: String(on.approval_wait_minutes || 30), oninput: (e) => (on.approval_wait_minutes = Number(e.target.value) || 30) })
-    out.push(
-      field(t("Folder on the computer"), cwd, t("A full path, inside a folder the computer allows remote work in."), "sched-cwd"),
+    return [
+      field(t("Computer"), where, t("The computer must allow it: “Accept scheduled work” in its LLeMbas CLI (lembas service scheduled on). When it is not linked at the time of a run, the run waits for it; if it has not come back before the run's time has passed, the run is recorded as missed and you are told."), "sched-device"),
+      field(t("Folder on the computer"), h("div", { class: "row" }, cwd, browse), t("A full path, inside a folder the computer allows remote work in."), "sched-cwd"),
       field(t("Mode"), mode, t("Edit unless you choose otherwise; Auto runs commands without asking. The computer may lower it."), "sched-runmode"),
       field(t("An approval waits (minutes)"), wait, t("A command the run needs approved comes to your phone as a card. Unanswered by then, it counts as denied."), "sched-wait"),
-    )
-    return out
+    ]
   }
 
   // Notify when: Every run / When… / Never, and -- a field of its own beside it, there only
@@ -714,7 +804,9 @@ async function drawForm(task) {
     const modelSelect = h(
       "select",
       { id: "sched-model", onchange: (e) => ((draft.model = e.target.value), (draft.effort = ""), drawSettings()) },
-      h("option", { value: "", text: t("The first free scheduling model"), selected: !draft.model }),
+      // No model of its own: an Agentic task runs on its folder's usual model, a Chat one on the
+      // first free scheduling model.
+      h("option", { value: "", text: draft.runs_on ? t("The folder's usual model") : t("The first free scheduling model"), selected: !draft.model }),
       smodels.map((m) => h("option", { value: m.id, text: m.free ? m.name : `${m.name} · ${t("busy")}`, selected: draft.model === m.id })),
       draft.model && !smodels.some((m) => m.id === draft.model) ? h("option", { value: draft.model, text: draft.model, selected: true }) : null,
     )
@@ -733,11 +825,14 @@ async function drawForm(task) {
       h("option", { value: "", text: t("None"), selected: !draft.agents }),
       Array.from({ length: MAX_AGENTS - 1 }, (_, i) => i + 2).map((n) => h("option", { value: String(n), text: t("Up to %(n)s at once", { n }), selected: draft.agents === n })),
     )
+    const modelHint = draft.runs_on
+      ? t("The folder's usual model is the one you last used in that folder on that computer — the computer remembers it, and each run asks it — or your default model where there is none. A model chosen here is the run's, whatever the folder's is. A run never changes the folder's model.")
+      : t("A busy model is waited for, then the next free one is used.")
     settings.replaceChildren(
       ...(canPlace ? whereFields() : []),
+      field(t("Model"), modelSelect, modelHint, "sched-model"),
       ...notifyFields(),
       field(t("Runs"), select("sched-mode", MODE, "mode"), draft.mode === "continue" ? t("Each run sees the ones before it.") : t("Each run starts with nothing but the instruction."), "sched-mode"),
-      field(t("Model"), modelSelect, t("A busy model is waited for, then the next free one is used."), "sched-model"),
       field(t("Reasoning effort"), effort, levels.length ? "" : t("Choose a model to choose its effort."), "sched-effort"),
       field(t("Subagents"), agents, t("How many work on it at once, the run's own agent among them, on the same model."), "sched-agents"),
     )
@@ -747,6 +842,7 @@ async function drawForm(task) {
   const form = h(
     "form",
     { class: "sched sched--new" },
+    canPlace ? typeChoice() : null,
     h("label", { class: "sched__h", for: "sched-words", text: t("What should happen, and when") }),
     words,
     h("p", { class: "hint", text: t("In your own words. The server reads them into a rule and an instruction, and shows you the next runs before anything is saved.") }),
@@ -790,6 +886,11 @@ async function drawForm(task) {
   words.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) form.requestSubmit()
   })
+  const refuse = (words) => {
+    saveSaid.textContent = words
+    saveSaid.hidden = false
+    saveBtn.disabled = false
+  }
   saveBtn.addEventListener("click", async () => {
     saveBtn.disabled = true
     saveSaid.hidden = true
@@ -807,6 +908,7 @@ async function drawForm(task) {
       mode: draft.mode,
     }
     if (canPlace) body.runs_on = draft.runs_on ? { ...draft.runs_on } : null
+    if (draft.runs_on && !draft.runs_on.cwd) return refuse(t("Choose a folder first."))
     try {
       const r = editing ? await patch(`/schedules/${enc(task.id)}`, body) : await post("/schedules", body)
       go({ name: "task", id: r.schedule.id })

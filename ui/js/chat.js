@@ -28,6 +28,7 @@ import { pythonFor, pythonState, retryPython } from "./python.js"
 import { pageMount, pageWriting } from "./pages.js"
 import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./terminal.js"
 import { scopePopover } from "./scope.js"
+import { pickDirectory } from "./dirpick.js"
 import { readAloudButton } from "./voice.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
@@ -79,9 +80,9 @@ function otherDevices() {
 
 /**
  * The folders an agent chat on another device has worked in: the sidebar's agent chats there,
- * newest first. This app cannot browse another computer; these and a typed path are the choice.
+ * newest first. Offered beside the computer's own listing (dirpick.js) and a typed path.
  */
-function knownFolders(device) {
+export function knownFolders(device) {
   const out = []
   for (const c of listed()) {
     const dir = c.kind === "agent" && c.device?.token_id === device ? c.device.directory : ""
@@ -803,6 +804,15 @@ class Live {
     this.calls.hidden = !this.calls.childElementCount
   }
 
+  /** The reply cannot be followed: said on it, with a way to read the chat again. */
+  lost(err) {
+    const top = mark()
+    this.status.textContent = t("The connection to the reply was lost: %(why)s", { why: why(err) })
+    this.status.classList.add("is-error")
+    if (!this.el.querySelector(".msg__again")) this.el.append(h("button", { type: "button", class: "btn btn--sm msg__again", text: t("Read again"), onclick: reload }))
+    settle(top)
+  }
+
   end(err) {
     if (this.done) return
     this.done = true
@@ -821,11 +831,8 @@ class Live {
       else ended = ended.id === this.id ? { id: this.id, n: ended.n + 1 } : { id: this.id, n: 1 }
       if (ended.n > 3) err = { detail: t("The connection was lost.") }
     }
-    if (err) {
-      this.status.textContent = t("The connection to the reply was lost: %(why)s", { why: why(err) })
-      this.status.classList.add("is-error")
-      this.el.append(h("button", { type: "button", class: "btn btn--sm", text: t("Read again"), onclick: reload }))
-    } else {
+    if (err) this.lost(err)
+    else {
       reload()
       activityChanged()
     }
@@ -1369,13 +1376,13 @@ function modeChip(value, onChange, disabled) {
   })
 }
 
-function modelChip(models, value, onChange, mayPick) {
+function modelChip(models, value, onChange, mayPick, why = "") {
   const m = models.find((x) => x.id === value) || (value ? { id: value, name: value } : null)
   if (!m) return chip({ ico: ICONS.info, label: t("No model is available to this account."), menuish: false, disabled: true })
   return chip({
     lead: avatar(m),
     label: m.name,
-    title: `${t("Model")}: ${m.name} (${m.id})`,
+    title: `${t("Model")}: ${m.name} (${m.id})${why ? ` · ${why}` : ""}`,
     menuish: mayPick && models.length > 1,
     cls: "cchip--model",
     onclick: (e) => {
@@ -1530,14 +1537,28 @@ function renderTarget(chips, words) {
   bar.hidden = false
 }
 
-/** The folder of a new agent chat on another device: one it has worked in, or one typed. */
+/**
+ * The folder of a new agent chat on another device: browsed there (the computer lists its own
+ * directories, dirpick.js), one it has worked in, or one typed.
+ */
 function elsewhereFolderChip(device, value, onChange) {
+  const name = deviceOf(device)?.name || t("Another device")
+  // The chips are drawn again by a choice: the focus goes back to the folder's chip as it now is.
+  const chosen = (dir) => {
+    onChange(dir)
+    const chips = [...document.querySelectorAll("#chat-target .cchip--folder, #target-sum")]
+    chips.find((c) => c.offsetParent !== null)?.focus()
+  }
   const type = async () => {
-    const dir = await ask({ title: t("Folder on %(device)s", { device: deviceOf(device)?.name || t("Another device") }), text: t("The folder's full path on that computer. Its agent opens only folders it has been given."), value: value || "", ok: t("Choose"), cancel: t("Cancel") })
-    if (dir) onChange(dir)
+    const dir = await ask({ title: t("Folder on %(device)s", { device: name }), text: t("The folder's full path on that computer. Its agent opens only folders it has been given."), value: value || "", ok: t("Choose"), cancel: t("Cancel") })
+    if (dir) chosen(dir)
   }
   const known = knownFolders(device)
-  if (!value && !known.length) return chip({ ico: ICONS.folder, label: t("Choose a folder…"), name: t("Folder"), menuish: false, cls: "cchip--folder is-warn", onclick: type })
+  const browse = async () => {
+    const dir = await pickDirectory({ device, name, value: value || "", recent: known })
+    if (dir) chosen(dir)
+  }
+  if (!value && !known.length) return chip({ ico: ICONS.folder, label: t("Choose a folder…"), name: t("Folder"), menuish: false, cls: "cchip--folder is-warn", onclick: browse })
   return chip({
     ico: ICONS.folder,
     label: value ? folderName(value) : t("Choose a folder…"),
@@ -1548,9 +1569,59 @@ function elsewhereFolderChip(device, value, onChange) {
       menu(e.currentTarget, [
         ...known.map((r) => ({ label: folderName(r), hint: r, checked: r === value, run: () => r !== value && onChange(r) })),
         known.length ? null : undefined,
+        { label: t("Browse…"), run: browse },
         { label: t("Type a folder…"), run: type },
       ].filter((x) => x !== undefined)),
   })
+}
+
+// --- The model a new agent chat starts on ---------------------------------------------------------
+//
+// A linked computer remembers, per directory, the model last used there (harness spec 3.9.0); the
+// server asks it and says the answer as `start { model, from }` of
+// `/models?kind=agent&device=&directory=`: what `POST /chats` without a `model` starts on. The
+// draft shows it as its model, asked again whenever the computer or the folder changes -- until
+// the person picks a model in this draft, which is then theirs whatever the folder says (and is
+// the only model sent). Nothing of it is kept: it lives in the draft, and goes with it.
+
+/** The draft's model as before there was a folder to ask about: the account's default. */
+function defaultModel() {
+  const models = ctx.models()
+  return models.find((m) => m.default) || models[0] || null
+}
+
+function draftModel(m, from) {
+  const id = m?.id || ""
+  const moved = draft.model !== id
+  draft.model = id
+  draft.from = from
+  if (moved && !draft.effortPicked) draft.effort = levelsOf(m).start
+  return moved
+}
+
+/** Ask what the draft's computer and folder start on, once per pair; draw the chips again if it changed. */
+function followFolder() {
+  if (!draft || draft.picked) return
+  const device = draft.kind === "agent" ? draftDevice() : ""
+  const key = device && draft.dir ? `${device}\n${draft.dir}` : ""
+  if (key === draft.asked) return
+  const mine = draft
+  draft.asked = key
+  if (!key) {
+    if (draftModel(defaultModel(), "")) renderChips()
+    return
+  }
+  get(`/models?kind=agent&device=${encodeURIComponent(device)}&directory=${encodeURIComponent(draft.dir)}`)
+    .then((r) => r?.start || null)
+    .catch(() => null)
+    .then((start) => {
+      // An answer for a draft, a folder or a computer since left is dropped; so is one that
+      // comes after the person has picked.
+      if (draft !== mine || draft.asked !== key || draft.picked) return
+      const m = start?.model ? ctx.models().find((x) => x.id === start.model) : null
+      if (draftModel(m || defaultModel(), m ? start.from || "" : "")) renderChips()
+      else if (m) renderChips()
+    })
 }
 
 let chipsDrawn = 0 // which drawing is the latest: an older one's late answers are dropped
@@ -1586,12 +1657,16 @@ async function renderChips() {
     $("chat-place").replaceChildren()
     const shell = terminalTarget()
     aimTerminal(shell)
+    followFolder()
     parts.push(modelChip(models, draft.model, (id) => {
+      // Picked here: the draft's own from now on, whatever its folder remembers.
       draft.model = id
+      draft.picked = true
+      draft.from = ""
       draft.effort = levelsOf(models.find((m) => m.id === id)).start
       renderChips()
-    }, mayPick))
-    if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), renderChips())))
+    }, mayPick, draft.from === "directory" ? t("the folder's usual model") : ""))
+    if (model) parts.push(effortChip(model, draft.effort, (l) => ((draft.effort = l), (draft.effortPicked = true), renderChips())))
     if (draft.kind === "chat" && picturesOffered()) message.replaceChildren(pictureChip())
     else {
       wantPicture = false
@@ -1883,6 +1958,7 @@ export async function openChat(id) {
   const again = open?.chat?.id === id && !!$("messages").querySelector(".msg")
   const was = again ? lastLive : null
   if (open?.chat?.id !== id) discard()
+  const before = again ? open : null
   if (open?.live) open.live.stop()
   if (open?.chat?.id !== id) pythonFor(null)
   open = { chat: { id }, live: null, more: false }
@@ -1905,6 +1981,16 @@ export async function openChat(id) {
   try {
     r = await get(`/chats/${encodeURIComponent(id)}`)
   } catch (err) {
+    if (open?.chat?.id !== id) return
+    // The chat read again and not had: what is drawn stays, the chat is what it was, and the
+    // error is said beside it -- on the reply that was being written, where there is one.
+    if (before) {
+      open = { ...before, live: null }
+      setRunning(false)
+      if (was?.el.isConnected) was.lost(err)
+      else alertIn(why(err))
+      return
+    }
     clear(list)
     alertIn(why(err))
     return
@@ -1982,7 +2068,10 @@ export function closeChat() {
 
 // --- A new chat ------------------------------------------------------------------------------------
 
-let draft = null // { kind, device, dir, mode, model, effort, agents } while a new chat is being written
+// { kind, device, dir, mode, model, effort, agents } while a new chat is being written; and how
+// its model came to be: `picked` (the person chose it here), `from` ("directory": the folder's
+// usual model), `asked` (the computer and folder it was last asked for).
+let draft = null
 let lastKind = "agent"
 
 /** The kind a new chat starts as: the last one chosen (an agent chat, at first). */
@@ -1998,6 +2087,10 @@ export function modelsChanged() {
     const start = models.find((m) => m.default) || models[0]
     draft.model = start?.id || ""
     draft.effort = levelsOf(start).start
+    // The model is not the person's pick any more, and the folder is asked again.
+    draft.picked = false
+    draft.from = ""
+    draft.asked = ""
   }
   renderChips()
 }
@@ -2062,7 +2155,7 @@ export function newChat(kind) {
   const models = ctx.models()
   const start = models.find((m) => m.default) || models[0]
   lastKind = kind || lastKind
-  draft = { kind: lastKind, device: "", dir: "", mode: "edit", model: start?.id || "", effort: levelsOf(start).start, agents: null }
+  draft = { kind: lastKind, device: "", dir: "", mode: "edit", model: start?.id || "", effort: levelsOf(start).start, agents: null, picked: false, effortPicked: false, from: "", asked: "" }
   clear($("messages"))
   renderCards({ id: "" }, [])
   alertIn("")
@@ -2083,8 +2176,12 @@ export function newChat(kind) {
 async function createChat(text, attachments) {
   const body = { text }
   if (attachments.length) body.attachments = attachments
-  if (draft.model) body.model = draft.model
-  if (typeof draft.effort === "string" && draft.effort) body.effort = draft.effort
+  // An agent chat names a model only when the person picked one: without it the server starts on
+  // the folder's usual model, asking the computer itself -- and has the last word. An effort is
+  // sent with a model it belongs to, or when it was chosen.
+  const named = draft.kind !== "agent" || draft.picked
+  if (draft.model && named) body.model = draft.model
+  if (typeof draft.effort === "string" && draft.effort && (named || draft.effortPicked)) body.effort = draft.effort
   const agents = draft.agents
   if (agents && (agents.min || agents.max)) body.agents = agents
   if (draft.temporary && draft.kind === "chat") body.temporary = true
@@ -2216,6 +2313,7 @@ function setEffort(rest) {
   const said = wanted === "off" ? t("Thinking switched off.") : t("Effort set to %(level)s.", { level: wanted })
   if (draft) {
     draft.effort = wanted
+    draft.effortPicked = true
     renderChips()
     note(said)
   } else saveChat({ effort: wanted }, said)
