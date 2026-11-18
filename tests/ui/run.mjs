@@ -1728,7 +1728,7 @@ function i8({ stt = true, tts = true, images = true, scopes = ["app", "models"] 
       "GET /me": { id: "u1", name: "Ada Example", email: "ada@example.org", theme: "moria", language: "en", permissions: {}, services: { stt, tts, images, search: false, fetch: false }, scopes },
       "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?"), reply], more: false, live: null },
     }),
-    commands: { transcribe: "baked in leaves", speak: "data:audio/mpeg;base64,SUQz", draw: [PNG, "https://elsewhere.example/x.png"], ...commands },
+    commands: { transcribe: { text: "baked in leaves", source: "", fallback: false }, speak: { url: "data:audio/mpeg;base64,SUQz", source: "", fallback: false }, draw: [PNG, "https://elsewhere.example/x.png"], ...commands },
     streams: {},
   }
 }
@@ -1781,6 +1781,68 @@ test("I8: Dictate records, asks Rust for the microphone first, and puts the word
   assert.deepEqual(p.errors, [])
 })
 
+// Speech says which chat it is for: Rust sends `x-chat` as `chat_id` and `x-model` as `chat_model`
+// (server.rs, tested there), and the server answers with that chat's connection's own speech model.
+
+async function dictateOnce(p, n = 1) {
+  await p.click("#dictate")
+  await p.waitForSelector('#dictate.is-recording[aria-pressed="true"]')
+  await p.click("#dictate")
+  await p.waitForFunction((n) => window.__mock.calls.filter((c) => c.cmd === "transcribe").length === n && !document.getElementById("dictate").disabled, n)
+}
+
+test("I8: Dictate in an open chat sends chat_id: the chat's id, and no model", async () => {
+  const p = await page(i8())
+  await fakeMicrophone(p)
+  await p.click('.chatrow[data-id="chat1"]')
+  await p.waitForSelector('.msg--assistant[data-id="m6"]')
+  await dictateOnce(p)
+  const call = await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "transcribe"))
+  assert.deepEqual(call.headers, { "x-type": "audio/webm;codecs=opus", "x-chat": "chat1" })
+  assert.equal(await p.inputValue("#composer-text"), "baked in leaves")
+  assert.deepEqual(p.errors, [])
+})
+
+test("I8: Dictate in a new chat sends chat_model: the ref of the model the chat will start on", async () => {
+  // The models as the server serialises them (its fixture), each with its ref.
+  const config = i8()
+  config.routes["GET /models"] = fixture("models")
+  const p = await page(config)
+  await p.waitForSelector("#dictate:not([hidden])")
+  await p.waitForFunction(() => window.__mock.api("GET", "/models").length >= 1)
+  await fakeMicrophone(p)
+  await dictateOnce(p)
+  const call = await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "transcribe"))
+  assert.deepEqual(call.headers, { "x-type": "audio/webm;codecs=opus", "x-model": "local%2Fqwen" })
+  assert.deepEqual(p.errors, [])
+})
+
+test("I8: Read aloud sends chat_id, and the default answering for the chat's own is said once, as a note", async () => {
+  const by = { source: "stt/whisper-1", fallback: true }
+  const p = await page(i8({}, { transcribe: { text: "baked", ...by }, speak: { url: "data:audio/mpeg;base64,SUQz", source: "tts/tts-1", fallback: true } }))
+  await fakeMicrophone(p)
+  await p.click('.chatrow[data-id="chat1"]')
+  await p.waitForSelector('.msg--assistant[data-id="m6"] .msg__speak')
+  await p.click('.msg--assistant[data-id="m6"] .msg__speak')
+  await p.waitForSelector('.msg__speak[aria-pressed="true"]:not(.is-busy)')
+  assert.deepEqual(await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "speak").args), { text: "Lembas is baked in leaves.", chat: "chat1" })
+  await p.waitForSelector("#thread-note.is-info:not([hidden])")
+  assert.equal(await p.textContent("#thread-note"), "Read by tts/tts-1: this chat's own speech model did not answer.")
+  await dictateOnce(p)
+  await p.waitForFunction(() => document.getElementById("thread-note").textContent === "Transcribed by stt/whisper-1: this chat's own speech model did not answer.")
+  assert.equal(await p.evaluate(() => document.getElementById("thread-note").classList.contains("is-error")), false)
+  await shot(p, "i8-fallback-note-1280")
+  // Said once for this chat: the next recording there is written down without the note again.
+  await p.evaluate(() => {
+    const box = document.getElementById("thread-note")
+    box.textContent = ""
+    box.hidden = true
+  })
+  await dictateOnce(p, 2)
+  assert.equal(await p.textContent("#thread-note"), "")
+  assert.deepEqual(p.errors, [])
+})
+
 test("I8: no Dictate, Read aloud or Draw where the server has none of them, or the token lacks models", async () => {
   let p = await page(i8({ stt: false, tts: false, images: false }))
   await p.click('.chatrow[data-id="chat1"]')
@@ -1804,7 +1866,7 @@ test("I8: Read aloud speaks a reply's words without its markdown or code, and st
   await p.waitForSelector('.msg--assistant[data-id="m6"] .msg__speak')
   await p.click('.msg--assistant[data-id="m6"] .msg__speak')
   await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "speak"))
-  assert.deepEqual((await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "speak").args)), { text: "Lembas is baked in leaves." })
+  assert.deepEqual((await p.evaluate(() => window.__mock.calls.find((c) => c.cmd === "speak").args)), { text: "Lembas is baked in leaves.", chat: "chat1" })
   await p.waitForSelector('.msg__speak[aria-pressed="true"]:not(.is-busy)')
   await p.click('.msg--assistant[data-id="m6"] .msg__speak')
   await p.waitForSelector('.msg__speak[aria-pressed="false"]')

@@ -677,7 +677,29 @@ fn multipart(boundary: &str, field: &str, name: &str, bytes: &[u8]) -> Vec<u8> {
 
 /// The same, with the file's own media type (a recording says what it is: `audio/webm`).
 fn multipart_typed(boundary: &str, field: &str, name: &str, kind: &str, bytes: &[u8]) -> Vec<u8> {
-    let mut body = Vec::with_capacity(bytes.len() + 256);
+    multipart_with(boundary, &[], field, name, kind, bytes)
+}
+
+/// The same, after plain fields of text (`name`, `value`): a value's line breaks and other
+/// control characters go, so it stays one field.
+fn multipart_with(
+    boundary: &str,
+    fields: &[(&str, &str)],
+    field: &str,
+    name: &str,
+    kind: &str,
+    bytes: &[u8],
+) -> Vec<u8> {
+    let mut body = Vec::with_capacity(bytes.len() + 512);
+    for (key, value) in fields {
+        let value: String = value.chars().filter(|c| !c.is_control()).collect();
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
     body.extend_from_slice(
         format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{}\"\r\nContent-Type: {kind}\r\n\r\n",
@@ -764,9 +786,135 @@ pub fn recording_type(kind: &str) -> &'static str {
         .unwrap_or("audio/webm")
 }
 
-/// A recording, in words: `POST /v1/audio/transcriptions` (the instance's own model, the
-/// account's language). The text the server heard.
-pub fn transcribe(base: &str, token: &str, kind: &str, bytes: &[u8]) -> Result<String, ApiError> {
+/// Which chat a recording, a reply read aloud is for: the server then answers with the speech
+/// model of that chat's connection where it has one, else with the instance's default. `chat`
+/// is an open chat's id; `model` the model (`provider/model`) of a chat not made yet. Either may
+/// be empty, and a chat goes before a model. A server that does not know the two fields reads
+/// neither: it answers with its default, as it always did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MediaFor {
+    pub chat: String,
+    pub model: String,
+}
+
+/// The most a model's name may be here.
+const MODEL_REF_LIMIT: usize = 300;
+
+impl MediaFor {
+    /// As the page named them: a chat's id is letters, digits, `-` and `_`; a model's name is
+    /// one line of no great length. Anything else is refused, not sent.
+    pub fn new(chat: &str, model: &str) -> Result<Self, ApiError> {
+        let (chat, model) = (chat.trim(), model.trim());
+        if chat.len() > 128
+            || !chat
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(ApiError::new(400, "Not a chat."));
+        }
+        if model.len() > MODEL_REF_LIMIT || model.chars().any(char::is_control) {
+            return Err(ApiError::new(400, "Not a model."));
+        }
+        Ok(MediaFor {
+            chat: chat.to_string(),
+            model: if chat.is_empty() {
+                model.to_string()
+            } else {
+                String::new()
+            },
+        })
+    }
+
+    /// The one field that says it, as the server names it; none where there is nothing to say.
+    fn field(&self) -> Option<(&'static str, &str)> {
+        if !self.chat.is_empty() {
+            Some(("chat_id", &self.chat))
+        } else if !self.model.is_empty() {
+            Some(("chat_model", &self.model))
+        } else {
+            None
+        }
+    }
+}
+
+/// What answered a recording or a reply read aloud, as the server's headers say it:
+/// `X-Lembas-Source` (percent-encoded: a header is Latin-1) and `X-Lembas-Fallback` (the chat's
+/// own did not answer, and the instance's default did). A server that sends neither: nothing.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+pub struct Answered {
+    pub source: String,
+    pub fallback: bool,
+}
+
+/// The most of a source's name that is shown.
+const SOURCE_LIMIT: usize = 200;
+
+/// `Answered` from the two headers' values.
+pub fn answered(source: Option<&str>, fallback: Option<&str>) -> Answered {
+    let name: String = percent_decoded(source.unwrap_or("").trim())
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(SOURCE_LIMIT)
+        .collect();
+    let said = fallback.unwrap_or("").trim();
+    Answered {
+        fallback: !name.is_empty() && !said.is_empty() && said != "0",
+        source: name,
+    }
+}
+
+fn answered_by(res: &ureq::Response) -> Answered {
+    answered(
+        res.header("x-lembas-source"),
+        res.header("x-lembas-fallback"),
+    )
+}
+
+/// `%XX` escapes undone; an escape that is not one stays as it came.
+pub fn percent_decoded(text: &str) -> String {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(hi), Some(lo)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// A recording in words, and what wrote it down.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Heard {
+    pub text: String,
+    #[serde(flatten)]
+    pub by: Answered,
+}
+
+/// A reply as audio (a `data:` URL), and what read it.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct Spoken {
+    pub url: String,
+    #[serde(flatten)]
+    pub by: Answered,
+}
+
+/// A recording, in words: `POST /v1/audio/transcriptions` (the speech model of the chat it is
+/// `for_`, else the instance's own; the account's language). The text the server heard.
+pub fn transcribe(
+    base: &str,
+    token: &str,
+    kind: &str,
+    bytes: &[u8],
+    for_: &MediaFor,
+) -> Result<Heard, ApiError> {
     if bytes.is_empty() {
         return Err(ApiError::new(400, "The recording was empty."));
     }
@@ -781,6 +929,7 @@ pub fn transcribe(base: &str, token: &str, kind: &str, bytes: &[u8]) -> Result<S
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let boundary = format!("llembas-desktop-{nanos:x}");
+    let fields: Vec<(&str, &str)> = for_.field().into_iter().collect();
     let res = agent(Duration::from_secs(300))
         .post(&format!("{base}/v1/audio/transcriptions"))
         .set("authorization", &format!("Bearer {token}"))
@@ -789,20 +938,26 @@ pub fn transcribe(base: &str, token: &str, kind: &str, bytes: &[u8]) -> Result<S
             "content-type",
             &format!("multipart/form-data; boundary={boundary}"),
         )
-        .send_bytes(&multipart_typed(
+        .send_bytes(&multipart_with(
             &boundary,
+            &fields,
             "file",
             &format!("speech.{ext}"),
             kind,
             bytes,
         ))?;
+    let by = answered_by(&res);
     let v: Value = res
         .into_json()
         .map_err(|_| ApiError::new(0, "The server's answer was not JSON.".to_string()))?;
-    Ok(v.get("text")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string())
+    Ok(Heard {
+        text: v
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        by,
+    })
 }
 
 /// `bytes` of a media type of `kinds` (by its prefix), as a `data:` URL; at most `limit`.
@@ -839,9 +994,19 @@ fn as_data_url(res: ureq::Response, prefix: &str, limit: u64) -> Result<String, 
     Ok(format!("data:{kind};base64,{}", base64(&bytes)))
 }
 
-/// A reply read aloud: `POST /v1/audio/speech` in the account's own voice and speed. The audio,
-/// as a `data:` URL the page plays.
-pub fn speak(base: &str, token: &str, text: &str) -> Result<String, ApiError> {
+/// What `/v1/audio/speech` is sent: the words, and the chat they are read for where one is said.
+fn speech_body(text: &str, for_: &MediaFor) -> Value {
+    let mut body = serde_json::json!({ "input": text, "response_format": "mp3" });
+    if let Some((key, value)) = for_.field() {
+        body[key] = Value::String(value.to_string());
+    }
+    body
+}
+
+/// A reply read aloud: `POST /v1/audio/speech` in the account's own voice and speed, by the
+/// speech model of the chat it is `for_`, else the instance's own. The audio, as a `data:` URL
+/// the page plays.
+pub fn speak(base: &str, token: &str, text: &str, for_: &MediaFor) -> Result<Spoken, ApiError> {
     let text = text.trim();
     if text.is_empty() {
         return Err(ApiError::new(400, "There is nothing to read aloud."));
@@ -849,8 +1014,12 @@ pub fn speak(base: &str, token: &str, text: &str) -> Result<String, ApiError> {
     let res = agent(Duration::from_secs(300))
         .post(&format!("{base}/v1/audio/speech"))
         .set("authorization", &format!("Bearer {token}"))
-        .send_json(serde_json::json!({ "input": text, "response_format": "mp3" }))?;
-    as_data_url(res, "audio/", SPEECH_LIMIT)
+        .send_json(speech_body(text, for_))?;
+    let by = answered_by(&res);
+    Ok(Spoken {
+        url: as_data_url(res, "audio/", SPEECH_LIMIT)?,
+        by,
+    })
 }
 
 /// The id of one of the person's own files in a URL `/v1/images/generations` answered with:
@@ -1230,6 +1399,78 @@ mod tests {
         ))
         .unwrap();
         assert!(body.contains("filename=\"speech.webm\"\r\nContent-Type: audio/webm\r\n"));
+    }
+
+    #[test]
+    fn a_recording_says_which_chat_it_is_for() {
+        let open = MediaFor::new("chat-1_a", "local/qwen").unwrap();
+        assert_eq!(open.field(), Some(("chat_id", "chat-1_a")));
+        let draft = MediaFor::new("", " local/qwen ").unwrap();
+        assert_eq!(draft.field(), Some(("chat_model", "local/qwen")));
+        assert_eq!(MediaFor::new("", "").unwrap().field(), None);
+        assert!(MediaFor::new("a/b", "").is_err());
+        assert!(MediaFor::new("", "a\r\nb").is_err());
+        assert!(MediaFor::new("", &"m".repeat(301)).is_err());
+
+        let fields: Vec<(&str, &str)> = draft.field().into_iter().collect();
+        let body = String::from_utf8(multipart_with(
+            "B",
+            &fields,
+            "file",
+            "speech.webm",
+            "audio/webm",
+            b"x",
+        ))
+        .unwrap();
+        assert!(body.starts_with(
+            "--B\r\nContent-Disposition: form-data; name=\"chat_model\"\r\n\r\nlocal/qwen\r\n--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.webm\"\r\n"
+        ));
+        assert!(body.ends_with("\r\nx\r\n--B--\r\n"));
+        // A value cannot open a field of its own.
+        let broken = String::from_utf8(multipart_with(
+            "B",
+            &[("chat_model", "a\r\n--B\r\nb")],
+            "file",
+            "f",
+            "audio/webm",
+            b"x",
+        ))
+        .unwrap();
+        assert_eq!(broken.matches("\r\n--B").count(), 2);
+
+        assert_eq!(
+            speech_body("Hello", &open),
+            serde_json::json!({ "input": "Hello", "response_format": "mp3", "chat_id": "chat-1_a" })
+        );
+        assert_eq!(
+            speech_body("Hello", &MediaFor::default()),
+            serde_json::json!({ "input": "Hello", "response_format": "mp3" })
+        );
+    }
+
+    #[test]
+    fn what_answered_is_read_from_the_two_headers() {
+        assert_eq!(answered(None, None), Answered::default());
+        assert_eq!(
+            answered(Some("stt%2Fwhisper%20%C5%BE"), None),
+            Answered {
+                source: "stt/whisper ž".into(),
+                fallback: false
+            }
+        );
+        assert!(answered(Some("stt/whisper"), Some("1")).fallback);
+        assert!(!answered(Some("stt/whisper"), Some("0")).fallback);
+        // Fallen back to nothing that has a name is not said.
+        assert!(!answered(None, Some("1")).fallback);
+        assert_eq!(answered(Some("a%0D%0Ab"), Some("1")).source, "ab");
+        assert_eq!(
+            serde_json::to_value(Heard {
+                text: "hi".into(),
+                by: answered(Some("x"), Some("1"))
+            })
+            .unwrap(),
+            serde_json::json!({ "text": "hi", "source": "x", "fallback": true })
+        );
     }
 
     #[test]

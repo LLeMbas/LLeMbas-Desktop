@@ -501,36 +501,51 @@ fn voice_arm(app: tauri::State<'_, App>) {
 }
 
 /// A recording made in the composer, in words: its bytes as the raw body of the call, its media
-/// type in `x-type`.
+/// type in `x-type`; and which chat it is for -- the open chat's id in `x-chat`, or the model of
+/// a chat not made yet in `x-model` (as `encodeURIComponent` gives it).
 #[tauri::command]
 async fn transcribe(
     handle: AppHandle,
     request: tauri::ipc::Request<'_>,
-) -> Result<String, ApiError> {
+) -> Result<server::Heard, ApiError> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err(ApiError::new(400, "No recording."));
     };
     if bytes.len() as u64 > server::RECORDING_LIMIT {
         return Err(ApiError::new(413, "That recording is too long."));
     }
-    let kind = request
-        .headers()
-        .get("x-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
+    let header = |k: &str| {
+        request
+            .headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    let kind = header("x-type");
+    let for_ = server::MediaFor::new(&header("x-chat"), &percent_decode(&header("x-model")))?;
     let bytes = bytes.clone();
     on_v1(&handle, move |base, token| {
-        server::transcribe(base, token, &kind, &bytes)
+        server::transcribe(base, token, &kind, &bytes, &for_)
     })
     .await
 }
 
-/// A reply read aloud, as a `data:` URL of its audio.
+/// A reply read aloud, as a `data:` URL of its audio; `chat` is the chat it is read in (or
+/// `model`, that of a chat not made yet), which decides whose speech model reads it.
 #[tauri::command]
-async fn speak(handle: AppHandle, text: String) -> Result<String, ApiError> {
+async fn speak(
+    handle: AppHandle,
+    text: String,
+    chat: Option<String>,
+    model: Option<String>,
+) -> Result<server::Spoken, ApiError> {
+    let for_ = server::MediaFor::new(
+        chat.as_deref().unwrap_or(""),
+        model.as_deref().unwrap_or(""),
+    )?;
     on_v1(&handle, move |base, token| {
-        server::speak(base, token, &text)
+        server::speak(base, token, &text, &for_)
     })
     .await
 }
@@ -853,22 +868,7 @@ async fn library_upload(
 
 /// `%XX` escapes undone (the page sends a file's name as `encodeURIComponent` gives it).
 fn percent_decode(text: &str) -> String {
-    let b = text.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hex = |c: u8| (c as char).to_digit(16);
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let (Some(hi), Some(lo)) = (hex(b[i + 1]), hex(b[i + 2])) {
-                out.push((hi * 16 + lo) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    server::percent_decoded(text)
 }
 
 /// A file pasted into the composer (an image from the clipboard): its bytes as the raw body of

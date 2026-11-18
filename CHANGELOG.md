@@ -6,7 +6,13 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Dictation and Read aloud say which chat they are for.** A server whose connections carry speech models of their own (LLeMbas after 2.0.0-beta.14) answers with the one of the chat's connection; the app now tells it the chat — the open chat (`chat_id`), or the model chosen for a chat not made yet (`chat_model`, by its ref) — on `/v1/audio/transcriptions` and `/v1/audio/speech`. Where the chat's own speech model did not answer and the instance's default did, a note above the message box says so (*Transcribed by … / Read by …: this chat's own speech model did not answer*), once for that chat, and goes by itself. A server up to 2.0.0-beta.14 reads neither field and answers with its one speech service, as before.
+
 ### Fixed
+
+- A dictation or a Read aloud that failed right after a passing note (a mode changed, say) was shown in the note's quiet style, and within the note's few seconds went away with it. It is said as what went wrong, and stays.
 
 - **Copy says that it copied.** The Copy button under a message shows a tick and is named *Copied* for a moment, and a code block's button says *Copied*. Both copied before but showed nothing, so the click looked as if it had failed.
 

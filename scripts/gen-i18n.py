@@ -474,6 +474,8 @@ KEYS = (
     "The microphone could not be opened: %(why)s",
     "Read this aloud",
     "The server's answer was not audio.",
+    "Transcribed by %(source)s: this chat's own speech model did not answer.",
+    "Read by %(source)s: this chat's own speech model did not answer.",
     "Draw a picture",
     "What to draw…",
     "Shape",

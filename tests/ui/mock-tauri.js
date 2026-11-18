@@ -94,8 +94,10 @@
     }
   }
 
-  async function invoke(cmd, args) {
-    calls.push({ cmd, args: args === undefined ? null : JSON.parse(JSON.stringify(args)) })
+  async function invoke(cmd, args, options) {
+    // A raw body (a recording, a pasted file) is not kept: its headers say what it was sent with.
+    const raw = args instanceof Uint8Array || args instanceof ArrayBuffer
+    calls.push({ cmd, args: args === undefined ? null : raw ? { bytes: args.byteLength } : JSON.parse(JSON.stringify(args)), ...(options?.headers ? { headers: { ...options.headers } } : {}) })
     switch (cmd) {
       case "get_status":
         return JSON.parse(JSON.stringify(config.status))

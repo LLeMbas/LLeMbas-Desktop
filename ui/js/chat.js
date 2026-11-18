@@ -40,6 +40,17 @@ export function openChatId() {
   return open?.chat?.id || null
 }
 
+/**
+ * Which chat speech is for (voice.js): the open chat by its id, or -- while a new chat is being
+ * written -- the model it will start on, as the app keeps it (its ref). The server answers with
+ * the speech model of that chat's connection where it has one.
+ */
+export function mediaFor() {
+  if (open?.chat?.id) return { chat: open.chat.id }
+  if (draft?.model) return { model: draft.model }
+  return {}
+}
+
 // --- Reading -----------------------------------------------------------------------------------
 
 export function onThisComputer(chat) {
@@ -2025,7 +2036,7 @@ function modeName(m) {
 let noteTimer = 0
 
 /** A line above the composer: something that went wrong (it stays), or `info` (it goes by itself). */
-function alertIn(text, info = false) {
+export function alertIn(text, info = false) {
   const box = $("thread-note")
   clearTimeout(noteTimer)
   box.textContent = text

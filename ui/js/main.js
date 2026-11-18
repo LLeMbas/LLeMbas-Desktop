@@ -12,7 +12,7 @@ import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab, openServerFile } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
+import { initChat, openChat, newChat, closeChat, openChatId, mediaFor, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
 import { initPython } from "./python.js"
 import { pythonChanged } from "./chat.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
@@ -312,7 +312,7 @@ async function boot() {
       $("thread-note").hidden = !text
     },
   })
-  initVoice()
+  initVoice({ where: mediaFor, alert: (text) => alertIn(text), note: (text) => alertIn(text, true) })
   initPython({ me: () => me, changed: () => pythonChanged() })
   initChat({
     status: () => status,
