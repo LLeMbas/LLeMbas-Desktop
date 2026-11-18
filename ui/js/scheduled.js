@@ -830,9 +830,9 @@ async function drawForm(task) {
       : t("A busy model is waited for, then the next free one is used.")
     settings.replaceChildren(
       ...(canPlace ? whereFields() : []),
-      field(t("Model"), modelSelect, modelHint, "sched-model"),
       ...notifyFields(),
       field(t("Runs"), select("sched-mode", MODE, "mode"), draft.mode === "continue" ? t("Each run sees the ones before it.") : t("Each run starts with nothing but the instruction."), "sched-mode"),
+      field(t("Model"), modelSelect, modelHint, "sched-model"),
       field(t("Reasoning effort"), effort, levels.length ? "" : t("Choose a model to choose its effort."), "sched-effort"),
       field(t("Subagents"), agents, t("How many work on it at once, the run's own agent among them, on the same model."), "sched-agents"),
     )
