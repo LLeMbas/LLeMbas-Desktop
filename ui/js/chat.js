@@ -252,6 +252,9 @@ let following = true
 const seen = { top: 0, height: 0, client: 0 }
 /** How near the end (px) scrolling down has to come for following to begin again. */
 const NEAR = 80
+/** Until when (performance.now()) the wheel turned up counts as the person leaving the end. */
+let leaving = 0
+const LEAVING = 500
 
 function remember(th) {
   seen.top = th.scrollTop
@@ -274,8 +277,11 @@ function noticed() {
   const moved = th.scrollTop - seen.top
   const same = th.scrollHeight === seen.height && th.clientHeight === seen.client
   if (moved < -0.5 && th.scrollHeight - th.clientHeight >= seen.top) following = false
-  else if (gap <= 2) following = true
-  else if (same) {
+  else if (gap <= 2) {
+    // At the end is followed -- but not in the moment after the wheel was turned up, while the
+    // scroll it asked for has not moved the thread yet, or only by its first pixel.
+    if (performance.now() > leaving) following = true
+  } else if (same) {
     if (moved > 1 && gap < NEAR) following = true
   } else if (following) th.scrollTop = th.scrollHeight
   remember(th)
@@ -299,6 +305,7 @@ function settle(top) {
 /** To the end, and following from here on: a chat opened, a message sent. */
 function toBottom() {
   following = true
+  leaving = 0
   settle()
 }
 
@@ -308,17 +315,21 @@ function initFollowing() {
   // The wheel turned up over the thread is the person leaving the end, said before the thread
   // has moved: an engine that scrolls smoothly takes its first step a moment later, and a frame
   // drawn in between -- which would put the thread at its end again -- cancels that scroll
-  // before it began (seen under WebKit). Not when something inside the thread takes the wheel
+  // before it began, or after its first pixel (seen under WebKit). Not when something inside the thread takes the wheel
   // (a long block scrolled within itself), nor when the thread cannot go up at all.
   th.addEventListener(
     "wheel",
     (e) => {
+      if (e.deltaY > 0) leaving = 0
       if (!(e.deltaY < 0) || e.ctrlKey || th.scrollTop <= 0) return
       for (let el = e.target; el && el !== th; el = el.parentElement) {
         if (el.scrollTop > 0 && el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(el).overflowY)) return
       }
       noticed()
       following = false
+      // For a moment the end is not followed again merely for still being there: the scroll's
+      // first step may be a frame away, and a wheel that moved nothing is forgotten after it.
+      leaving = performance.now() + LEAVING
     },
     { passive: true },
   )
