@@ -83,9 +83,10 @@ export function avatar(model) {
 //
 // A model's one unambiguous name is its `ref` (`provider/id`, server 2.0.0-beta.14): two
 // connections may serve one `id`, and the `id` alone then names the first of them. The app
-// keeps a chosen model by its ref and sends the ref wherever the server takes a model. A chat
-// and a schedule still say their model as an `id`, and a server before `ref` has nothing else:
-// a value is looked up as a ref first, then as an id.
+// keeps a chosen model by its ref and sends the ref wherever the server takes a model. A chat,
+// a message and a schedule say which connection theirs is on as `model_ref` beside the `model`
+// id (server 2.0.0-beta.17), and that is what is looked up (`modelFor`); the id alone only where
+// the server sends no ref -- an older server, or a connection that is gone.
 
 /** What a model is kept and sent as: its `ref`, or its `id` where the server gives no ref. */
 export const modelKey = (m) => (m && (m.ref || m.id)) || ""
@@ -94,6 +95,20 @@ export const modelKey = (m) => (m && (m.ref || m.id)) || ""
 export function findModel(models, value) {
   if (!value) return null
   return models.find((m) => m.ref === value) || models.find((m) => m.id === value) || null
+}
+
+/** What a chat, a message or a schedule names its model by: its `model_ref`, else its `model` id. */
+export const modelOf = (thing) => (thing && (thing.model_ref || thing.model)) || ""
+
+/**
+ * The model of a chat, a message or a schedule among `models`, or null. With a `model_ref` it is
+ * the model on that connection and no other: one that is not in the list is not replaced by the
+ * first model that happens to share its id. Without one, by the id.
+ */
+export function modelFor(models, thing) {
+  if (!thing) return null
+  if (thing.model_ref) return models.find((m) => m.ref === thing.model_ref) || null
+  return findModel(models, thing.model)
 }
 
 /** A model's name where one is picked: with its connection when another in the list has its id. */

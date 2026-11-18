@@ -6,6 +6,16 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A chat on a model that two connections serve named the wrong connection.** The line under a
+  chat, the model under each reply, a scheduled task's model and the model a run ran on were
+  looked up by the model's id alone, and so named the first connection serving it, whichever the
+  chat was really on. The server now says the connection too (`model_ref`, LLeMbas after
+  2.0.0-beta.15), and that is what is shown and what the chat's menu ticks; a scheduled task
+  opened for editing keeps the connection it had. With an older server, or a connection that has
+  since been removed, the id is shown as before.
+
 ## [1.0.0-beta.12] — 2026-11-18
 
 ### Added

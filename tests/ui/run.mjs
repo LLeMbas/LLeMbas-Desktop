@@ -5863,6 +5863,63 @@ test("REF: an open chat's model is changed by ref; a schedule's model is offered
   assert.deepEqual(p.errors, [])
 })
 
+// --- A9: `model_ref` says which connection a chat's, a message's and a schedule's model is on ----------
+//
+// Server 2.0.0-beta.17 sends `model_ref` beside `model` (App-API, "Which connection a model is
+// on"): on a chat (single and listed), a message and a schedule, and as `model.ref` on a run. The
+// line under a chat used to name the first connection serving the id, whichever the chat was on.
+
+test("A9: a chat on the second of two connections serving one id says that connection -- its chip, a reply's model, a schedule and its run; a ref no model here has is the id as it is, never the twin", async () => {
+  const on = fixture("schedule_on_device")
+  const agentic = fixture("schedule_run_agentic").run
+  const second = chatRow({ model: "qwen", model_ref: "plan/qwen" })
+  const answer = { id: "m6", role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", model_ref: "plan/qwen", metrics: null, steps: [{ kind: "text", markdown: "In leaves." }] }
+  const gone = { ...answer, id: "m8", model_ref: "attic/qwen" }
+  const old = { ...answer, id: "m7", model_ref: null }
+  const task = { ...on.schedule, model: "qwen", model_ref: "plan/qwen" }
+  const cfg = st([WORKSTATION], {
+    "GET /models": twins(),
+    "GET /models?chat=chat1": twins(),
+    "GET /chats": { chats: [second, agentChat()], more: false },
+    "GET /chats/chat1": { chat: second, messages: [userMessage("m5", "How is lembas made?"), answer, old, gone], more: false, live: null },
+    "PATCH /chats/chat1": { chat: chatRow({ model: "qwen", model_ref: "local/qwen" }) },
+    "GET /schedules": { schedules: [task] },
+    "GET /schedules/sched3": { ...on, schedule: task },
+    "GET /schedules/sched3/runs": { runs: [{ ...agentic, id: "run7", model: { ...agentic.model, id: "qwen", name: "Qwen", ref: "plan/qwen" } }], more: false },
+    "PATCH /schedules/sched3": { schedule: task },
+  })
+  const p = await page(cfg)
+  await openChatRow(p, "chat1")
+  // The chip: the second connection, ticked in its menu.
+  await modelSaid(p, "Qwen · Plan")
+  assert.match(await p.getAttribute("#chat-settings .cchip--model", "title"), /Qwen · Plan/)
+  await p.click("#chat-settings .cchip--model")
+  assert.deepEqual(await p.$$eval(".menu .menu__item", (l) => l.map((x) => [x.querySelector(".menu__label").textContent, x.getAttribute("aria-checked")])).then((l) => l.slice(0, 2)), [["Qwen · Local", "false"], ["Qwen · Plan", "true"]])
+  await p.keyboard.press("Escape")
+  // Each reply's own model: by its ref; without one (an older server) by its id, the first
+  // with it; with a ref nothing here has, the id as it came -- not the other connection's name.
+  const said = await p.$$eval("#messages .msg__model", (l) => l.map((x) => [x.lastElementChild.textContent, x.title]))
+  assert.deepEqual(said, [["Qwen · Plan", "plan/qwen"], ["Qwen · Local", "local/qwen"], ["qwen", "qwen"]])
+  // Changing it sends the other's ref, and the chip follows the chat's new ref.
+  await p.click("#chat-settings .cchip--model")
+  await p.locator(".menu .menu__item", { hasText: "Qwen · Local" }).click()
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/chats/chat1").length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat1")))[0].args.body, { model: "local/qwen" })
+  await modelSaid(p, "Qwen · Local")
+  // The schedule: its model's connection, its run's, and the same one chosen where it is edited.
+  await openTask(p)
+  await p.waitForSelector(".run[data-id='run7']")
+  assert.match(await p.textContent(".sched__model"), /Qwen · Plan$/)
+  assert.equal(await p.textContent(".run[data-id='run7'] .run__name"), "Qwen · Plan")
+  await p.click("#sched-edit")
+  await p.waitForSelector("#sched-model")
+  assert.equal(await p.inputValue("#sched-model"), "plan/qwen")
+  await p.click("#sched-save")
+  await p.waitForFunction(() => window.__mock.api("PATCH", "/schedules/sched3").length === 1)
+  assert.equal((await p.evaluate(() => window.__mock.api("PATCH", "/schedules/sched3")))[0].args.body.model, "plan/qwen")
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

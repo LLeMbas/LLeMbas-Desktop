@@ -13,7 +13,7 @@ import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
 import { menu, ask, showLine, popover, closePopover } from "./popup.js"
-import { avatar, modelKey, findModel, modelLabel, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
+import { avatar, modelKey, modelOf, modelFor, findModel, modelLabel, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton, treeChanged, showPanel, panelOpen, stateWord } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
@@ -531,7 +531,9 @@ function assistantMessage(m, chat, last = null) {
     if (whole.includes("\n")) el.append(h("details", { class: "msg__error" }, h("summary", { text: t("Details") }), h("pre", { class: "call__pre", text: whole })))
   }
   const meta = metricsLine(m.metrics)
-  const model = m.model ? findModel(ctx.models(), m.model) || { id: m.model, name: m.model } : null
+  // Which connection answered: the message's `model_ref`; its bare id only where there is none.
+  const known = open?.models?.length ? open.models : ctx.models()
+  const model = m.model ? modelFor(known, m) || modelFor(ctx.models(), m) || { id: m.model, name: m.model } : null
   el.append(
     h(
       "footer",
@@ -544,7 +546,7 @@ function assistantMessage(m, chat, last = null) {
         // Only the last reply: CSS shows it there and nowhere else (app.css, .msg__regen).
         action(ICONS.refresh, t("Regenerate reply"), () => regenerate(m), "msg__regen"),
       ),
-      model ? h("span", { class: "msg__model", title: model.id }, avatar(model), h("span", { text: model.name })) : null,
+      model ? h("span", { class: "msg__model", title: model.ref || model.id }, avatar(model), h("span", { text: modelLabel(known, model) })) : null,
       meta,
     ),
   )
@@ -1454,8 +1456,8 @@ function modeChip(value, onChange, disabled) {
 }
 
 function modelChip(models, value, onChange, mayPick, why = "") {
-  // `value` is a ref (a draft's choice) or an id (an open chat's model, as the server says it).
-  const m = findModel(models, value) || (value ? { id: value, name: value } : null)
+  // `value` is a ref (a draft's choice), or an open chat itself: its `model_ref`, else its id.
+  const m = typeof value === "object" ? modelFor(models, value) || (value?.model ? { id: value.model, name: value.model } : null) : findModel(models, value) || (value ? { id: value, name: value } : null)
   const label = m ? modelLabel(models, m) : ""
   if (!m) return chip({ ico: ICONS.info, label: t("No model is available to this account."), menuish: false, disabled: true })
   return chip({
@@ -1812,10 +1814,10 @@ async function renderChips() {
   const models = await chatModels(chat)
   if (drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
   open.models = models // the models this chat may use, as /effort reads its levels
-  const current = findModel(models, chat.model) || { id: chat.model, name: chat.model, efforts: [] }
+  const current = modelFor(models, chat) || { id: chat.model, name: chat.model, efforts: [] }
   const parts = []
   if (chat.kind === "agent") parts.push(modeChip(chat.mode || "edit", (m) => save({ mode: m })))
-  if (chat.model) parts.push(modelChip(models, chat.model, (id) => save({ model: id }), mayPick))
+  if (chat.model) parts.push(modelChip(models, chat, (id) => save({ model: id }), mayPick))
   parts.push(effortChip(current, chat.effort || levelsOf(current).start, (l) => save({ effort: l })))
   if (chat.kind === "chat" && picturesOffered() && !chat.archived) message.replaceChildren(pictureChip())
   else {
@@ -2425,8 +2427,9 @@ async function submit() {
 const chatId = () => (draft ? "" : open?.chat?.id || "")
 const isAgent = () => (draft ? draft.kind === "agent" : open?.chat?.kind === "agent")
 const chatModel = () => {
-  const id = draft ? draft.model : open?.chat?.model
-  return findModel(open?.models || [], id) || findModel(ctx.models(), id) || (id ? { id, name: id, efforts: [] } : null)
+  if (draft) return findModel(open?.models || [], draft.model) || findModel(ctx.models(), draft.model) || (draft.model ? { id: draft.model, name: draft.model, efforts: [] } : null)
+  const chat = open?.chat
+  return modelFor(open?.models || [], chat) || modelFor(ctx.models(), chat) || (chat?.model ? { id: chat.model, name: chat.model, efforts: [] } : null)
 }
 
 async function saveChat(body, done) {

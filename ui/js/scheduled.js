@@ -52,7 +52,7 @@
 import { $, h, clear, icon, ICONS, when } from "./dom.js"
 import { api, get, post, patch, del, why, listen } from "./bridge.js"
 import { ask, menu, popover } from "./popup.js"
-import { avatar, levelsOf, levelWord, modelKey, findModel, modelLabel } from "./models.js"
+import { avatar, levelsOf, levelWord, modelKey, modelOf, modelFor, findModel, modelLabel } from "./models.js"
 import { markdown } from "./markdown.js"
 import { pickDirectory } from "./dirpick.js"
 import { knownFolders } from "./chat.js"
@@ -376,7 +376,7 @@ async function drawTask(id) {
         fact(t("Last run"), statusChip(task.last_run, task.running)),
         "runs_on" in task ? fact(t("Type"), h("span", { id: "sched-type-said", text: task.runs_on ? t("Agentic") : t("Chat") })) : null,
         ...(task.runs_on ? whereFacts(task.runs_on, devices) : []),
-        fact(t("Model"), modelWords(models, task.model, !!task.runs_on)),
+        fact(t("Model"), modelWords(models, task, !!task.runs_on)),
         fact(t("Reasoning effort"), h("span", { text: task.effort ? levelWord(task.effort) : t("The model's own") })),
         fact(t("Subagents"), h("span", { text: task.agents ? t("Up to %(n)s at once", { n: task.agents }) : t("None") })),
         fact(t("Notify when"), h("span", { id: "sched-notify-said", text: notifyOf(task) === "when" ? task.notify_when || task.notify_default || NOTIFY.when() : wordOf(NOTIFY, notifyOf(task)) })),
@@ -447,10 +447,11 @@ function fact(label, value, hint) {
   return h("div", { class: "fact" }, h("span", { class: "fact__label", text: label }), h("span", { class: "fact__value" }, value), hint ? h("span", { class: "fact__hint", text: hint }) : null)
 }
 
-function modelWords(models, id, agentic) {
-  if (!id) return h("span", { text: agentic ? t("The folder's usual model") : t("The first free scheduling model") })
-  const m = findModel(models, id)
-  return m ? h("span", { class: "sched__model" }, avatar(m), h("span", { text: modelLabel(models, m) })) : h("span", { text: id })
+function modelWords(models, task, agentic) {
+  if (!task.model) return h("span", { text: agentic ? t("The folder's usual model") : t("The first free scheduling model") })
+  // The schedule's `model_ref` says which connection; its id alone only where there is no ref.
+  const m = modelFor(models, task) || modelFor(ctx.models(), task)
+  return m ? h("span", { class: "sched__model" }, avatar(m), h("span", { text: modelLabel(models, m) })) : h("span", { text: task.model })
 }
 
 function upcoming(next) {
@@ -520,6 +521,9 @@ function runRow(task, run) {
   const model = run.model || {}
   const switched = model.reason === "switched" && model.switched_from ? t("%(model)s was busy, so it ran on this one.", { model: model.switched_from }) : ""
   const how = wordOf(HOW, model.reason)
+  // The run's `model.ref` says which connection it ran on: named with it where another serves the same id.
+  const known = model.ref ? ctx.models().find((m) => m.ref === model.ref) : null
+  const ranOn = known ? modelLabel(ctx.models(), known) : model.name || ""
   const on = run.ran_on?.device ? run.ran_on : null
   const where = on ? [on.device_name || t("a computer no longer signed in"), folderName(on.cwd || "")].filter(Boolean).join(" · ") : ""
   const hasResult = run.message_id || run.report_path || run.preview
@@ -562,7 +566,7 @@ function runRow(task, run) {
     h(
       "span",
       { class: "run__model" },
-      h("span", { class: "run__name", title: model.name || "", text: model.name || (on ? "" : task.runs_on?.device_name || "") }),
+      h("span", { class: "run__name", title: ranOn || "", text: ranOn || (on ? "" : task.runs_on?.device_name || "") }),
       how ? h("span", { class: "run__how", title: switched || how, text: how }) : null,
       where ? h("span", { class: "run__where", title: `${on.device_name || ""} · ${on.cwd || ""} · ${runMode(on.mode)}`, text: where }) : null,
     ),
@@ -626,7 +630,7 @@ async function drawForm(task) {
     instruction: task?.instruction || "",
     rule: task?.rule || null,
     target: task?.target || "chat",
-    model: task?.model || "",
+    model: modelOf(task),
     effort: task?.effort || "",
     agents: task?.agents || null,
     notify: notifyOf(task),
@@ -827,7 +831,7 @@ async function drawForm(task) {
   }
 
   const drawSettings = () => {
-    // The task says its model as an id; one chosen here is kept, and sent, as its ref.
+    // The task's model is its ref where the server says one (else its id); one chosen here is kept, and sent, as its ref.
     const model = findModel(smodels, draft.model) || findModel(ctx.models(), draft.model)
     const select = (id, table, key, onChange) =>
       h(
