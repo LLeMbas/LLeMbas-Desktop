@@ -60,8 +60,12 @@ pub struct Discovery {
     pub one_approval: bool,
 }
 
+/// Every request is made by one of these. The token goes to the server it was given by and
+/// nowhere else: on a redirect the `Authorization` header is never sent on, to the same host or
+/// to another (said here rather than left to the library's default, which is the same).
 fn agent(read: Duration) -> ureq::Agent {
     ureq::AgentBuilder::new()
+        .redirect_auth_headers(ureq::RedirectAuthHeaders::Never)
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(read)
         .timeout_write(Duration::from_secs(30))
@@ -813,31 +817,90 @@ fn plain_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Where a download is written until it is whole: beside where it is going.
-fn part_of(dest: &Path) -> PathBuf {
-    let mut name = dest
-        .file_name()
-        .map(|n| n.to_os_string())
-        .unwrap_or_default();
-    name.push(".part");
-    dest.with_file_name(name)
+/// The most a download to disk may be. An answer that says it is longer is refused before a
+/// byte is written, and one that does not say is stopped here.
+pub const DOWNLOAD_LIMIT: u64 = 16 * 1024 * 1024 * 1024;
+
+/// Where a download goes, and how it takes its name once it is whole.
+pub struct Dest<'a> {
+    pub at: &'a Path,
+    /// The name must still be free: nothing is replaced (a folder of the agent's). Otherwise the
+    /// person chose the name in the system's dialog, and what is called that is replaced.
+    pub new: bool,
+    /// What the file it is written to meanwhile must pass, as `at` already did: the rule that
+    /// keeps the CLI's files (`files::may_write`).
+    pub check: Option<&'a dyn Fn(&Path) -> Result<(), String>>,
 }
 
-/// Write an answer's body to `dest` as it arrives; how many bytes. A download that breaks off
-/// leaves nothing behind: it is written beside `dest` and takes its name only once whole.
-fn save_body(res: ureq::Response, dest: &Path) -> Result<u64, ApiError> {
-    let part = part_of(dest);
-    let written = fs::File::create(&part).and_then(|mut file| {
-        let n = std::io::copy(&mut res.into_reader(), &mut file)?;
-        file.flush()?;
-        Ok(n)
-    });
-    written
-        .and_then(|n| fs::rename(&part, dest).map(|_| n))
-        .map_err(|e| {
-            let _ = fs::remove_file(&part);
-            ApiError::new(0, format!("The file could not be saved: {e}"))
-        })
+impl<'a> Dest<'a> {
+    /// A place the person chose in the system's save dialog.
+    pub fn chosen(at: &'a Path) -> Self {
+        Dest {
+            at,
+            new: false,
+            check: None,
+        }
+    }
+}
+
+fn too_large() -> ApiError {
+    ApiError::new(
+        413,
+        format!(
+            "This file is larger than the app downloads ({} GB).",
+            DOWNLOAD_LIMIT / (1024 * 1024 * 1024)
+        ),
+    )
+}
+
+/// Write `body` to `dest` as it arrives; how many bytes. `length` is what the answer said its
+/// length is, where it said: more than `limit`, or more than the disk has room for, and nothing
+/// is written. It is written to a file made new beside `dest` under a random name
+/// (`files::Fresh`: never through a link, never over anything) and takes its name only once
+/// whole, so a download that breaks off, or runs past `limit`, leaves nothing behind -- and
+/// nothing that was there before is touched.
+fn save_stream(
+    body: impl Read,
+    length: Option<u64>,
+    dest: &Dest,
+    limit: u64,
+) -> Result<u64, ApiError> {
+    let failed = |e: std::io::Error| ApiError::new(0, format!("The file could not be saved: {e}"));
+    if length.is_some_and(|n| n > limit) {
+        return Err(too_large());
+    }
+    if let (Some(n), Some(room)) = (length, crate::files::room_for(dest.at)) {
+        if n > room {
+            return Err(ApiError::new(
+                507,
+                "There is not enough room on the disk for this file.",
+            ));
+        }
+    }
+    let mut fresh = crate::files::Fresh::beside(dest.at).map_err(failed)?;
+    if let Some(check) = dest.check {
+        check(fresh.path()).map_err(|e| ApiError::new(400, e))?;
+    }
+    let n = std::io::copy(&mut body.take(limit.saturating_add(1)), fresh.file()).map_err(failed)?;
+    if n > limit {
+        return Err(too_large());
+    }
+    fresh.file().flush().map_err(failed)?;
+    let settled = if dest.new {
+        fresh.settle_new(dest.at)
+    } else {
+        fresh.replace(dest.at)
+    };
+    settled.map_err(failed)?;
+    Ok(n)
+}
+
+/// An answer's body, written to `dest` (`save_stream`).
+fn save_body(res: ureq::Response, dest: &Dest) -> Result<u64, ApiError> {
+    let length = res
+        .header("content-length")
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    save_stream(res.into_reader(), length, dest, DOWNLOAD_LIMIT)
 }
 
 /// A file of the server's tree (or one version of it), written to `dest`.
@@ -846,13 +909,13 @@ pub fn download(
     token: &str,
     path: &str,
     version: Option<&str>,
-    dest: &Path,
+    dest: &Dest,
 ) -> Result<u64, ApiError> {
     download_raw(app, token, &raw_path(path, version, false)?, dest)
 }
 
 /// `raw` (from `raw_path` or `raw_node`), written to `dest` as it arrives.
-pub fn download_raw(app: &str, token: &str, raw: &str, dest: &Path) -> Result<u64, ApiError> {
+pub fn download_raw(app: &str, token: &str, raw: &str, dest: &Dest) -> Result<u64, ApiError> {
     let res = agent(Duration::from_secs(120))
         .get(&format!("{app}{}", checked_path(raw)?))
         .set("authorization", &format!("Bearer {token}"))
@@ -866,7 +929,7 @@ pub fn download_zip(
     app: &str,
     token: &str,
     paths: &[String],
-    dest: &Path,
+    dest: &Dest,
 ) -> Result<u64, ApiError> {
     let res = agent(Duration::from_secs(300))
         .post(&format!("{app}/files/zip"))
@@ -1516,6 +1579,141 @@ mod tests {
         assert!(check(&none, "https://ai.example").is_err());
         let not_ours = json!({"service": "other"});
         assert!(check(&not_ours, "https://ai.example").is_err());
+    }
+
+    /// A body that breaks off after its first bytes.
+    struct Broken(bool);
+
+    impl Read for Broken {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0 {
+                return Err(std::io::Error::other("the line dropped"));
+            }
+            self.0 = true;
+            buf[0] = b'x';
+            Ok(1)
+        }
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_download_is_written_under_a_name_of_its_own_and_never_through_what_lies_beside_it() {
+        let d = std::env::temp_dir().join(format!("llembas-download-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("project")).unwrap();
+        fs::create_dir_all(d.join("outside")).unwrap();
+        fs::write(d.join("outside/secret.txt"), "no").unwrap();
+        let dest = d.join("project/report.pdf");
+        // What the old way wrote to: `report.pdf.part`, here a link out of the folder, and
+        // somebody's own file that happens to be called so.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            d.join("outside/secret.txt"),
+            d.join("project/report.pdf.part"),
+        )
+        .unwrap();
+        fs::write(d.join("project/notes.part"), "mine").unwrap();
+        let body = b"%PDF-1.7 a report";
+        let n = save_stream(
+            &body[..],
+            Some(body.len() as u64),
+            &Dest::chosen(&dest),
+            DOWNLOAD_LIMIT,
+        )
+        .unwrap();
+        assert_eq!(n, body.len() as u64);
+        assert_eq!(fs::read(&dest).unwrap(), body);
+        assert_eq!(
+            fs::read_to_string(d.join("outside/secret.txt")).unwrap(),
+            "no"
+        );
+        #[cfg(unix)]
+        assert!(fs::symlink_metadata(d.join("project/report.pdf.part"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        // One that breaks off leaves nothing, and takes nothing that was there with it.
+        let notes = d.join("project/notes");
+        assert!(save_stream(Broken(false), None, &Dest::chosen(&notes), DOWNLOAD_LIMIT).is_err());
+        assert!(!notes.exists());
+        assert_eq!(
+            fs::read_to_string(d.join("project/notes.part")).unwrap(),
+            "mine"
+        );
+        // Longer than is downloaded: refused by what it says of itself before a byte is
+        // written, and stopped where it says nothing.
+        let said = save_stream(&body[..], Some(10), &Dest::chosen(&notes), 4).unwrap_err();
+        assert_eq!(said.status, 413);
+        let unsaid = save_stream(&body[..], None, &Dest::chosen(&notes), 4).unwrap_err();
+        assert_eq!(unsaid.status, 413);
+        assert!(!notes.exists());
+        assert_eq!(
+            save_stream(&body[..4], None, &Dest::chosen(&notes), 4).unwrap(),
+            4
+        );
+        // Into a folder of the agent's: never over what is there, and the file it is written
+        // to meanwhile passes the same rule as the place it is going.
+        let allow: &dyn Fn(&Path) -> Result<(), String> = &|_| Ok(());
+        let refuse: &dyn Fn(&Path) -> Result<(), String> = &|_| Err("not there".into());
+        let taken = Dest {
+            at: &dest,
+            new: true,
+            check: Some(allow),
+        };
+        let over = save_stream(&b"other"[..], None, &taken, DOWNLOAD_LIMIT).unwrap_err();
+        assert_eq!(over.status, 0);
+        assert_eq!(fs::read(&dest).unwrap(), body);
+        let free = d.join("project/report (2).pdf");
+        let fresh = Dest {
+            at: &free,
+            new: true,
+            check: Some(allow),
+        };
+        assert_eq!(
+            save_stream(&b"other"[..], None, &fresh, DOWNLOAD_LIMIT).unwrap(),
+            5
+        );
+        let kept = d.join("project/kept.pdf");
+        let guarded = Dest {
+            at: &kept,
+            new: true,
+            check: Some(refuse),
+        };
+        let refused = save_stream(&b"other"[..], None, &guarded, DOWNLOAD_LIMIT).unwrap_err();
+        assert_eq!(
+            (refused.status, refused.detail.as_str()),
+            (400, "not there")
+        );
+        assert!(!kept.exists());
+        // A place there is no folder for.
+        assert!(save_stream(
+            &body[..],
+            None,
+            &Dest::chosen(&d.join("nowhere/x.pdf")),
+            DOWNLOAD_LIMIT
+        )
+        .is_err());
+        // Nothing written meanwhile is left behind.
+        let mut expected = vec![
+            "notes".to_string(),
+            "notes.part".to_string(),
+            "report (2).pdf".to_string(),
+            "report.pdf".to_string(),
+        ];
+        if cfg!(unix) {
+            expected.push("report.pdf.part".to_string());
+        }
+        expected.sort();
+        assert_eq!(names(&d.join("project")), expected);
+        fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

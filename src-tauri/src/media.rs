@@ -8,14 +8,15 @@
 //! and it is Rust that asks the server, with the token, for exactly the piece the player wanted
 //! (`/api/v2/files/raw?inline=1`, which answers ranges), or reads it from the disk after checking
 //! the path against the agent's folders again. A ticket is a random name for one file the page
-//! was allowed to open (`media_open`); it says nothing of where the file is, opens nothing else,
-//! and is forgotten when the viewer closes, when the oldest of `KEEP` gives way, and with the
-//! sign-in.
+//! was allowed to open (`media_open`), from the system's own generator (`random.rs`); it says
+//! nothing of where the file is, opens nothing else, and is forgotten when what showed it closes
+//! (the viewer, a chat that is left), when the oldest of `KEEP` gives way, and with the sign-in.
+//! A page whose ticket gave way asks for another: `media_open` is cheap, and holds nothing open.
 //!
 //! What is served is only ever something a webview decodes and never runs: a raster picture,
 //! sound, video -- by the type the server found in the file's own bytes, or `kinds::detect` for
 //! a local file -- and an SVG as `image/svg+xml`, which the page puts in an `<img>` and nowhere
-//! else. Every answer is sandboxed by its own policy all the same, so an address opened as a
+//! else, and only when the bytes are an SVG's, wherever they come from. Every answer is sandboxed by its own policy all the same, so an address opened as a
 //! document could still run nothing.
 
 use std::collections::VecDeque;
@@ -25,11 +26,12 @@ use std::sync::Mutex;
 use tauri::http::Response;
 
 use crate::server::{self, ApiError};
-use crate::{files, python};
+use crate::{files, kinds};
 
 pub const SCHEME: &str = "llembas-media";
-/// How many files may be open to the page at once.
-const KEEP: usize = 32;
+/// How many files may be open to the page at once: a chat's cards ask as they come into sight
+/// and ask again when theirs gave way, so this is room for a long screenful, not for a chat.
+const KEEP: usize = 256;
 /// The most answered to one ranged request: a player asks again for what follows.
 pub const PIECE: u64 = 2 * 1024 * 1024;
 /// The most answered to a request for the whole of a file (a picture; a player's fallback).
@@ -90,26 +92,14 @@ pub enum Source {
 
 #[derive(Default)]
 pub struct Tickets {
-    next: Mutex<u64>,
     held: Mutex<VecDeque<(String, Source, Shown)>>,
 }
 
 impl Tickets {
     /// Hold a file for the page; the ticket it is served under.
     pub fn hold(&self, source: Source, shown: Shown) -> String {
-        let n = {
-            let mut n = self.next.lock().unwrap();
-            *n += 1;
-            *n
-        };
-        // Not a count: a name nothing else in the window could work out.
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let salt = &n as *const u64 as usize;
-        let seed = format!("{n}:{nanos}:{}:{salt}:{source:?}", std::process::id());
-        let id = python::sha256_hex(seed.as_bytes())[..32].to_string();
+        // Not a count, the clock or an address: a name nothing could work out.
+        let id = crate::random::hex(16);
         let mut held = self.held.lock().unwrap();
         while held.len() >= KEEP {
             held.pop_front();
@@ -237,9 +227,35 @@ fn refused(status: u16) -> Answer {
     }
 }
 
+/// What the server answered, as the page may have it: under the type `shown` allows, or a 415.
+/// An SVG is served only when the bytes are one (as a local file's are checked): the server
+/// hands it out under no type at all, so nothing else says what was asked for is a picture.
+fn served(shown: Shown, part: server::Part) -> Answer {
+    if shown == Shown::Svg
+        && (part.status != 200 || kinds::detect("a.svg", &part.bytes).kind != "svg")
+    {
+        return refused(415);
+    }
+    match shown.serve(&part.kind) {
+        Some(kind) => Answer {
+            status: if part.status == 206 { 206 } else { 200 },
+            kind,
+            range: part.range.filter(|_| part.status == 206),
+            bytes: part.bytes,
+        },
+        None => refused(415),
+    }
+}
+
 fn from_server(door: Option<(String, String)>, raw: &str, shown: Shown, wanted: Wanted) -> Answer {
     let Some((app, token)) = door else {
         return refused(401);
+    };
+    // An SVG is asked for whole, whatever piece was wanted: it is judged by how it begins.
+    let wanted = if shown == Shown::Svg {
+        Wanted::Whole
+    } else {
+        wanted
     };
     let limit = if wanted == Wanted::Whole {
         WHOLE
@@ -247,15 +263,7 @@ fn from_server(door: Option<(String, String)>, raw: &str, shown: Shown, wanted: 
         PIECE
     };
     match server::raw_part(&app, &token, raw, piece(wanted).as_deref(), limit) {
-        Ok(part) => match shown.serve(&part.kind) {
-            Some(kind) => Answer {
-                status: if part.status == 206 { 206 } else { 200 },
-                kind,
-                range: part.range.filter(|_| part.status == 206),
-                bytes: part.bytes,
-            },
-            None => refused(415),
-        },
+        Ok(part) => served(shown, part),
         Err(ApiError { status, .. }) => refused(if status == 0 { 502 } else { status }),
     }
 }
@@ -420,6 +428,55 @@ mod tests {
     }
 
     #[test]
+    fn what_the_server_calls_an_svg_is_served_only_when_its_bytes_are_one() {
+        let part = |kind: &str, bytes: &[u8]| server::Part {
+            status: 200,
+            kind: kind.into(),
+            range: None,
+            bytes: bytes.to_vec(),
+        };
+        let svg = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        let drawn = served(Shown::Svg, part("application/octet-stream", svg));
+        assert_eq!((drawn.status, drawn.kind.as_str()), (200, "image/svg+xml"));
+        assert_eq!(drawn.bytes, svg);
+        // A film, a picture, an archive or plain words asked for as an SVG are not one.
+        for other in [
+            &b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..],
+            &b"PK\x03\x04 an archive"[..],
+            &b"only words, no markup at all"[..],
+            &b"\0\0\0\x18ftypmp42 a film"[..],
+            &b"%PDF-1.7"[..],
+        ] {
+            assert_eq!(
+                served(Shown::Svg, part("application/octet-stream", other)).status,
+                415
+            );
+            assert_eq!(served(Shown::Svg, part("image/svg+xml", other)).status, 415);
+        }
+        // A piece of one is not judged, so it is not served.
+        let piece = server::Part {
+            status: 206,
+            range: Some("bytes 0-9/41".into()),
+            ..part("application/octet-stream", &svg[..10])
+        };
+        assert_eq!(served(Shown::Svg, piece).status, 415);
+        // The other kinds go by the type the server found, as before.
+        let png = served(Shown::Image, part("image/png", b"\x89PNG"));
+        assert_eq!((png.status, png.kind.as_str()), (200, "image/png"));
+        assert_eq!(served(Shown::Image, part("text/html", b"<p>")).status, 415);
+        let film = server::Part {
+            status: 206,
+            range: Some("bytes 0-3/9".into()),
+            ..part("video/mp4", b"\0\0\0\x18")
+        };
+        let played = served(Shown::Sound, film);
+        assert_eq!(
+            (played.status, played.range.as_deref()),
+            (206, Some("bytes 0-3/9"))
+        );
+    }
+
+    #[test]
     fn a_ticket_names_one_file_and_is_forgotten() {
         let tickets = Tickets::default();
         let source = Source::Server {
@@ -428,6 +485,7 @@ mod tests {
         let id = tickets.hold(source.clone(), Shown::Image);
         let other = tickets.hold(source.clone(), Shown::Image);
         assert_eq!(id.len(), 32);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(id, other, "the same file twice is two tickets");
         assert_eq!(tickets.get(&id), Some((source.clone(), Shown::Image)));
         assert_eq!(id_of_url(&url(&id)), Some(id.as_str()));

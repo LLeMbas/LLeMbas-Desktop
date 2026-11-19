@@ -21,6 +21,7 @@ mod files;
 mod kinds;
 mod media;
 mod python;
+mod random;
 mod remote;
 mod sealed;
 mod server;
@@ -716,14 +717,26 @@ struct Uploaded {
 }
 
 fn read_for_upload(path: &std::path::Path) -> Result<Vec<u8>, (&'static str, String)> {
+    use std::io::Read;
     let meta = std::fs::metadata(path).map_err(|e| ("unreadable", e.to_string()))?;
     if meta.is_dir() {
         return Err(("folder", "This is a folder.".into()));
     }
+    let too_large = || ("too_large", "This file is too large to send.".to_string());
     if meta.len() > server::UPLOAD_LIMIT {
-        return Err(("too_large", "This file is too large to send.".into()));
+        return Err(too_large());
     }
-    std::fs::read(path).map_err(|e| ("unreadable", e.to_string()))
+    // Only ever an ordinary file, and read from the handle that was checked: a pipe or a device
+    // called a file would be read for ever, and says no length.
+    let (file, _) = files::open_regular(path, true).map_err(|e| ("unreadable", e.to_string()))?;
+    let mut bytes = Vec::new();
+    file.take(server::UPLOAD_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| ("unreadable", e.to_string()))?;
+    if bytes.len() as u64 > server::UPLOAD_LIMIT {
+        return Err(too_large());
+    }
+    Ok(bytes)
 }
 
 /// Send these files, one by one, as attachments for `chat` ("" for a chat not made yet). Only
@@ -965,7 +978,13 @@ async fn file_save_as(
     title: String,
 ) -> Result<Option<Saved>, ApiError> {
     save_with_dialog(handle, name, title, move |app_url, token, dest| {
-        server::download(app_url, token, &path, version.as_deref(), dest)
+        server::download(
+            app_url,
+            token,
+            &path,
+            version.as_deref(),
+            &server::Dest::chosen(dest),
+        )
     })
     .await
 }
@@ -979,7 +998,7 @@ async fn files_zip_save(
     title: String,
 ) -> Result<Option<Saved>, ApiError> {
     save_with_dialog(handle, name, title, move |app_url, token, dest| {
-        server::download_zip(app_url, token, &paths, dest)
+        server::download_zip(app_url, token, &paths, &server::Dest::chosen(dest))
     })
     .await
 }
@@ -1219,7 +1238,16 @@ async fn local_download(
     let result = on_local(&handle, move |roots, kept| {
         let (base, dest) = files::incoming(roots, kept, &root, &dir, &suggested(&name))
             .map_err(|e| ApiError::new(400, e))?;
-        server::download(&app_url, &token, &path, None, &dest)?;
+        // Never over something that took the name meanwhile, and never written through the
+        // CLI's own names, even for the moment before it is whole.
+        let check: &dyn Fn(&std::path::Path) -> Result<(), String> =
+            &|at| files::may_write(kept, at);
+        let landing = server::Dest {
+            at: &dest,
+            new: true,
+            check: Some(check),
+        };
+        server::download(&app_url, &token, &path, None, &landing)?;
         Ok(files::relative_to(&base, &dest))
     })
     .await;
@@ -1311,7 +1339,7 @@ async fn media_save_as(
 ) -> Result<Option<Saved>, ApiError> {
     let raw = server::raw_node(&node, false)?;
     save_with_dialog(handle, name, title, move |app_url, token, dest| {
-        server::download_raw(app_url, token, &raw, dest)
+        server::download_raw(app_url, token, &raw, &server::Dest::chosen(dest))
     })
     .await
 }
