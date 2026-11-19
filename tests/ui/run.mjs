@@ -6939,7 +6939,11 @@ test("MD5: a model that is not for chatting is in no chat's picker; sound and vi
     { width: 1280, height: 900 },
   )
   await openChatRow(p, "chat1")
-  // The players: fed by the attachment's id, never a path.
+  // The players: fed by the attachment's id, never a path -- asked for once their tiles are in
+  // sight (the thread opens at its end, and they are above it).
+  await p.waitForSelector("#messages .ptile[data-kind=audio]")
+  assert.equal((await callsOf(p, "media_open")).length, 0, "nothing is asked for while they are out of sight")
+  await p.$eval("#messages .ptile[data-kind=audio]", (el) => el.scrollIntoView({ block: "center" }))
   await p.waitForSelector("#messages .ptile[data-kind=audio] audio.mcard__audio")
   await p.waitForSelector("#messages .ptile[data-kind=video] video.mcard__video")
   assert.deepEqual((await callsOf(p, "media_open")).sort((a, b) => a.kind.localeCompare(b.kind)), [{ source: "attachment", kind: "audio", attachment: "att9" }, { source: "attachment", kind: "video", attachment: "att10" }])
