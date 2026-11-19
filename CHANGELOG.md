@@ -4,7 +4,7 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0-beta.13] — 2026-11-19
 
 For LLeMbas server after 2.0.0-beta.15 (its files routes on `/api/v2`); with an older server the
 server's tab keeps what it had, and what the server does not have says so in its own words.
