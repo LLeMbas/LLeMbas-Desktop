@@ -1240,8 +1240,7 @@ async fn local_download(
             .map_err(|e| ApiError::new(400, e))?;
         // Never over something that took the name meanwhile, and never written through the
         // CLI's own names, even for the moment before it is whole.
-        let check: &dyn Fn(&std::path::Path) -> Result<(), String> =
-            &|at| files::may_write(kept, at);
+        let check: server::Check = &|at| files::may_write(kept, at);
         let landing = server::Dest {
             at: &dest,
             new: true,

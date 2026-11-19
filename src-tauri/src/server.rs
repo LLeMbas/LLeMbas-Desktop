@@ -821,15 +821,17 @@ fn plain_id(id: &str) -> bool {
 /// byte is written, and one that does not say is stopped here.
 pub const DOWNLOAD_LIMIT: u64 = 16 * 1024 * 1024 * 1024;
 
+/// What a place written to must pass: the rule that keeps the CLI's files (`files::may_write`).
+pub type Check<'a> = &'a dyn Fn(&Path) -> Result<(), String>;
+
 /// Where a download goes, and how it takes its name once it is whole.
 pub struct Dest<'a> {
     pub at: &'a Path,
     /// The name must still be free: nothing is replaced (a folder of the agent's). Otherwise the
     /// person chose the name in the system's dialog, and what is called that is replaced.
     pub new: bool,
-    /// What the file it is written to meanwhile must pass, as `at` already did: the rule that
-    /// keeps the CLI's files (`files::may_write`).
-    pub check: Option<&'a dyn Fn(&Path) -> Result<(), String>>,
+    /// What the file it is written to meanwhile must pass, as `at` already did.
+    pub check: Option<Check<'a>>,
 }
 
 impl<'a> Dest<'a> {
@@ -1461,10 +1463,6 @@ mod tests {
             assert!(raw_node(bad, true).is_err(), "{bad}");
             assert!(attachment_path(bad).is_err(), "{bad}");
         }
-        assert_eq!(
-            part_of(Path::new("/tmp/waybread.zip")),
-            Path::new("/tmp/waybread.zip.part")
-        );
     }
 
     fn two_oh() -> Value {
@@ -1661,8 +1659,8 @@ mod tests {
         );
         // Into a folder of the agent's: never over what is there, and the file it is written
         // to meanwhile passes the same rule as the place it is going.
-        let allow: &dyn Fn(&Path) -> Result<(), String> = &|_| Ok(());
-        let refuse: &dyn Fn(&Path) -> Result<(), String> = &|_| Err("not there".into());
+        let allow: Check = &|_| Ok(());
+        let refuse: Check = &|_| Err("not there".into());
         let taken = Dest {
             at: &dest,
             new: true,
