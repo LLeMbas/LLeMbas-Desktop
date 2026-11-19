@@ -776,6 +776,10 @@ KEYS = (
     "An administrator signs in to this one.",
     "Ready",
     "Tools from other services that your chats on the server may use. Signing in to one happens in your browser, on your server.",
+    "Only the first %(n)s entries are listed.",
+    "%(n)s entries. Nothing is unpacked here.",
+    "This file changed since you opened it. Reload it, or save anyway.",
+    "This file is in the trash.",
 )
 
 # The app's own sentences. The mode names (Manual, Edit, Auto, Plan) stay English, as the
@@ -785,6 +789,7 @@ OWN: dict[str, dict[str, str]] = {
     "cs": {
         "3D model": "3D model",
         "This file is no longer there.": "Tento soubor už tu není.",
+        "This file is in the trash.": "Tento soubor je v koši.",
         "3D cannot be drawn here.": "3D zde nelze vykreslit.",
         "Needs sign-in: its tools are not offered until somebody signs in again.": "Vyžaduje přihlášení: jeho nástroje se nenabízejí, dokud se někdo znovu nepřihlásí.",
         "Not signed in: its tools are not offered until somebody signs in.": "Nepřihlášeno: jeho nástroje se nenabízejí, dokud se někdo nepřihlásí.",
@@ -1139,6 +1144,7 @@ OWN: dict[str, dict[str, str]] = {
     "de": {
         "3D model": "3D-Modell",
         "This file is no longer there.": "Diese Datei ist nicht mehr da.",
+        "This file is in the trash.": "Diese Datei liegt im Papierkorb.",
         "3D cannot be drawn here.": "3D kann hier nicht dargestellt werden.",
         "Needs sign-in: its tools are not offered until somebody signs in again.": "Anmeldung nötig: Seine Werkzeuge werden nicht angeboten, bis sich jemand erneut anmeldet.",
         "Not signed in: its tools are not offered until somebody signs in.": "Nicht angemeldet: Seine Werkzeuge werden nicht angeboten, bis sich jemand anmeldet.",
@@ -1493,6 +1499,7 @@ OWN: dict[str, dict[str, str]] = {
     "es": {
         "3D model": "Modelo 3D",
         "This file is no longer there.": "Este archivo ya no está.",
+        "This file is in the trash.": "Este archivo está en la papelera.",
         "3D cannot be drawn here.": "Aquí no se puede dibujar en 3D.",
         "Needs sign-in: its tools are not offered until somebody signs in again.": "Requiere iniciar sesión: sus herramientas no se ofrecen hasta que alguien vuelva a iniciar sesión.",
         "Not signed in: its tools are not offered until somebody signs in.": "Sin sesión iniciada: sus herramientas no se ofrecen hasta que alguien inicie sesión.",
@@ -1847,6 +1854,7 @@ OWN: dict[str, dict[str, str]] = {
     "fr": {
         "3D model": "Modèle 3D",
         "This file is no longer there.": "Ce fichier n’est plus là.",
+        "This file is in the trash.": "Ce fichier est dans la corbeille.",
         "3D cannot be drawn here.": "La 3D ne peut pas être dessinée ici.",
         "Needs sign-in: its tools are not offered until somebody signs in again.": "Connexion requise : ses outils ne sont pas proposés tant que personne ne se reconnecte.",
         "Not signed in: its tools are not offered until somebody signs in.": "Non connecté : ses outils ne sont pas proposés tant que personne ne se connecte.",
@@ -2201,6 +2209,7 @@ OWN: dict[str, dict[str, str]] = {
     "hu": {
         "3D model": "3D modell",
         "This file is no longer there.": "Ez a fájl már nincs meg.",
+        "This file is in the trash.": "Ez a fájl a lomtárban van.",
         "3D cannot be drawn here.": "Itt nem rajzolható 3D.",
         "Needs sign-in: its tools are not offered until somebody signs in again.": "Bejelentkezés szükséges: az eszközei nem érhetők el, amíg valaki újra be nem jelentkezik.",
         "Not signed in: its tools are not offered until somebody signs in.": "Nincs bejelentkezve: az eszközei nem érhetők el, amíg valaki be nem jelentkezik.",
@@ -2555,6 +2564,7 @@ OWN: dict[str, dict[str, str]] = {
     "it": {
         "3D model": "Modello 3D",
         "This file is no longer there.": "Questo file non c’è più.",
+        "This file is in the trash.": "Questo file è nel cestino.",
         "3D cannot be drawn here.": "Qui non si può disegnare in 3D.",
         "Needs sign-in: its tools are not offered until somebody signs in again.": "Serve l’accesso: i suoi strumenti non sono offerti finché qualcuno non accede di nuovo.",
         "Not signed in: its tools are not offered until somebody signs in.": "Accesso non effettuato: i suoi strumenti non sono offerti finché qualcuno non accede.",
@@ -2909,6 +2919,7 @@ OWN: dict[str, dict[str, str]] = {
     "pl": {
         "3D model": "Model 3D",
         "This file is no longer there.": "Tego pliku już tu nie ma.",
+        "This file is in the trash.": "Ten plik jest w koszu.",
         "3D cannot be drawn here.": "Nie można tu narysować 3D.",
         "Needs sign-in: its tools are not offered until somebody signs in again.": "Wymaga zalogowania: jego narzędzia nie są oferowane, dopóki ktoś nie zaloguje się ponownie.",
         "Not signed in: its tools are not offered until somebody signs in.": "Nie zalogowano: jego narzędzia nie są oferowane, dopóki ktoś się nie zaloguje.",
@@ -3263,6 +3274,7 @@ OWN: dict[str, dict[str, str]] = {
     "sk": {
         "3D model": "3D model",
         "This file is no longer there.": "Tento súbor tu už nie je.",
+        "This file is in the trash.": "Tento súbor je v koši.",
         "3D cannot be drawn here.": "3D sa tu nedá vykresliť.",
         "Needs sign-in: its tools are not offered until somebody signs in again.": "Vyžaduje prihlásenie: jeho nástroje sa neponúkajú, kým sa niekto znova neprihlási.",
         "Not signed in: its tools are not offered until somebody signs in.": "Neprihlásené: jeho nástroje sa neponúkajú, kým sa niekto neprihlási.",

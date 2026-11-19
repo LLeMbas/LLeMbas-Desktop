@@ -9,7 +9,7 @@ import { invoke, listen, get, why } from "./bridge.js"
 import { renderBar, initBar } from "./titlebar.js"
 import { renderSetup, initSetup } from "./setup.js"
 import { renderSettings, initSettings, scrollToSection } from "./settings.js"
-import { initViewer, onViewer, closeViewer } from "./viewer.js"
+import { initViewer, onViewer, closeViewer, closeViewerKeeping, keptEdit, dropKeptEdit, restoreEdit } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab, openServerFile, revealServerFile } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
 import { initChat, openChat, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
@@ -74,9 +74,13 @@ function thisDevices() {
 
 // --- Views ------------------------------------------------------------------------------------
 
+let who = "" // the server and the account the app last showed: `server|email`
+let keptFor = "" // whose the edit kept by the viewer is
+
 function route() {
   const ready = status.checked && status.discovery && !status.refused && status.account
   const want = ready ? "app" : "setup"
+  if (ready) who = `${status.server || ""}|${status.account.email || status.account.name || ""}`
   if (want !== view) {
     view = want
     $("setup").hidden = want !== "setup"
@@ -101,6 +105,13 @@ async function startApp() {
     me = await get("/me")
     noteMe(me)
     voiceFor(me)
+    // An edit the last sign-out took the screen from under: back for the same person on the
+    // same server, and nobody else's to see.
+    if (keptEdit()) {
+      if (keptFor && keptFor === who) restoreEdit()
+      else dropKeptEdit()
+      keptFor = ""
+    }
   } catch (err) {
     $("thread-note").textContent = why(err)
     $("thread-note").hidden = false
@@ -118,7 +129,11 @@ async function startApp() {
 function stopApp() {
   started = false
   closeChat()
-  closeViewer()
+  // The screen goes because the sign-in did -- by the server's word, not the person's (Sign out
+  // asks first, and what it is told may go is gone). An edit that was not saved is kept for the
+  // person it belongs to, and put back when they have signed in again.
+  closeViewerKeeping()
+  keptFor = keptEdit() ? who : ""
   stopReports()
   if (page === "reports") showPage("chat")
 }
@@ -316,7 +331,7 @@ async function boot() {
   initVoice({ where: mediaFor, alert: (text) => alertIn(text), note: (text) => alertIn(text, true) })
   initPython({ me: () => me, changed: () => pythonChanged() })
   // What a model made: "Open in Files" leads to the server's files, at the file where it is.
-  initMedia({ openInFiles: (m) => (showFiles("server"), revealServerFile(m.path || "")), woken: (job) => mediaJobEnded(job) })
+  initMedia({ openInFiles: (m) => (showFiles("server"), revealServerFile(m.path || "", m.node_id || "")), woken: (job) => mediaJobEnded(job) })
   initChat({
     status: () => status,
     thisDevices,

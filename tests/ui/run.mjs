@@ -271,7 +271,8 @@ async function page(config, { width = 1280, height = 860, clock = false, wait = 
   // path the page asked `media_open` for. A name with "broken" in it is not served at all.
   await context.route(`${MEDIA}/**`, (route) => {
     const [, kind, name] = new URL(route.request().url()).pathname.split("/")
-    if (decodeURIComponent(name || "").includes("broken")) return route.fulfill({ status: 404, body: "" })
+    // An address Rust has given up (the mock's `mediaStale`), and a file that is not there.
+    if (kind === "stale" || decodeURIComponent(name || "").includes("broken")) return route.fulfill({ status: 404, body: "" })
     if (kind === "image") return route.fulfill({ status: 200, contentType: "image/png", body: MEDIA_PNG })
     if (kind === "svg") return route.fulfill({ status: 200, contentType: "image/svg+xml", body: MEDIA_SVG })
     return route.fulfill({ status: 200, contentType: "audio/wav", body: MEDIA_WAV })
@@ -6989,6 +6990,261 @@ test("MD5: a model that is not for chatting is in no chat's picker; sound and vi
   await elsewhere.waitForSelector("#set-mcp .set__line[data-mcp]")
   assert.equal(await elsewhere.locator("#set-mcp .set__line button").count(), 0)
   assert.deepEqual(elsewhere.errors, [])
+})
+
+// --- RV: what a review of the files and media rounds found, in the page ---------------------------
+
+test("RV3: a chat with more files than Rust keeps addresses for asks for each as it comes into sight, asks once more for one that was given up, and gives them all back when the chat is left", async () => {
+  // Forty pictures in one reply: more than were ever kept at once.
+  const many = Array.from({ length: 40 }, (_, i) => ({ ...MADE[0], id: `call${100 + i}`, image: null, media: { ...MADE[0].media, node_id: `pic${i}`, version_id: `v${i}`, name: `kite-${i}.png`, path: `${GENERATED}/kite-${i}.png` } }))
+  const reply = { id: "m2", role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", metrics: null, steps: [{ index: 0, kind: "tools", open: false, calls: many }, { index: 1, kind: "text", open: true, markdown: "Forty kites." }] }
+  const cfg = md({ "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m1", "Draw forty kites"), reply], more: false, live: null } }, {}, { mediaStale: 1 })
+  const p = await page(cfg, { width: 1280, height: 900 })
+  await openChatRow(p, "chat1")
+  await p.waitForFunction(() => document.querySelectorAll("#messages .mcard[data-media=image]").length === 40)
+  const nodes = async () => (await callsOf(p, "media_open")).map((c) => c.node)
+  const drawn = () => p.$$eval("#messages .mcard__image", (l) => l.filter((i) => i.naturalWidth === 1).map((i) => i.closest(".mcard").dataset.node))
+  // What comes into sight is drawn; what has not been in sight has asked for nothing. (The
+  // thread settles where a chat opens before this is looked at.)
+  await p.waitForFunction(() => [...document.querySelectorAll("#messages .mcard__image")].some((i) => i.naturalWidth === 1))
+  await p.waitForTimeout(400)
+  const first = [...new Set(await nodes())]
+  assert.ok(first.length > 0 && first.length < 40, `asked for ${first.length} of 40 before the rest was scrolled to`)
+  assert.equal(await p.$$eval("#messages .mcard[data-media=image] .mcard__view", (l) => l.filter((v) => v.querySelector("img")).length), first.length, "a card not seen yet holds no picture")
+  // The first address was one Rust had given up: the picture failed, was asked for once more,
+  // and is drawn -- the dead address given back.
+  const all = await nodes()
+  const twice = all.filter((n) => n === all[0])
+  assert.equal(twice.length, 2, "the picture whose address was gone is asked for once more")
+  await p.waitForFunction((node) => document.querySelector(`#messages .mcard[data-node="${node}"] .mcard__image`)?.naturalWidth === 1, all[0])
+  assert.deepEqual(await callsOf(p, "media_close"), [{ url: `http://media.test/stale/${all[0]}` }])
+  // Scrolled to, the others are asked for and drawn, each once.
+  const far = Array.from({ length: 40 }, (_, i) => `pic${i}`).find((n) => !first.includes(n))
+  assert.ok(!(await drawn()).includes(far))
+  await p.$eval(`#messages .mcard[data-node="${far}"]`, (el) => el.scrollIntoView({ block: "center" }))
+  await p.waitForFunction((node) => document.querySelector(`#messages .mcard[data-node="${node}"] .mcard__image`)?.naturalWidth === 1, far)
+  assert.equal((await nodes()).filter((n) => n === far).length, 1)
+  // The chat is left: every address asked for is given back, and none twice.
+  const held = (await callsOf(p, "media_open")).length
+  await p.evaluate(() => document.getElementById("new-chat-btn").click())
+  await p.waitForFunction((n) => window.__mock.calls.filter((c) => c.cmd === "media_close").length === n, held)
+  const closed = (await callsOf(p, "media_close")).map((c) => c.url)
+  assert.equal(new Set(closed).size, closed.length)
+  assert.deepEqual(p.errors, [])
+})
+
+test("RV4: a job the server does not know is asked for once and no more; one that cannot be read is asked for again after longer and longer, a few times, and then says why", async () => {
+  const job = '#messages .mjob[data-job="mjob1"]'
+  const forward = async (p, seconds) => {
+    // The page's clock jumps a second at a time, so each of its ticks is one the card sees.
+    for (let i = 0; i < seconds; i++) await p.clock.fastForward(1000)
+  }
+  // Gone, or somebody else's: the server's 404 is the end of it.
+  const gone = await page(md({ "GET /media/jobs/mjob1": { __error: { status: 404, detail: "There is no such job." } } }), { width: 1280, height: 900, clock: true })
+  await openChatRow(gone, "chat1")
+  await gone.waitForFunction((sel) => document.querySelector(`${sel} .mjob__state`)?.textContent === "Failed", job)
+  assert.equal(await gone.textContent(`${job} .mjob__error`), "There is no such job.")
+  assert.equal(await gone.locator(`${job} .mjob__cancel`).count(), 0)
+  await forward(gone, 60)
+  assert.equal(await jobAsks(gone), 1, "a job that is gone is not asked for again")
+  assert.deepEqual(gone.errors, [])
+
+  // The server cannot be reached: again after 6 s, 12 s, 24 s, 48 s, a minute -- six asks in
+  // all -- and then no more, with the reason on the card.
+  const down = await page(md({ "GET /media/jobs/mjob1": { __error: { status: 0, detail: "Could not reach the server: timed out" } } }), { width: 1280, height: 900, clock: true })
+  await openChatRow(down, "chat1")
+  await down.waitForFunction(() => window.__mock.api("GET", "/media/jobs/").length === 1)
+  await forward(down, 4)
+  assert.equal(await jobAsks(down), 1, "not every three seconds")
+  await forward(down, 3)
+  await down.waitForFunction(() => window.__mock.api("GET", "/media/jobs/").length === 2)
+  await forward(down, 9)
+  assert.equal(await jobAsks(down), 2, "twice as long the second time")
+  await forward(down, 400)
+  assert.equal(await jobAsks(down), 6, "and no more after a few")
+  await down.waitForFunction((sel) => document.querySelector(`${sel} .mjob__said`)?.textContent === "Could not reach the server: timed out", job)
+  await forward(down, 120)
+  assert.equal(await jobAsks(down), 6)
+  // It answers again and the chat is opened again: followed as before.
+  await down.evaluate((now) => window.__mock.answer("GET /media/jobs/mjob1", now), fixture("media_job"))
+  await down.evaluate(() => document.getElementById("new-chat-btn").click())
+  await openChatRow(down, "chat1")
+  await down.waitForFunction((sel) => document.querySelector(`${sel} .mjob__time`)?.textContent === "0:42", job)
+  assert.equal(await down.locator(`${job} .mjob__said`).count(), 0)
+  assert.deepEqual(down.errors, [])
+})
+
+test("RV5: a save that cannot say what it started from is not sent until the person says anyway; a copy that left something out says so", async () => {
+  // The server's content answer without `sha`: there is nothing to compare a save with.
+  const blind = { ...F4_CONTENT }
+  delete blind.sha
+  const p = await page(f4({ "GET /files/content": blind, "PUT /files/content": { ...F4_CONTENT, text: "# Lembas\n\nTwice.\n" } }, { local_transfer: [{ path: "src", ok: true, to: "src (2)", error: null, note: "Left out of the copy: the LLeMbas CLI's own files (2)." }] }), { width: 1280, height: 860 })
+  await serverPane(p)
+  await p.dblclick(`${serverRow("lembas.md")} .frow__open`)
+  await p.waitForSelector("#viewer:not([hidden]) .viewer__md")
+  await p.locator("#viewer-modes .seg", { hasText: "Edit" }).click()
+  await p.waitForSelector("#viewer-body .cm-content[contenteditable=true]")
+  await p.click("#viewer-body .cm-content")
+  await p.keyboard.type("Twice.")
+  await p.waitForFunction(() => document.querySelector("#viewer-bar .viewer__said").textContent === "Not saved yet")
+  await p.click("#viewer-save")
+  // Nothing is sent: both ways on are offered, as for a file that changed.
+  await p.waitForSelector("#viewer-force")
+  assert.ok(await p.isVisible("#viewer-reload"))
+  assert.match(await p.textContent("#viewer-bar .viewer__said"), /Reload it, or save anyway/)
+  assert.equal((await bodies(p, "PUT", "/files/content")).length, 0, "a save with no base is not sent")
+  // Save anyway is the person's word: sent, and said to be forced.
+  await p.click("#viewer-force")
+  await p.waitForFunction(() => window.__mock.api("PUT", "/files/content").length === 1)
+  const sent = (await bodies(p, "PUT", "/files/content"))[0]
+  assert.equal(sent.force, true)
+  assert.ok(!("base" in sent))
+  // The answer says what the file is now: the next save starts from that.
+  await p.click("#viewer-body .cm-content")
+  await p.keyboard.type("!")
+  await p.waitForFunction(() => !document.getElementById("viewer-save")?.disabled)
+  await p.click("#viewer-save")
+  await p.waitForFunction(() => window.__mock.api("PUT", "/files/content").length === 2)
+  assert.equal((await bodies(p, "PUT", "/files/content"))[1].base, SHA)
+
+  // This computer: a folder copied without the CLI's files in it says what was left out.
+  const q = await page(f4({}, { local_transfer: [{ path: "src", ok: true, to: "src (2)", error: null, note: "Left out of the copy: the LLeMbas CLI's own files (2)." }] }), { width: 1280, height: 860 })
+  await localPaneOpen(q)
+  await q.waitForSelector(`${localRow("src")} .frow__more`)
+  await rowMenu(q, localRow("src"), "Copy to…")
+  await q.waitForSelector("dialog[open] #fpick-use")
+  await q.click("#fpick-use")
+  await statusSays(q, "local-status", "Copied as src (2).\nLeft out of the copy: the LLeMbas CLI's own files (2).")
+  assert.deepEqual(p.errors, [])
+  assert.deepEqual(q.errors, [])
+})
+
+test("RV6: an edit not saved when the server refuses the sign-in is kept, and is back in the editor when the same person has signed in again -- saved only against what it started from; another person gets none of it", async () => {
+  const cfg = () => f4({ "PUT /files/content": { __error: F4_CONFLICT } })
+  const edit = async (p) => {
+    await serverPane(p)
+    await p.dblclick(`${serverRow("lembas.md")} .frow__open`)
+    await p.waitForSelector("#viewer:not([hidden]) .viewer__md")
+    await p.locator("#viewer-modes .seg", { hasText: "Edit" }).click()
+    await p.waitForSelector("#viewer-body .cm-content[contenteditable=true]")
+    await p.click("#viewer-body .cm-content")
+    await p.keyboard.press("Control+End")
+    await p.keyboard.type("Twice, kept.")
+    await p.waitForFunction(() => document.querySelector("#viewer-bar .viewer__said").textContent === "Not saved yet")
+  }
+  const signal = (p, st) => p.evaluate((now) => { window.__mockConfig.status = now; window.__mock.emit("status", now) }, st)
+  const p = await page(cfg(), { width: 1280, height: 860 })
+  await edit(p)
+  // The token is refused: Rust forgets the account and the page shows the sign-in.
+  await signal(p, status({ account: null }))
+  await p.waitForSelector("#setup:not([hidden])")
+  assert.ok(await p.isHidden("#viewer"))
+  // Meanwhile the file changed on the server.
+  await p.evaluate((now) => window.__mock.answer("GET /files/content", now), { ...F4_CONTENT, sha: "cd".repeat(32), text: "# Lembas\n\nSomebody else's.\n" })
+  // Signed in again as the same person: the file is open, in the editor, with the edit.
+  await signal(p, status())
+  await p.waitForSelector("#shell:not([hidden])")
+  await p.waitForSelector("#viewer:not([hidden]) #viewer-body .cm-content[contenteditable=true]")
+  assert.match(await p.textContent("#viewer-body .cm-content"), /Twice, kept\./)
+  assert.doesNotMatch(await p.textContent("#viewer-body .cm-content"), /Somebody else's/)
+  assert.equal(await p.textContent("#viewer-bar .viewer__said"), "Not saved yet")
+  assert.equal(await p.getAttribute('#viewer-modes .seg[data-mode="edit"]', "aria-pressed"), "true")
+  // Saved from what the edit started from, not from what was read just now: the change made
+  // meanwhile is the usual conflict, not something written over unseen.
+  await p.click("#viewer-save")
+  await p.waitForSelector("#viewer-force")
+  assert.equal((await bodies(p, "PUT", "/files/content"))[0].base, SHA)
+  assert.deepEqual(p.errors, [])
+
+  // Another person signs in on the same app: nothing of the edit is theirs to see.
+  const o = await page(cfg(), { width: 1280, height: 860 })
+  await edit(o)
+  await signal(o, status({ account: null }))
+  await o.waitForSelector("#setup:not([hidden])")
+  await signal(o, status({ account: { name: "Bo Example", email: "bo@example.org" } }))
+  await o.waitForSelector("#shell:not([hidden])")
+  await o.waitForFunction(() => window.__mock.api("GET", "/me").length >= 2)
+  await o.waitForTimeout(200)
+  assert.ok(await o.isHidden("#viewer"))
+  await serverPane(o)
+  await o.dblclick(`${serverRow("lembas.md")} .frow__open`)
+  await o.waitForSelector("#viewer:not([hidden]) .viewer__md")
+  assert.doesNotMatch(await o.textContent("#viewer-body"), /Twice, kept\./)
+  // Sign out by the person's own word, the edit let go: none is kept either.
+  await o.locator("#viewer-modes .seg", { hasText: "Edit" }).click()
+  await o.waitForSelector("#viewer-body .cm-content[contenteditable=true]")
+  await o.click("#viewer-body .cm-content")
+  await o.keyboard.type("Let go.")
+  await o.waitForFunction(() => document.querySelector("#viewer-bar .viewer__said").textContent === "Not saved yet")
+  await o.evaluate(() => document.getElementById("settings-btn").click())
+  await o.waitForSelector("#sign-out")
+  await o.evaluate(() => document.getElementById("sign-out").click())
+  await o.locator("dialog[open] .dialog__actions .btn", { hasText: "Discard" }).click()
+  await o.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "sign_out"))
+  await signal(o, status({ account: null }))
+  await o.waitForSelector("#setup:not([hidden])")
+  await signal(o, status({ account: { name: "Bo Example", email: "bo@example.org" } }))
+  await o.waitForSelector("#shell:not([hidden])")
+  await o.waitForFunction(() => window.__mock.api("GET", "/me").length >= 3)
+  await o.waitForTimeout(200)
+  assert.ok(await o.isHidden("#viewer"))
+  assert.deepEqual(o.errors, [])
+})
+
+test("RV7: Open in Files asks where the file is now, by its id -- moved, it is found; in the trash, that is said; an archive's viewer lists what is in it, as text, and says when the server could not", async () => {
+  const where = fixture("file_node")
+  const moved = `${HOME}/Kept`
+  const now = { ...where, id: "node8", path: `${moved}/kite.png`, name: "kite.png", parent: moved, file_kind: "image" }
+  const listing = { path: moved, parent: HOME, entries: [{ name: "kite.png", path: now.path, kind: "file", file_kind: "image", size: 180000, mime: "image/png", updated_at: STAMP }] }
+  const p = await page(md({ "GET /files/node": now, [`GET /files${q(moved)}`]: listing }), { width: 1280, height: 900 })
+  await openChatRow(p, "chat1")
+  await p.waitForSelector("#messages .mcard[data-media=image] .mcard__files")
+  // Renamed and moved since the chat made it: found by its id, where it is now.
+  await p.click("#messages .mcard[data-media=image] .mcard__files")
+  await p.waitForSelector(`#server-list .frow.is-chosen[data-path="${now.path}"]`)
+  assert.deepEqual((await p.evaluate(() => window.__mock.api("GET", "/files/node").map((c) => c.args.path))), ["/files/node?id=node8"])
+  assert.ok(await p.isHidden("#server-status") || (await p.textContent("#server-status")) === "")
+  // In the trash: said, and nothing is listed for it.
+  await p.evaluate((t) => window.__mock.answer("GET /files/node", t), { ...now, trashed: true })
+  await p.evaluate(() => document.querySelector("#messages .mcard[data-media=image] .mcard__files").click())
+  await statusSays(p, "server-status", "This file is in the trash.")
+  // A server without the route (its 404): by the path the chat knew, as before.
+  await p.evaluate(() => window.__mock.answer("GET /files/node", { __error: { status: 404, detail: "Not Found" } }))
+  await p.evaluate(() => document.querySelector("#messages .mcard[data-media=image] .mcard__files").click())
+  await p.waitForSelector(`#server-list .frow.is-chosen[data-path="${MADE[0].media.path}"]`)
+  assert.deepEqual(p.errors, [])
+
+  // An archive: the server's listing, every name as text.
+  const zip = fixture("file_content_archive")
+  const row = { name: zip.name, path: zip.path, kind: "file", file_kind: "archive", size: zip.size, mime: zip.mime, updated_at: STAMP }
+  const nasty = { ...zip, archive: { ...zip.archive, entries: [...zip.archive.entries, { name: "<img src=x onerror=\"document.title='ran'\">.txt", size: 12, dir: false }], total: 3 } }
+  const home = { ...F4_HOME, entries: [...F4_HOME.entries, row] }
+  const a = await page(f4({ "GET /files": home, [`GET /files/content${q(zip.path)}`]: nasty }), { width: 1280, height: 860 })
+  await serverPane(a)
+  await a.dblclick(`${serverRow(zip.name)} .frow__open`)
+  await a.waitForSelector("#viewer:not([hidden]) .viewer__archive .varchive tr")
+  assert.deepEqual(await a.$$eval("#viewer-body .varchive tr", (l) => l.map((r) => [...r.children].map((c) => c.textContent))), [["maps/", ""], ["maps/shire.png", "2.0 KB"], ["<img src=x onerror=\"document.title='ran'\">.txt", "12 B"]])
+  assert.equal(await a.textContent("#viewer-body .viewer__cap"), "3 entries. Nothing is unpacked here.")
+  assert.equal(await a.locator("#viewer-body img").count(), 0)
+  assert.notEqual(await a.title(), "ran")
+  assert.deepEqual(await a.$$eval("#viewer-bar .btn", (l) => l.map((b) => b.textContent)), ["Download"])
+  // Every row's size starts where every other's does: one track, whatever the names are.
+  assert.ok(await a.$$eval("#viewer-body .varchive tr", (l) => new Set(l.map((r) => Math.round(r.children[1].getBoundingClientRect().left))).size === 1))
+  await shot(a, "rv-archive-1280")
+  // Narrow: the listing scrolls in its own box, not the window.
+  await a.setViewportSize({ width: 390, height: 844 })
+  assert.ok(await a.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth))
+  await shot(a, "rv-archive-390")
+  // More than are listed, and one the server could not read: its own sentence, and Download.
+  await a.evaluate(([key, cut]) => window.__mock.answer(key, cut), [`GET /files/content${q(zip.path)}`, { ...zip, archive: { ...zip.archive, truncated: true, total: 9000 } }])
+  await a.setViewportSize({ width: 1280, height: 860 })
+  await a.dblclick(`${serverRow(zip.name)} .frow__open`)
+  await a.waitForFunction(() => document.querySelector("#viewer-body .viewer__cap")?.textContent === "Only the first 2 entries are listed.")
+  await a.evaluate(([key, bad]) => window.__mock.answer(key, bad), [`GET /files/content${q(zip.path)}`, { ...zip, archive: { entries: [], total: null, truncated: false, problem: "unsupported", message: "What is inside this kind of archive cannot be listed here." } }])
+  await a.dblclick(`${serverRow(zip.name)} .frow__open`)
+  await a.waitForFunction(() => document.querySelector("#viewer-body .viewer__note")?.textContent === "What is inside this kind of archive cannot be listed here.")
+  assert.equal(await a.locator("#viewer-body .viewer__facts .btn").count(), 1)
+  assert.deepEqual(a.errors, [])
 })
 
 // --- Run ----------------------------------------------------------------------------------------

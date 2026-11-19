@@ -28,8 +28,10 @@ server's tab keeps what it had, and what the server does not have says so in its
 - **The viewer draws a file by what it is** -- the server's own word for it, read from the file's
   bytes, not from its name. Pictures; an SVG, only ever as a picture; sound and video in the
   system's own players, which can seek; CSV and TSV as a table that scrolls in its own box (the
-  first 500 rows); a notebook, read-only, every cell and output as text; an archive or any other
-  file as its details and Download. The details pane shows a picture's thumbnail.
+  first 500 rows); a notebook, read-only, every cell and output as text; an archive of the
+  server's as the list of what is inside it (names and sizes; nothing is unpacked), where the
+  server lists it (LLeMbas after 2.0.0-beta.16); any other file as its details and Download. The
+  details pane shows a picture's thumbnail.
 - **Files › This computer is one too**, inside the agent's folders and nowhere else: new file and
   folder, rename, move, copy, delete, several at once, drag onto a folder, edit and save with the
   same care for a file changed meanwhile, and the same viewers from the file's own bytes. A
@@ -37,7 +39,9 @@ server's tab keeps what it had, and what the server does not have says so in its
   no trash the file is left alone and that is said. Every path is resolved and checked again in
   Rust; a link that leads out of the folder is not followed for any write; and the LLeMbas CLI's
   own files -- its configuration, data and state, and a project's `.lembas` or `.agent` -- can be
-  read here and are never changed.
+  read here and are never changed. A folder that has a project's `.lembas` or `.agent` anywhere
+  inside it is not renamed, moved or deleted from here either, and a copy of such a folder leaves
+  those files out and says so.
 - **A file is copied between the two.** *Copy to the server…* on a file of this computer and
   *Copy to this computer…* on a file of the server's, each into a folder walked to; a copy never
   replaces what is there.
@@ -45,12 +49,14 @@ server's tab keeps what it had, and what the server does not have says so in its
   music and a 3D model each get a card under the tool call that made them: the picture drawn,
   video and music in the system's own players (they can seek), a 3D model drawn when you press
   *Preview*. Each card has **Open in Files**, which shows the file in *Files › Server* where it
-  is now, and **Download**, to a place chosen in the system's dialog. A file since put in the
-  trash says it is no longer there.
+  is now -- renamed or moved since, it is still found (LLeMbas after 2.0.0-beta.16) -- and
+  **Download**, to a place chosen in the system's dialog. A file since put in the trash says so.
+  A chat with very many pictures and players loads each as it comes into sight.
 - **A long generation has a card of its own**: what is being made, how it stands, for how long,
   and **Cancel**. The card follows the job while it is on the screen; when the job is done the
   player appears on the same card and the chat shows the reply the server adds. One that failed
-  says why, in the server's words.
+  says why, in the server's words. While the server cannot be reached the card asks less and
+  less often, and after a few tries says why and stops until the chat is opened again.
 - **PDF and 3D models are drawn in the viewer** (and a 3D model on a chat's card), by the same
   viewers as the server's web interface, carried in the app: PDF.js for a PDF, pages drawn as
   you ask for more; a preview of a model's shape (`.glb`, `.gltf`, `.stl`, `.obj`) that turns
@@ -67,11 +73,12 @@ server's tab keeps what it had, and what the server does not have says so in its
   taken is refused in the server's own sentence. (Before, the app looked at the folder first and
   then wrote, and a file that appeared in between could have been emptied.)
 - **Signing out with an edit that was not saved asks first.** It used to be dropped without a
-  word. Signing out is also how another server is chosen.
+  word. Signing out is also how another server is chosen. When it is the server that ends the
+  sign-in (a token that was revoked or ran out), the edit is kept: once you have signed in again
+  the file is open in the editor with your edit in it, still not saved -- and saving it over a
+  file that changed meanwhile is the usual question, not a silent overwrite.
 - A model that is not for chatting -- an embedding model, or one for speech, pictures or video --
   is never offered in a chat's or a schedule's model picker, whatever a server lists.
-- An archive is still shown as its details and Download: the server's answer for a file carries
-  no listing of what is inside.
 
 ### Security
 
@@ -92,6 +99,14 @@ server's tab keeps what it had, and what the server does not have says so in its
   pictures, sound and video are served there.
 - A sign-in page for an MCP server is opened only when it is a page of the server the app is
   signed in to; the app never sees or stores that sign-in.
+- Nothing the app saves or downloads is written in place or through a name that was already
+  there. A save and a download are written to a new file under a random name beside where they
+  are going, which takes the real name only once it is whole: a link planted in a project folder
+  is replaced, never written through, a save that breaks off leaves the file as it was, and a
+  download into one of the agent's folders never replaces something that took its name
+  meanwhile. A download larger than the disk has room for, or than 16 GB, is refused before it is
+  written. A copy reads only ordinary files, and when it fails it removes what it made and
+  nothing else.
 
 ### Fixed
 

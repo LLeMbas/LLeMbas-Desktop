@@ -7,11 +7,17 @@
 // (src-tauri/src/media.rs: the page holds an address that names one file, never the token). A
 // table is a table, a notebook its cells as text. A PDF and a 3D model are drawn by the server's
 // own viewers in a sealed frame as well (sealedview.js): their parsers never run in this page.
-// An archive and a binary are their details and a way to save them (the server's content answer
-// carries no listing of an archive). What a file says is never part of the app's page.
+// An archive of the server's is the list of what is in it, as the server read it (names and
+// sizes, each as text; nothing is unpacked); one on this computer and a binary are their details
+// and a way to save them. What a file says is never part of the app's page.
 //
 // A text file that may be written can be edited here and saved; a save the file has changed
-// under is not made, and offers both ways on: read it again, or save anyway.
+// under is not made, and offers both ways on: read it again, or save anyway. A save always says
+// what it started from -- where that is not known, it is not sent until the person says "anyway".
+//
+// An edit the app takes the screen from under (the server refused the sign-in, so the app shows
+// the sign-in again) is not thrown away: it is kept here, in memory, and put back into the editor
+// when that file is next opened -- which main.js does once the same person has signed in again.
 
 import { $, h, clear, icon, ICONS, bytes } from "./dom.js"
 import { invoke, why } from "./bridge.js"
@@ -72,8 +78,12 @@ const NOTEBOOK_PICTURE = 4 * 1024 * 1024
 // The largest file a player that will not take the scheme's address is given whole instead.
 const WHOLE_BYTES = 64 * 1024 * 1024
 
-let current = null // { editor, sealed, media, dirty }
+// The most of an archive's listing drawn (the server lists no more than this itself).
+const ARCHIVE_ENTRIES = 2000
+
+let current = null // { editor, sealed, media, dirty, keep }
 let onChange = () => {}
+let kept = null // an edit the screen was taken from under: { file, text, sha }
 
 /** Called when the viewer opens or closes (the layout makes room for it). */
 export function onViewer(fn) {
@@ -108,13 +118,46 @@ export function closeViewer() {
   onChange(false)
 }
 
+/**
+ * Close it because the screen is going, not because the person closed it (the sign-in was
+ * refused): an edit that was not saved is kept, for `restoreEdit`.
+ */
+export function closeViewerKeeping() {
+  if (current?.dirty && current.keep) kept = current.keep()
+  closeViewer()
+}
+
+/** Whether an edit is kept from a viewer the screen was taken from under. */
+export const keptEdit = () => !!kept
+
+/** The kept edit is nobody's to have any more (another person signed in). */
+export function dropKeptEdit() {
+  kept = null
+}
+
+/**
+ * Open the file a kept edit belongs to again: the editor holds the edit, not saved, and a save
+ * starts from what the edit started from -- a file changed meanwhile is the usual conflict.
+ */
+export async function restoreEdit() {
+  if (!kept?.file?.reload) return false
+  try {
+    await kept.file.reload()
+  } catch {}
+  // Put back by `drawText` when the file opened; still kept (for the next time it is opened) if not.
+  return !kept
+}
+
 /** Whether what is open has changes that were not saved. */
 export const viewerDirty = () => !!current?.dirty
 
 /** An edit not saved is not thrown away without a word: true when there is none, or it may go. */
 export async function mayLeave() {
   if (!current?.dirty) return true
-  return !!(await ask({ title: t("Not saved yet"), text: current.name || "", ok: t("Discard"), cancel: t("Cancel"), danger: true }))
+  const go = !!(await ask({ title: t("Not saved yet"), text: current.name || "", ok: t("Discard"), cancel: t("Cancel"), danger: true }))
+  // Let go by the person's own word: nothing of it is kept, whatever closes the viewer next.
+  if (go && current) current.dirty = false
+  return go
 }
 
 /**
@@ -251,6 +294,27 @@ function drawNotebook(text) {
   return box
 }
 
+// --- An archive: what is inside it, as the server listed it ---------------------------------------
+//
+// `archive` is the content answer's: { entries: [{ name, size, dir }], total, truncated, problem,
+// message }. Every name is the archive's own text and is drawn as text. Nothing is unpacked.
+
+function drawArchive(file) {
+  const a = file.archive
+  const all = Array.isArray(a.entries) ? a.entries : []
+  const entries = all.slice(0, ARCHIVE_ENTRIES)
+  const n = entries.length
+  const cut = a.truncated === true || all.length > n
+  const row = (e) => h("tr", null, h("td", { text: String(e?.name ?? "") }), h("td", { class: "varchive__size", text: !e?.dir && Number.isFinite(e?.size) ? bytes(e.size) : "" }))
+  // A long listing scrolls inside its own box; the viewer never does.
+  return h(
+    "div",
+    { class: "viewer__table viewer__archive" },
+    h("p", { class: "viewer__cap", text: cut ? t("Only the first %(n)s entries are listed.", { n }) : t("%(n)s entries. Nothing is unpacked here.", { n }) }),
+    h("div", { class: "vtable__scroll", tabindex: "0", role: "region", "aria-label": file.name || "" }, h("table", { class: "vtable varchive" }, h("tbody", null, entries.map(row)))),
+  )
+}
+
 // --- A file that is not drawn: what it is, and a way to save it -----------------------------------
 
 function drawFacts(file, words) {
@@ -273,6 +337,7 @@ function drawFacts(file, words) {
  *   media?()                    -> the address its bytes are served at (a picture, sound, video)
  *   sealed?                     how Rust is asked for its bytes for a sealed viewer (a PDF, a 3D
  *                               model): { source: "server", path } | { source: "local", root, path }
+ *   archive?                    what is inside an archive, as the server's content answer lists it
  *   download?()                 saves it somewhere the person chooses
  *   save?(text, { base, force }) -> { sha, text }   present where it may be written; rejects with
  *                               { status: 409, detail } when the file changed meanwhile
@@ -319,6 +384,19 @@ export async function openViewer(file) {
     return true
   }
   const isText = TEXT_KINDS.includes(kind) && !file.withheld && typeof file.text === "string"
+  // An archive the server listed: what is in it. One it could not list says why, in its words.
+  if (kind === "archive" && file.archive && typeof file.archive === "object") {
+    if (file.archive.problem) {
+      body.append(drawFacts({ ...file, kind }, String(file.archive.message || "") || t("This file cannot be shown here.")))
+      return true
+    }
+    body.append(drawArchive(file))
+    if (file.download) {
+      bar.hidden = false
+      bar.append(h("span", { class: "viewer__said", text: Number.isFinite(file.size) ? bytes(file.size) : "" }), h("button", { type: "button", class: "btn btn--sm", text: t("Download"), onclick: () => file.download() }))
+    }
+    return true
+  }
   if (!isText) {
     body.append(drawFacts({ ...file, kind }, file.withheld ? withheldWords(file.withheld, file.size) : t("This is not a text file; it cannot be shown here.")))
     return true
@@ -343,16 +421,48 @@ async function drawMedia(file, kind, body, modes, bar, mine) {
   if (!here()) return void invoke("media_close", { url }).catch(() => {})
   mine.media = url
   const holder = h("div", { class: "viewer__media" })
+  // The address may only have been given up meanwhile (Rust keeps so many; a long chat beside
+  // the viewer asks for many): the file is asked for once more before anything else is tried.
+  let asked = false
+  const another = async () => {
+    asked = true
+    const next = await file.media()
+    if (!here()) return void invoke("media_close", { url: next }).catch(() => {})
+    invoke("media_close", { url }).catch(() => {})
+    url = mine.media = next
+    return next
+  }
   let el
   if (kind === "image" || kind === "svg") {
     el = h("img", { class: "viewer__image", alt: file.name || "", src: url, draggable: "false" })
-    el.addEventListener("error", () => failed(), { once: true })
+    el.addEventListener("error", async () => {
+      if (asked) return failed()
+      try {
+        const next = await another()
+        if (next) el.src = next
+      } catch {
+        failed()
+      }
+    })
   } else {
     el = h(kind, { class: kind === "audio" ? "viewer__audio" : "viewer__video", controls: true, preload: "metadata", src: url, "aria-label": file.name || "" })
     // A webview whose player will not take the scheme's address is handed the whole file once
     // instead (a `blob:`), where it is small enough to hold; seeking works there too.
     let again = false
     el.addEventListener("error", async () => {
+      if (!asked) {
+        const at = el.currentTime || 0
+        try {
+          const next = await another()
+          if (next) {
+            el.src = next
+            if (at > 0) el.currentTime = at
+          }
+        } catch {
+          failed()
+        }
+        return
+      }
       if (again || !here() || !(Number(file.size) <= WHOLE_BYTES)) return failed()
       again = true
       try {
@@ -391,6 +501,17 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
   const drawn = ["markdown", "html", "table", "notebook"].includes(kind)
   const editable = typeof file.save === "function"
   const now = () => (mine.editor && mode === "edit" ? mine.editor.state.doc.toString() : draft ?? text)
+  // An edit of this very file that the screen was taken from under: back in the editor, not
+  // saved, and still starting from what it started from then.
+  if (kept && editable && kept.file.path === file.path && kept.file.where === file.where) {
+    if (kept.text !== text) {
+      draft = kept.text
+      sha = kept.sha
+      mine.dirty = true
+    }
+    kept = null
+  }
+  mine.keep = () => ({ file, text: now(), sha })
 
   const said = h("span", { class: "viewer__said", role: "status" })
   const saveBtn = h("button", { type: "button", class: "btn btn--sm btn--primary", id: "viewer-save", text: t("Save"), onclick: () => save(false) })
@@ -426,6 +547,9 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
   async function save(force) {
     if (!editable || !here()) return
     const sending = now()
+    // A save says what it started from. Where that is not known the file cannot be compared
+    // with what was read, so nothing is sent: read it again, or save anyway -- the person's word.
+    if (!force && !sha) return void drawBar({ conflict: true, error: true, text: t("This file changed since you opened it. Reload it, or save anyway.") })
     saveBtn.disabled = true
     try {
       const done = await file.save(sending, { base: force ? null : sha, force })
@@ -479,7 +603,7 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
   else if (editable) modes.append(seg("view", t("Source")))
   if (editable) modes.append(seg("edit", t("Edit")))
   drawBar()
-  await show("view")
+  await show(draft !== null ? "edit" : "view")
 }
 
 export function initViewer() {

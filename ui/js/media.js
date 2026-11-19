@@ -9,10 +9,17 @@
 // sealed frame (sealedview.js) once the person asks to see it. Download goes through the
 // system's save dialog and is written by Rust as it arrives.
 //
+// An address is asked for when its card comes into sight, not when the chat is drawn: Rust
+// keeps only so many, and a long chat has more files than that. One that was given up meanwhile
+// is asked for once more when its picture or player fails, and every one is given back when the
+// chat is left.
+//
 // A job has no stream frame -- a chat has no stream while no reply is being written -- so a card
 // on the screen asks for its job every few seconds until the state is final or the card is gone
-// (the chat was left). A job that ends by itself wakes its chat with a reply this app did not
-// start: the chat is read again then.
+// (the chat was left). A job the server does not know (404) is final too. An ask that fails is
+// made again after twice as long each time, and after a few no more: the card says why. A job
+// that ends by itself wakes its chat with a reply this app did not start: the chat is read again
+// then.
 //
 // Sound and video the person attached to a message are players too (`attachmentTile`).
 
@@ -21,13 +28,42 @@ import { invoke, get, del, why } from "./bridge.js"
 import { sealedViewer } from "./sealedview.js"
 
 const POLL_MS = 3000
+// An ask that failed: again after twice as long each time, at most a minute, and so many times.
+const POLL_MOST_MS = 60000
+const POLL_TRIES = 6
 const ACTIVE = ["queued", "running"]
 const FINAL = ["done", "failed", "cancelled", "expired"]
 
 let ctx = { openInFiles: () => {}, woken: () => {} }
 const cards = new Map() // node:version -> the card drawn for it (kept while the chat shows)
 const closers = new Set() // what lets go of a sealed frame or a `blob:`
-const jobs = new Map() // job id -> { job, at, timer, ticks, asked }
+const jobs = new Map() // job id -> { job, at, timer, due, fails, read, asking, problem }
+const tickets = new Set() // the addresses Rust serves a file at, asked for and not yet given back
+const unseen = new Map() // a card's box not yet in sight -> what draws it
+let chat = 0 // counts the chats left: an address that arrives for one that was left is given back
+const sight =
+  typeof IntersectionObserver === "function"
+    ? new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue
+          sight.unobserve(e.target)
+          const draw = unseen.get(e.target)
+          unseen.delete(e.target)
+          draw?.()
+        }
+      })
+    : null
+
+/** Draw `box` when it comes into sight (at once where the webview cannot tell). */
+function onSight(box, draw) {
+  if (!sight) return void draw()
+  unseen.set(box, draw)
+  sight.observe(box)
+}
+
+function giveBack(url) {
+  if (tickets.delete(url)) invoke("media_close", { url }).catch(() => {})
+}
 
 /** `openInFiles(media)`: show the file in the server's files; `woken(job)`: its chat has a new reply. */
 export function initMedia(context) {
@@ -36,9 +72,13 @@ export function initMedia(context) {
 
 /** The chat was left: its cards, their frames and the jobs' timers go. What is known of a job stays. */
 export function forgetMedia() {
+  chat += 1
   for (const close of closers) close()
   closers.clear()
   cards.clear()
+  sight?.disconnect()
+  unseen.clear()
+  for (const url of [...tickets]) giveBack(url)
   for (const j of jobs.values()) {
     clearInterval(j.timer)
     j.timer = null
@@ -49,42 +89,72 @@ const gone = () => t("This file is no longer there.")
 const cannot = () => t("This file could not be shown here. It can still be downloaded.")
 
 /**
- * A picture, sound or video at an address `open()` asks Rust for. A webview whose player will
- * not take the scheme's address is handed the whole sound or video once instead (a `blob:`); a
- * file that is no longer there says so.
+ * A picture, sound or video at an address `open()` asks Rust for, once it is in sight. An
+ * address Rust gave up meanwhile is asked for once more. A webview whose player will not take
+ * the scheme's address is handed the whole sound or video once instead (a `blob:`); a file that
+ * is no longer there says so.
  */
 function shown(kind, open, { name = "", mime = "", width = 0, height = 0 } = {}) {
   const note = (text) => h("p", { class: "mcard__note", text })
   const box = h("div", { class: "mcard__view" }, note(t("Loading…")))
-  open().then(
-    (url) => {
-      const el =
-        kind === "image"
-          ? h("img", { class: "mcard__image", alt: name, src: url, draggable: "false", width: width > 0 ? width : null, height: height > 0 ? height : null })
-          : h(kind, { class: kind === "audio" ? "mcard__audio" : "mcard__video", controls: true, preload: "metadata", src: url, "aria-label": name })
-      // The room a video takes is known before its first frame is: nothing under it moves.
-      if (kind === "video" && width > 0 && height > 0) el.style.aspectRatio = `${width} / ${height}`
-      let again = false
-      el.addEventListener("error", async () => {
-        if (again) return void box.replaceChildren(note(cannot()))
-        again = true
-        try {
-          const data = await invoke("media_bytes", { url })
-          // A picture that would not draw from the scheme will not draw from anywhere else (the
-          // page's policy takes pictures from the scheme and `data:` only): asked for whole
-          // only to learn whether the file is still there.
-          if (kind === "image") return void box.replaceChildren(note(cannot()))
-          const blob = URL.createObjectURL(new Blob([data], { type: mime || (kind === "audio" ? "audio/mpeg" : "video/mp4") }))
-          closers.add(() => URL.revokeObjectURL(blob))
-          el.src = blob
-        } catch (err) {
-          box.replaceChildren(note(err?.status === 404 ? gone() : cannot()))
-        }
-      })
-      box.replaceChildren(el)
-    },
-    (err) => box.replaceChildren(note(why(err))),
-  )
+  const mine = chat
+  let url = ""
+  /** A new address for the file; the one before it is given back. */
+  const address = async () => {
+    const next = await open()
+    if (url) giveBack(url)
+    url = next
+    tickets.add(url)
+    // The chat was left while Rust was asked: nothing will show it, so it goes back at once.
+    if (mine !== chat) giveBack(url)
+    return url
+  }
+  const draw = () =>
+    address().then(
+      (first) => {
+        const el =
+          kind === "image"
+            ? h("img", { class: "mcard__image", alt: name, src: first, draggable: "false", width: width > 0 ? width : null, height: height > 0 ? height : null })
+            : h(kind, { class: kind === "audio" ? "mcard__audio" : "mcard__video", controls: true, preload: "metadata", src: first, "aria-label": name })
+        // The room a video takes is known before its first frame is: nothing under it moves.
+        if (kind === "video" && width > 0 && height > 0) el.style.aspectRatio = `${width} / ${height}`
+        let asked = false
+        let again = false
+        el.addEventListener("error", async () => {
+          if (mine !== chat) return
+          // The address may only have been given up (Rust keeps so many, the oldest goes): the
+          // file is asked for once more, and a player goes on from where it was.
+          if (!asked) {
+            asked = true
+            const at = kind === "image" ? 0 : el.currentTime || 0
+            try {
+              el.src = await address()
+              if (at > 0) el.currentTime = at
+            } catch (err) {
+              box.replaceChildren(note(why(err)))
+            }
+            return
+          }
+          if (again) return void box.replaceChildren(note(cannot()))
+          again = true
+          try {
+            const data = await invoke("media_bytes", { url })
+            // A picture that would not draw from the scheme will not draw from anywhere else (the
+            // page's policy takes pictures from the scheme and `data:` only): asked for whole
+            // only to learn whether the file is still there.
+            if (kind === "image") return void box.replaceChildren(note(cannot()))
+            const blob = URL.createObjectURL(new Blob([data], { type: mime || (kind === "audio" ? "audio/mpeg" : "video/mp4") }))
+            closers.add(() => URL.revokeObjectURL(blob))
+            el.src = blob
+          } catch (err) {
+            box.replaceChildren(note(err?.status === 404 ? gone() : cannot()))
+          }
+        })
+        box.replaceChildren(el)
+      },
+      (err) => box.replaceChildren(note(why(err))),
+    )
+  onSight(box, draw)
   return box
 }
 
@@ -260,12 +330,21 @@ async function read(id) {
   j.asking = true
   try {
     took(j, await get(`/media/jobs/${encodeURIComponent(id)}`))
+    j.fails = 0
+    j.due = Date.now() + POLL_MS
   } catch (err) {
-    // Somebody else's job, or one that is gone: nothing more is asked. Anything else is tried again.
     if (err?.status === 404) {
+      // Somebody else's job, or one that is gone: that is the end of it, and nothing more is asked.
       j.job = { ...j.job, state: "failed", active: false, error: why(err) }
-      redraw(id)
+      j.read = true
+    } else {
+      // Anything else is tried again, each time after twice as long, and then no more: the card
+      // says why, and the chat opened again asks again.
+      j.fails += 1
+      j.due = Date.now() + Math.min(POLL_MS * 2 ** j.fails, POLL_MOST_MS)
+      j.problem = j.fails >= POLL_TRIES ? why(err) : ""
     }
+    redraw(id)
   }
   j.asking = false
 }
@@ -274,18 +353,19 @@ function follow(id) {
   const j = jobs.get(id)
   if (!j || j.timer) return
   if (j.read && !ACTIVE.includes(j.job.state)) return
-  j.ticks = 0
+  j.fails = 0
+  j.problem = ""
+  j.due = Date.now() + POLL_MS
   read(id)
   j.timer = setInterval(() => {
     const els = cardsOf(id)
     const final = j.read && !ACTIVE.includes(j.job.state)
-    if (!els.length || final) {
+    if (!els.length || final || j.fails >= POLL_TRIES) {
       clearInterval(j.timer)
       j.timer = null
       return
     }
-    j.ticks += 1
-    if (j.ticks % (POLL_MS / 1000) === 0) read(id)
+    if (Date.now() >= j.due) read(id)
     const time = elapsed(j)
     if (time !== null) for (const el of els) for (const at of el.querySelectorAll(".mjob__time")) at.textContent = clock(time)
   }, 1000)
@@ -295,7 +375,7 @@ function follow(id) {
 export function jobCard(stub) {
   if (!stub || typeof stub !== "object" || !stub.id) return null
   const id = String(stub.id)
-  if (!jobs.has(id)) jobs.set(id, { job: { id, kind: stub.kind, state: stub.state }, at: 0, timer: null, ticks: 0, read: false, asking: false, problem: "" })
+  if (!jobs.has(id)) jobs.set(id, { job: { id, kind: stub.kind, state: stub.state }, at: 0, timer: null, due: 0, fails: 0, read: false, asking: false, problem: "" })
   const j = jobs.get(id)
   const el = h("div", { class: "mjob", dataset: { job: id } })
   drawJob(el, j)

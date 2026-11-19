@@ -393,8 +393,9 @@ function explorer(el, source) {
     try {
       const r = await work()
       const failed = r?.failed || []
+      // What worked may still have something to say (a copy that left the CLI's own files out).
       if (failed.length) say(failed.map((f) => `${f.path}: ${f.error}`).join("\n"), true)
-      else say(r?.said || (typeof words === "function" ? words(r) : words) || "")
+      else say([r?.said || (typeof words === "function" ? words(r) : words) || "", ...(r?.notes || [])].filter(Boolean).join("\n"))
       if (!r?.quiet) await refresh()
       return r
     } catch (err) {
@@ -652,7 +653,7 @@ export function showLocal({ roots, root, fixed }) {
 const baseName = (p) => String(p).replace(/\/+$/, "").split("/").pop() || p
 
 /** What Rust says of several things moved, copied or deleted, as the explorer takes it. */
-const outcomes = (results) => ({ done: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).map((r) => ({ path: r.path, error: r.error || "" })) })
+const outcomes = (results) => ({ done: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).map((r) => ({ path: r.path, error: r.error || "" })), notes: results.filter((r) => r.ok && r.note).map((r) => String(r.note)) })
 
 /** This computer's tree under `root`, as an explorer's (and a folder dialog's) place. */
 function localSource(root) {
@@ -984,6 +985,8 @@ export async function openServerFile(path, name, entry) {
       withheld: f.withheld,
       size: f.size,
       sha: f.sha,
+      // What is inside an archive, where the server lists it (2.0.0-beta.17).
+      archive: f.archive,
       media: () => invoke("media_open", { source: "server", kind, path: at }),
       sealed: { source: "server", path: at },
       download: () => downloadFile(at, f.name || name),
@@ -998,13 +1001,26 @@ export async function openServerFile(path, name, entry) {
 
 /**
  * Show a file of the server's tree where it is: its folder listed, the file chosen (a chat's
- * "Open in Files"). One that is not there any more -- moved, renamed, in the trash -- is said.
+ * "Open in Files"). `node` is the file's id, where it has one (a generated file): the server is
+ * asked where the file is now (`GET /files/node?id=`), so one renamed or moved since is found;
+ * one in the trash, and one that is gone, are said. A server that has no such route (it answers
+ * 404, as it does for an id that names nothing) is followed by the path the chat knew.
  */
-export async function revealServerFile(path) {
+export async function revealServerFile(path, node = "") {
   showFilesTab("server")
-  if (!server || !path || !path.startsWith("/")) return false
+  let at = path
+  if (node) {
+    try {
+      const now = await get(`/files/node?id=${enc(node)}`)
+      if (now?.trashed === true) return serverSaid(t("This file is in the trash."), true), false
+      if (typeof now?.path === "string" && now.path.startsWith("/")) at = now.path
+    } catch (err) {
+      if (err?.status !== 404) return serverSaid(why(err), true), false
+    }
+  }
+  if (!server || !at || !at.startsWith("/")) return false
   serverSaid("")
-  const found = await server.reveal(path).catch(() => false)
+  const found = await server.reveal(at).catch(() => false)
   if (!found) serverSaid(t("This file is no longer there."), true)
   return found
 }

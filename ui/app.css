@@ -1114,6 +1114,10 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .vtable { border-collapse: collapse; font: var(--text-xs) / var(--leading-normal) var(--font-mono); }
 .vtable th, .vtable td { max-width: 24rem; padding: var(--sp-1) var(--sp-3); text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; border: var(--border-w) solid var(--border); }
 .vtable th { position: sticky; top: 0; font-weight: 600; color: var(--ink); background: var(--surface); }
+/* An archive's listing: the same note and scroller; a name's track, then a size's, shared by every row. */
+.viewer__archive .vtable__scroll { padding: 0 var(--sp-4) var(--sp-4); }
+.varchive { min-width: min(100%, 24rem); }
+.vtable .varchive__size { text-align: right; white-space: nowrap; color: var(--ink-muted); }
 /* A notebook: its cells one under another, each the same two tracks -- the count, the cell. */
 .viewer__nb { min-width: 0; overflow: auto; display: grid; align-content: start; gap: var(--sp-3); padding: var(--sp-4); }
 .nbcell { display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }

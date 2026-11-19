@@ -18,6 +18,7 @@
 //            `terminal_open` fail; `terminalDelay` (ms) is how long the socket takes to open
 //            (the id comes at once, as from Rust; the frames after that long).
 //   mediaBytes [byte, …] -- what `media_bytes` answers (a file handed over whole).
+//   mediaStale n -- the first n addresses `media_open` gives are dead ones (given up by Rust).
 //   viewerBytes [byte, …] or { name: [byte, …] } -- what `viewer_bytes` answers for a sealed
 //            viewer's file (by the last part of its path, or its node id); `viewerLibs`
 //            { main, worker } -- PDF.js as text, what `viewer_libs` answers.
@@ -170,7 +171,14 @@
         const own = (config.commands || {}).media_open
         if (own && own.__error) return Promise.reject(own.__error)
         // By what names the file: its path, a generated file's id, an attachment's id.
-        return own || `http://media.test/${args.kind}/${encodeURIComponent(args.path ?? args.node ?? args.attachment)}`
+        const named = encodeURIComponent(args.path ?? args.node ?? args.attachment)
+        // `mediaStale: n` -- the next n addresses are ones Rust has given up by the time they
+        // are used (it keeps only so many): tests/ui answers them 404.
+        if (!own && config.mediaStale > 0) {
+          config.mediaStale -= 1
+          return `http://media.test/stale/${named}`
+        }
+        return own || `http://media.test/${args.kind}/${named}`
       }
       case "viewer_open":
         // The sealed viewer's document, as Rust would hold it (tests/ui serves it at this address).
