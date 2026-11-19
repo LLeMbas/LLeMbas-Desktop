@@ -151,6 +151,24 @@ export function mediaCard(m) {
   return el
 }
 
+/**
+ * A picture a call made that the server names only as an attachment (`image: { id, width,
+ * height }`, a server before `media`): drawn, with nothing to open or download by.
+ */
+export function pictureCard(image, attachmentPicture) {
+  if (!image || typeof image !== "object" || !image.id) return null
+  const key = `image:${image.id}`
+  if (cards.has(key)) return cards.get(key)
+  const box = h("div", { class: "mcard__view" })
+  const el = h("figure", { class: "mcard", dataset: { media: "image" } }, box)
+  attachmentPicture(`/attachments/${image.id}`).then((url) => {
+    if (!url || !url.startsWith("data:image/")) return void box.replaceChildren(h("p", { class: "mcard__note", text: cannot() }))
+    box.replaceChildren(h("img", { class: "mcard__image", alt: "", src: url, draggable: "false", width: image.width > 0 ? image.width : null, height: image.height > 0 ? image.height : null }))
+  })
+  cards.set(key, el)
+  return el
+}
+
 // --- A long generation ------------------------------------------------------------------------------
 
 const KIND_WORDS = { image: () => t("Image"), image_edit: () => t("Image"), video: () => t("Video"), music: () => t("Music"), model3d: () => t("3D model") }

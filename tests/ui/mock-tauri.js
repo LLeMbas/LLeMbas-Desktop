@@ -188,7 +188,8 @@
         // The whole file, for a player that would not take the address: `mediaBytes` (numbers).
         return new Uint8Array(config.mediaBytes || []).buffer
       case "model_image":
-        return ""
+        // A model's picture or an attachment's thumbnail as a `data:` URL: none, unless the test says.
+        return (config.commands || {}).model_image ?? ""
       case "terminal_word":
         return "lembas"
       default: {

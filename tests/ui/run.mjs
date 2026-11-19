@@ -6929,9 +6929,10 @@ test("MD5: a model that is not for chatting is in no chat's picker; sound and vi
       routes: baseRoutes({
         "GET /models": all,
         "GET /models?chat=chat1": all,
-        "GET /chats/chat1": { chat: chatRow(), messages: [{ ...userMessage("m1", "Listen to this"), attachments: [song, clip] }], more: false, live: null },
+        "GET /chats/chat1": { chat: chatRow(), messages: [{ ...userMessage("m1", "Listen to this"), attachments: [song, clip] }, { id: "m2", role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", metrics: null, steps: [{ index: 0, kind: "tools", open: false, calls: [{ ...MADE[0], media: undefined }] }] }], more: false, live: null },
         "GET /mcp": mcp,
       }),
+      commands: { model_image: `data:image/png;base64,${MEDIA_PNG.toString("base64")}` },
       streams: {},
     },
     { width: 1280, height: 900 },
@@ -6944,6 +6945,10 @@ test("MD5: a model that is not for chatting is in no chat's picker; sound and vi
   assert.ok(await p.$eval("#messages .ptile audio", (a) => a.controls && a.src.startsWith("http://media.test/audio/att9")))
   assert.equal(await p.textContent("#messages .ptile[data-kind=audio] .ptile__name"), "song.wav")
   assert.ok(await inWindow(p, "#messages .ptile"))
+  // A picture a call made that an older server names only as an attachment is drawn all the same.
+  await p.waitForFunction(() => document.querySelector("#messages .call__made .mcard__image")?.naturalWidth === 1)
+  assert.ok((await callsOf(p, "model_image")).some((c) => c.path === `/attachments/${MADE[0].image.id}`))
+  assert.equal(await p.locator("#messages .call__made .mcard__do").count(), 0, "nothing to open or download by without the file's id")
   // The picker: every chat model the server lists, and neither of the two that are for something else.
   await p.click(".cchip--model")
   await p.waitForSelector(".menu .menu__item")

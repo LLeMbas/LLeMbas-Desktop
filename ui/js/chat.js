@@ -30,7 +30,7 @@ import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./ter
 import { scopePopover } from "./scope.js"
 import { pickDirectory } from "./dirpick.js"
 import { readAloudButton } from "./voice.js"
-import { mediaCard, jobCard, attachmentTile, forgetMedia } from "./media.js"
+import { mediaCard, jobCard, pictureCard, attachmentTile, forgetMedia } from "./media.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
@@ -694,7 +694,7 @@ function toolCall(c, chat, live, key) {
   )
   // What the call made (a picture, a video, a track, a 3D model) is drawn under its row,
   // without a click; a long generation as its card, which follows the job (media.js).
-  const made = state === "done" ? (c.media ? mediaCard(c.media) : c.media_job ? jobCard(c.media_job) : null) : null
+  const made = state === "done" ? (c.media ? mediaCard(c.media) : c.media_job ? jobCard(c.media_job) : c.image?.id ? pictureCard(c.image, picture) : null) : null
   // An edit shows its change without a click, as the web and the phone do.
   const el = h("details", { class: `call call--${kind} is-${state}`, open: kind === "edit" && !!c.diff ? true : null, dataset: { key, state, kind } }, summary, body.childElementCount ? body : null)
   if (isShow) {
