@@ -9,6 +9,16 @@
 import { h } from "./dom.js"
 import { invoke } from "./bridge.js"
 
+/**
+ * Only what a chat can run on: the server says what a model is for (`capability`, server
+ * 2.0.0-beta.17). A model that says anything but `chat` -- an embedding model, and whatever is
+ * added later (speech, pictures, video) -- is never offered in a chat's or a schedule's model
+ * picker; one that says nothing (an older server) is a chat model, as it always was.
+ */
+export function forChat(models) {
+  return (Array.isArray(models) ? models : []).filter((m) => m && (m.capability === undefined || m.capability === null || m.capability === "chat"))
+}
+
 // Each picture once per run: its path -> a promise of its `data:` URL (null when it cannot be had,
 // so a missing picture is not asked for again with every redraw).
 const pictures = new Map()

@@ -1,6 +1,6 @@
 {
-  "tag": "v2.0.0-beta.15",
-  "commit": "e38cec75b3685d09ba8ff28c859bd25e5b3a294c",
+  "tag": "d72657352314d0147584bf6dc6c1df78b836f22d",
+  "commit": "d72657352314d0147584bf6dc6c1df78b836f22d",
   "files": {
     "cm-autocomplete.mjs": {"server": "26fe431a5f54e29952e094c93151f11473a80677bfb339711ecca08195a89df4", "copy": "fcb7fcbe4e2b072d031520ec898c81ac3f2f05fb4126e03003c9b5e60ffaa8de"},
     "cm-codemirror.mjs": {"server": "dea86a106e13c9316dfedfd29209780b853bdb2b477edf3f7c90f497b592a223", "copy": "0b80ae1289a1dc3e6718727e78bc757caad657e907d0351597867d4f90c36bd2"},
@@ -22,6 +22,12 @@
     "xterm.js": {"server": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495", "copy": "1f991ac3b4b283ebf96e60ae23a00a52765dd3a2e46fa6fdda9f1aab032f7495"},
     "xterm.css": {"server": "ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6", "copy": "ba8e6985669488981ccf40c0cefe3aba80722cb6c92de7ad628b0bd717faf2b6"},
     "xterm-addon-fit.js": {"server": "bdaefa370b1bfc42ee88d46fe6072400902a4d4b2d45cd93438dda9b23c97089", "copy": "bdaefa370b1bfc42ee88d46fe6072400902a4d4b2d45cd93438dda9b23c97089"},
-    "node-process.mjs": {"server": "0c7460cbd81d8427a882867726b6db43beff3399f045ad942f4a65fef4705981", "copy": "0c7460cbd81d8427a882867726b6db43beff3399f045ad942f4a65fef4705981"}
+    "node-process.mjs": {"server": "0c7460cbd81d8427a882867726b6db43beff3399f045ad942f4a65fef4705981", "copy": "0c7460cbd81d8427a882867726b6db43beff3399f045ad942f4a65fef4705981"},
+    "viewers/pdf.min.mjs": {"server": "3a88402882cfa3e7e72c2c9b5149f52f0f88baf1c5b62aa11a41abdbc2072440", "copy": "3a88402882cfa3e7e72c2c9b5149f52f0f88baf1c5b62aa11a41abdbc2072440"},
+    "viewers/pdf.worker.min.mjs": {"server": "1e64c8240e54735ec5913b37acd5134747799cb8c6bb3777c70adbc01232d2aa", "copy": "1e64c8240e54735ec5913b37acd5134747799cb8c6bb3777c70adbc01232d2aa"},
+    "viewers/pdfjs-LICENSE.txt": {"server": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594", "copy": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"},
+    "viewers/sealed-pdf.js": {"server": "5c7baa99b9fd65c5613856fe1469a4ea725061715ae5acea1e3302cecccb6dc7", "copy": "5c7baa99b9fd65c5613856fe1469a4ea725061715ae5acea1e3302cecccb6dc7"},
+    "viewers/sealed-model.js": {"server": "06d2c0460f8fd2db9baf95b66cca56a50ba5df1782b92c0e491b64504a7e0417", "copy": "06d2c0460f8fd2db9baf95b66cca56a50ba5df1782b92c0e491b64504a7e0417"},
+    "viewers/shell.html": {"server": "6c51ee123ce86f43977c91539631a8589952afa59e0f303dab6f39bc514565f3", "copy": "6c51ee123ce86f43977c91539631a8589952afa59e0f303dab6f39bc514565f3"}
   }
 }

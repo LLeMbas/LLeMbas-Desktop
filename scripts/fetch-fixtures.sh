@@ -24,7 +24,10 @@ python_state.json python_call.json python_result.json
 reports.json report.json report_orphan.json report_reply.json event_reports.json chat_report.json schedules.json schedule_runs.json
 page.json step_text_page.json chat_html_pages.json models.json
 device_directories.json device_directories_places.json device_directories_cli_too_old.json device_directories_not_linked.json
-models_agent_directory.json schedule_run_agentic.json schedule_models.json"
+models_agent_directory.json schedule_run_agentic.json schedule_models.json
+file_content.json file_content_withheld.json file_save_conflict.json file_create_exists.json files_copied.json
+files_trash.json files_restored.json files_trash_emptied.json file_versions.json files_batch.json
+tool_media.json media_job.json media_job_done.json media_job_failed.json media_jobs.json mcp_servers.json"
 
 [ $# -eq 1 ] || { echo "usage: scripts/fetch-fixtures.sh <server-ref>" >&2; exit 2; }
 commit="$(git -C "$SERVER" rev-parse --verify --quiet "$1^{commit}")" \

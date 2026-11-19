@@ -5,8 +5,10 @@
 // network, no way out. A picture -- an SVG too, only ever as a picture -- is an `<img>`, sound
 // and video the webview's own players, each fed by Rust a piece at a time
 // (src-tauri/src/media.rs: the page holds an address that names one file, never the token). A
-// table is a table, a notebook its cells as text; an archive, a binary, a PDF and a 3D model
-// are their details and a way to save them. What a file says is never part of the app's page.
+// table is a table, a notebook its cells as text. A PDF and a 3D model are drawn by the server's
+// own viewers in a sealed frame as well (sealedview.js): their parsers never run in this page.
+// An archive and a binary are their details and a way to save them (the server's content answer
+// carries no listing of an archive). What a file says is never part of the app's page.
 //
 // A text file that may be written can be edited here and saved; a save the file has changed
 // under is not made, and offers both ways on: read it again, or save anyway.
@@ -16,6 +18,7 @@ import { invoke, why } from "./bridge.js"
 import { markdown } from "./markdown.js"
 import { codeView } from "./code.js"
 import { ask } from "./popup.js"
+import { sealedViewer, sealedKind } from "./sealedview.js"
 
 // The viewer's kind by a file's name: the CLI's and the server's `showKind`, the same table.
 const LANGUAGES = {
@@ -83,6 +86,8 @@ function teardownBody() {
   current.editor = null
   if (current.sealed) invoke("sealed_close", { url: current.sealed })
   current.sealed = null
+  current.frame?.close()
+  current.frame = null
   for (const url of current.blobs || []) URL.revokeObjectURL(url)
   current.blobs = []
 }
@@ -107,7 +112,7 @@ export function closeViewer() {
 export const viewerDirty = () => !!current?.dirty
 
 /** An edit not saved is not thrown away without a word: true when there is none, or it may go. */
-async function mayLeave() {
+export async function mayLeave() {
   if (!current?.dirty) return true
   return !!(await ask({ title: t("Not saved yet"), text: current.name || "", ok: t("Discard"), cancel: t("Cancel"), danger: true }))
 }
@@ -266,6 +271,8 @@ function drawFacts(file, words) {
  *   kind?, language?, line?     its kind as the server or this computer said it (else by its name)
  *   text?, withheld?, size?, mime?, error?
  *   media?()                    -> the address its bytes are served at (a picture, sound, video)
+ *   sealed?                     how Rust is asked for its bytes for a sealed viewer (a PDF, a 3D
+ *                               model): { source: "server", path } | { source: "local", root, path }
  *   download?()                 saves it somewhere the person chooses
  *   save?(text, { base, force }) -> { sha, text }   present where it may be written; rejects with
  *                               { status: 409, detail } when the file changed meanwhile
@@ -297,6 +304,18 @@ export async function openViewer(file) {
   // What the webview draws from the bytes themselves.
   if (MEDIA_KINDS.includes(kind) && file.media && !(kind === "svg" && typeof file.text === "string" && !file.withheld && file.viewAs === "source")) {
     await drawMedia(file, kind, body, modes, bar, mine)
+    return true
+  }
+  // What a parser has to read: in a sealed frame, never here. (A .gltf is text as well; it is
+  // drawn, and its source is the file to download.)
+  if (sealedKind(kind) && file.sealed) {
+    const frame = sealedViewer(kind, file.sealed, { name: file.name || "" })
+    mine.frame = frame
+    body.append(h("div", { class: "viewer__sealed" }, frame.el))
+    if (file.download) {
+      bar.hidden = false
+      bar.append(h("span", { class: "viewer__said", text: Number.isFinite(file.size) ? bytes(file.size) : "" }), h("button", { type: "button", class: "btn btn--sm", text: t("Download"), onclick: () => file.download() }))
+    }
     return true
   }
   const isText = TEXT_KINDS.includes(kind) && !file.withheld && typeof file.text === "string"

@@ -52,7 +52,7 @@
 import { $, h, clear, icon, ICONS, when } from "./dom.js"
 import { api, get, post, patch, del, why, listen } from "./bridge.js"
 import { ask, menu, popover } from "./popup.js"
-import { avatar, levelsOf, levelWord, modelKey, modelOf, modelFor, findModel, modelLabel } from "./models.js"
+import { avatar, forChat, levelsOf, levelWord, modelKey, modelOf, modelFor, findModel, modelLabel } from "./models.js"
 import { markdown } from "./markdown.js"
 import { pickDirectory } from "./dirpick.js"
 import { knownFolders } from "./chat.js"
@@ -156,7 +156,9 @@ async function load() {
 /** The scheduling models, in the order they are tried; null when the server has none to say. */
 async function schedulingModels() {
   try {
-    return await get("/schedules/models")
+    // Never a model that is not for chatting, whatever the list holds (`capability`).
+    const r = await get("/schedules/models")
+    return r && Array.isArray(r.models) ? { ...r, models: forChat(r.models) } : r
   } catch {
     return null
   }

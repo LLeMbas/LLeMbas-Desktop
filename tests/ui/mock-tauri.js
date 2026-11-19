@@ -18,6 +18,9 @@
 //            `terminal_open` fail; `terminalDelay` (ms) is how long the socket takes to open
 //            (the id comes at once, as from Rust; the frames after that long).
 //   mediaBytes [byte, …] -- what `media_bytes` answers (a file handed over whole).
+//   viewerBytes [byte, …] or { name: [byte, …] } -- what `viewer_bytes` answers for a sealed
+//            viewer's file (by the last part of its path, or its node id); `viewerLibs`
+//            { main, worker } -- PDF.js as text, what `viewer_libs` answers.
 //   python   { url, version } -- where `python_prepare` says the `python` tool's runner frame is.
 //   takes    { "/chats/c1/page/take": [call, …] } -- what a runner's long poll is handed, one
 //            call a poll, each answered after `takeDelay` ms; with none left the poll is held
@@ -166,7 +169,20 @@
         // `media.test` by the kind and the path asked for. `commands: { media_open }` overrides.
         const own = (config.commands || {}).media_open
         if (own && own.__error) return Promise.reject(own.__error)
-        return own || `http://media.test/${args.kind}/${encodeURIComponent(args.path)}`
+        // By what names the file: its path, a generated file's id, an attachment's id.
+        return own || `http://media.test/${args.kind}/${encodeURIComponent(args.path ?? args.node ?? args.attachment)}`
+      }
+      case "viewer_open":
+        // The sealed viewer's document, as Rust would hold it (tests/ui serves it at this address).
+        return `http://sealed.test/viewer/${args.kind}`
+      case "viewer_libs":
+        return config.viewerLibs || { main: "", worker: "" }
+      case "viewer_bytes": {
+        const own = (config.commands || {}).viewer_bytes
+        if (own && own.__error) return Promise.reject(own.__error)
+        const all = config.viewerBytes || []
+        const name = String(args.node ?? args.path ?? "").split("/").pop()
+        return new Uint8Array(Array.isArray(all) ? all : all[name] || []).buffer
       }
       case "media_bytes":
         // The whole file, for a player that would not take the address: `mediaBytes` (numbers).

@@ -3,6 +3,12 @@
 #   ui/vendor/*.mjs   (copies of the server's static/vendor/cm-*.mjs and lezer-*.mjs)
 #   ui/vendor/xterm.js, xterm.css, xterm-addon-fit.js   (the terminal panel's, copied unchanged:
 #                     classic scripts the panel loads when it is first opened)
+#   src-tauri/viewers/   the server's sealed viewers for a PDF and a 3D model, copied unchanged:
+#                     its page (shell.html, out of api/tree.py), its two scripts (sealed-pdf.js,
+#                     sealed-model.js) and the PDF.js it vendors (pdf.min.mjs, pdf.worker.min.mjs,
+#                     with its licence). They are NOT part of ui/: Rust compiles them in and
+#                     serves them only to a sealed frame (src-tauri/src/sealed.rs), so the
+#                     library that parses somebody's file is never a script of the app's page.
 #
 #   scripts/fetch-vendor.sh <server-ref>      copy the modules at that ref (a tag such as
 #                                             v2.0.0-beta.1, or a branch) and write vendor.lock.json
@@ -30,6 +36,7 @@ SERVER="${LEMBAS_SERVER:-../LLeMbas}"
 SOURCE="src/lembas/web/static/vendor"
 SERVER_LOCK="scripts/vendor.lock.json"
 OUT="ui/vendor"
+VIEWERS="src-tauri/viewers"
 LOCK="vendor.lock.json"
 
 sha() { sha256sum "$1" | cut -d' ' -f1; }
@@ -54,8 +61,24 @@ if [ $# -eq 0 ]; then
     grep -q "\"$(basename "$f")\"" "$LOCK" || { echo "fetch-vendor: $f is not in $LOCK" >&2; bad=1; }
   done
   [ "$count" -gt 0 ] || { echo "fetch-vendor: $LOCK lists no file" >&2; exit 1; }
+  # The sealed viewers: "viewers/name": {"server": "…", "copy": "…"}
+  viewers=0
+  while IFS=$'\t' read -r name want; do
+    viewers=$((viewers + 1))
+    if [ ! -f "$VIEWERS/$name" ]; then
+      echo "fetch-vendor: $VIEWERS/$name is missing" >&2
+      bad=1
+    elif [ "$(sha "$VIEWERS/$name")" != "$want" ]; then
+      echo "fetch-vendor: $VIEWERS/$name does not match $LOCK (server $ref)" >&2
+      bad=1
+    fi
+  done < <(sed -n -E 's/^ *"viewers\/([A-Za-z0-9.-]+)": *\{"server": *"[0-9a-f]{64}", *"copy": *"([0-9a-f]{64})"\}.*/\1\t\2/p' "$LOCK")
+  for f in "$VIEWERS"/*; do
+    grep -q "\"viewers/$(basename "$f")\"" "$LOCK" || { echo "fetch-vendor: $f is not in $LOCK" >&2; bad=1; }
+  done
+  [ "$viewers" -gt 0 ] || { echo "fetch-vendor: $LOCK lists no viewer" >&2; exit 1; }
   [ "$bad" -eq 0 ] || exit 1
-  echo "fetch-vendor: $count files in $OUT match $LOCK (server $ref)"
+  echo "fetch-vendor: $count files in $OUT and $viewers in $VIEWERS match $LOCK (server $ref)"
   exit 0
 fi
 
@@ -104,6 +127,43 @@ stub="src/lembas/web/static/js/node-process.mjs"
 git -C "$SERVER" show "$commit:$stub" > "$work/out/node-process.mjs" \
   || { echo "fetch-vendor: $stub is not in $SERVER at $REF" >&2; exit 1; }
 entries+=("$(printf '    "%s": {"server": "%s", "copy": "%s"}' node-process.mjs "$(sha "$work/out/node-process.mjs")" "$(sha "$work/out/node-process.mjs")")")
+# The sealed viewers (a PDF, a 3D model), as the server serves them at /files/viewer/{kind}:
+# PDF.js checked against the server's pin; the server's own page and scripts have none there.
+mkdir -p "$work/viewers"
+for name in pdf.min.mjs pdf.worker.min.mjs pdfjs-LICENSE.txt; do
+  git -C "$SERVER" show "$commit:$SOURCE/$name" > "$work/viewers/$name" \
+    || { echo "fetch-vendor: $name is not in $SOURCE at $REF" >&2; exit 1; }
+  pinned="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], {}).get("sha256", ""))' "$work/server-lock.json" "$name")"
+  have="$(sha "$work/viewers/$name")"
+  [ "$pinned" = "$have" ] || { echo "fetch-vendor: $name does not match the server's pin ($have, pinned $pinned)" >&2; exit 1; }
+  entries+=("$(printf '    "viewers/%s": {"server": "%s", "copy": "%s"}' "$name" "$have" "$have")")
+done
+for name in sealed-pdf.js sealed-model.js; do
+  git -C "$SERVER" show "$commit:src/lembas/web/static/js/$name" > "$work/viewers/$name" \
+    || { echo "fetch-vendor: $name is not among the server's scripts at $REF" >&2; exit 1; }
+  have="$(sha "$work/viewers/$name")"
+  entries+=("$(printf '    "viewers/%s": {"server": "%s", "copy": "%s"}' "$name" "$have" "$have")")
+done
+# The page the two scripts are written into: the server keeps it as a string (`_VIEWER_SHELL`),
+# read out of its source as Python reads it, with the place for the script left as it is.
+git -C "$SERVER" show "$commit:src/lembas/api/tree.py" > "$work/tree.py" \
+  || { echo "fetch-vendor: src/lembas/api/tree.py is not in $SERVER at $REF" >&2; exit 1; }
+python3 - "$work/tree.py" "$work/viewers/shell.html" <<'PY'
+import ast, sys
+tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+for node in tree.body:
+    if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_VIEWER_SHELL" for t in node.targets):
+        shell = ast.literal_eval(node.value)
+        if shell.count("/*SCRIPT*/") != 1:
+            sys.exit("fetch-vendor: the viewer's page has no one place for its script")
+        open(sys.argv[2], "w", encoding="utf-8").write(shell)
+        break
+else:
+    sys.exit("fetch-vendor: _VIEWER_SHELL is not in the server's api/tree.py")
+PY
+have="$(sha "$work/viewers/shell.html")"
+entries+=("$(printf '    "viewers/%s": {"server": "%s", "copy": "%s"}' shell.html "$have" "$have")")
+
 # Every module a copy imports must be one of the copies.
 for f in "$work"/out/*.mjs; do
   while read -r dep; do
@@ -114,6 +174,9 @@ done
 rm -rf "$OUT"
 mkdir -p "$OUT"
 cp "$work"/out/*.mjs "$work"/out/xterm.js "$work"/out/xterm.css "$work"/out/xterm-addon-fit.js "$OUT/"
+rm -rf "$VIEWERS"
+mkdir -p "$VIEWERS"
+cp "$work"/viewers/* "$VIEWERS/"
 {
   printf '{\n  "tag": "%s",\n  "commit": "%s",\n  "files": {\n' "$REF" "$commit"
   last=$((${#entries[@]} - 1))

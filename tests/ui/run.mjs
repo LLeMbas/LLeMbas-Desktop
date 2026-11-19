@@ -36,6 +36,12 @@ const RUNNER_POLICY = /pub const POLICY: &str = "([^"]+)";/.exec(readFileSync(jo
 // what the frame and the policy must hold to is that it does not run.
 const SEALED = "http://sealed.test"
 const PAGE_POLICY = /pub const PAGE_POLICY: &str = "([^"]+)";/.exec(readFileSync(join(HERE, "..", "..", "src-tauri", "src", "sealed.rs"), "utf8"))[1]
+// The sealed viewers of a PDF and of a 3D model: the server's own page, scripts and PDF.js as
+// the app carries them (src-tauri/viewers/, pinned by scripts/fetch-vendor.sh), put together as
+// Rust does (`sealed::viewer`) and served under Rust's own policy for a sealed page (`POLICY`).
+const SEALED_POLICY = /pub const POLICY: &str = "([^"]+)";/.exec(readFileSync(join(HERE, "..", "..", "src-tauri", "src", "sealed.rs"), "utf8"))[1]
+const viewerFile = (name) => readFileSync(join(HERE, "..", "..", "src-tauri", "viewers", name), "utf8")
+const viewerPage = (kind) => viewerFile("shell.html").replace("/*SCRIPT*/", () => viewerFile(kind === "pdf" ? "sealed-pdf.js" : "sealed-model.js").replaceAll("</script", "<\\/script"))
 // Where the tests serve what the viewer draws and plays (`media_open` in the mock), and what:
 // a one-pixel PNG, an SVG that would run a script were it ever a document, a tenth of a second of
 // silence.
@@ -256,6 +262,8 @@ async function page(config, { width = 1280, height = 860, clock = false, wait = 
     return route.fulfill({ status: 200, headers, contentType: RUNNER_TYPES[extname(file)] || "application/octet-stream", body: readFileSync(file) })
   })
   await context.route(`${SEALED}/**`, (route) => {
+    const viewer = /^\/viewer\/(pdf|model3d)$/.exec(new URL(route.request().url()).pathname)
+    if (viewer) return route.fulfill({ status: 200, headers: { "Content-Security-Policy": SEALED_POLICY, "X-Content-Type-Options": "nosniff" }, contentType: "text/html; charset=utf-8", body: viewerPage(viewer[1]) })
     const html = `${fixture("page").html}<script>document.title = "a script ran"; document.body.append("a script ran")</script>`
     return route.fulfill({ status: 200, headers: { "Content-Security-Policy": PAGE_POLICY, "X-Content-Type-Options": "nosniff" }, contentType: "text/html; charset=utf-8", body: html })
   })
@@ -5958,35 +5966,20 @@ test("A9: a chat on the second of two connections serving one id says that conne
 //
 // The server's tab to parity with the web's explorer, on the routes the server gained after
 // 2.0.0-beta.15 (App-API, "Files"): copy, save with its 409, raw bytes, the trash, versions,
-// batch, zip. The shapes below are its contract fixtures of that day -- files_listing (with
-// `file_kind`), file_content (`sha`, `writable`), files_copied, file_save_conflict, files_trash,
-// files_restored, files_trash_emptied, file_versions, files_batch -- written out here because
-// the fixtures this repository pins are an older release's; they move with the pin.
+// batch, zip. The shapes are the server's contract fixtures, as pinned (tests/ui/fixtures/SOURCE):
+// files_listing (with `file_kind`), file_content (`sha`, `writable`), files_copied,
+// file_save_conflict, files_trash, file_versions, files_batch.
 
 const HOME = "/home/frodo"
 const fileRow = (name, file_kind, mime, size = 27) => ({ name, path: `${HOME}/${name}`, kind: "file", file_kind, size, mime, updated_at: STAMP })
-const F4_HOME = {
-  path: HOME,
-  parent: "/home",
-  entries: [
-    { name: "recipes", path: `${HOME}/recipes`, kind: "dir", file_kind: null, size: 0, mime: "", updated_at: STAMP },
-    fileRow("lembas.md", "markdown", "text/markdown"),
-    fileRow("map.png", "image", "image/png", 2048),
-  ],
-}
-const SHA = "ab".repeat(32)
-const F4_CONTENT = { path: `${HOME}/lembas.md`, name: "lembas.md", size: 27, mime: "text/markdown", kind: "markdown", file_kind: "markdown", level: "commit", writable: true, language: "", sha: SHA, text: "# Lembas\n\nWrap it in a leaf.\n" }
-const F4_CONFLICT = { status: 409, detail: "This file changed since you opened it. Reload it, or save anyway." }
-const F4_TRASH = { items: [{ id: "node5", name: "old.md", path: `${HOME}/old.md`, kind: "file", size: 12, trashed_at: STAMP }] }
-const F4_VERSIONS = {
-  path: `${HOME}/lembas.md`,
-  sha: SHA,
-  versions: [
-    { id: "ver2", sha: SHA, size: 27, at: STAMP, by: "Frodo", chat_id: "chat1", current: true },
-    { id: "ver1", sha: "cd".repeat(32), size: 20, at: STAMP, by: "Frodo", chat_id: null, current: false },
-  ],
-}
-const F4_BATCH = { op: "move", to: `${HOME}/recipes`, atomic: false, results: [{ path: `${HOME}/lembas.md`, ok: true, to: `${HOME}/recipes/lembas.md` }, { path: `${HOME}/map.png`, ok: false, error: `Read-only: ${HOME}/map.png can be read in this session but not changed.` }], done: 1, failed: 1 }
+const F4_HOME = fixture("files_listing")
+const F4_CONTENT = fixture("file_content")
+const SHA = F4_CONTENT.sha
+// A refusal as the bridge hands it on: the status, and the server's own sentence (`detail`).
+const F4_CONFLICT = { status: 409, detail: fixture("file_save_conflict").detail }
+const F4_TRASH = fixture("files_trash")
+const F4_VERSIONS = fixture("file_versions")
+const F4_BATCH = fixture("files_batch")
 const q = (path) => `?path=${encodeURIComponent(path)}`
 
 function f4(over = {}, commands = {}, extra = {}) {
@@ -6019,7 +6012,7 @@ const callsOf = (p, cmd) => p.evaluate((c) => window.__mock.calls.filter((x) => 
 const bodies = (p, method, path) => p.evaluate(([m, at]) => window.__mock.api(m, at).map((c) => c.args.body), [method, path])
 
 test("F4: Move and Copy to… walk to the folder in a dialog -- no path is typed -- and say how it went", async () => {
-  const p = await page(f4({ "POST /files/move": F4_HOME, "POST /files/copy": { ...F4_HOME, copied: fileRow("lembas (2).md", "markdown", "text/markdown") } }))
+  const p = await page(f4({ "POST /files/move": F4_HOME, "POST /files/copy": fixture("files_copied") }))
   await serverPane(p)
   await rowMenu(p, serverRow("lembas.md"), "Move")
   await p.waitForSelector("dialog[open] .fpick__row")
@@ -6455,9 +6448,9 @@ test("F4: a file is drawn by what the server says it is: a picture and an SVG as
   await p.waitForFunction(() => document.querySelector("#viewer-body .nbcell__picture")?.naturalWidth === 1)
   assert.ok((await p.getAttribute("#viewer-body .nbcell__picture", "src")).startsWith("data:image/png;base64,"))
   await shot(p, "f4-notebook-1600")
-  // An archive, a PDF, a 3D model, a binary: what it is, and a way to save it -- to a place the
-  // person chooses in the system's dialog, written there by Rust.
-  for (const [name, mime] of [["all.zip", "application/zip"], ["plan.pdf", "application/pdf"], ["cup.glb", "model/gltf-binary"], ["fake.png", "application/octet-stream"]]) {
+  // An archive and a binary: what it is, and a way to save it -- to a place the person chooses
+  // in the system's dialog, written there by Rust. (A PDF and a 3D model: the MD tests.)
+  for (const [name, mime] of [["all.zip", "application/zip"], ["fake.png", "application/octet-stream"]]) {
     await open(name)
     await p.waitForSelector("#viewer-body .viewer__facts")
     assert.match(await p.textContent("#viewer-body .viewer__facts"), new RegExp(mime.replace(/[.+/]/g, "\\$&")), name)
@@ -6664,6 +6657,333 @@ test("F4: a file on this computer is edited and saved, a picture drawn from its 
   assert.equal(await p.locator(".menu .menu__item", { hasText: "Copy to this computer…" }).count(), 0)
   await p.keyboard.press("Escape")
   assert.deepEqual(p.errors, [])
+})
+
+// --- MD: what a model made, the sealed viewers, and the small things of the media round -------------
+//
+// The shapes are the server's contract fixtures (tool_media, media_job*, mcp_servers,
+// file_create_exists), as pinned.
+
+const MADE = fixture("tool_media").calls
+const GENERATED = `${HOME}/Generated`
+function md(over = {}, commands = {}, extra = {}) {
+  const made = { id: "m2", role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", metrics: null, steps: [{ index: 0, kind: "tools", open: false, calls: MADE }, { index: 1, kind: "text", open: true, markdown: "A kite, and a video of it on its way." }] }
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m1", "Draw a kite, then film it"), made], more: false, live: null },
+      "GET /models?chat=chat1": models(),
+      "GET /media/jobs/mjob1": fixture("media_job"),
+      "GET /files": F4_HOME,
+      [`GET /files${q(GENERATED)}`]: { path: GENERATED, parent: HOME, entries: [{ name: MADE[0].media.name, path: MADE[0].media.path, kind: "file", file_kind: "image", size: MADE[0].media.size, mime: "image/png", updated_at: STAMP }] },
+      ...over,
+    }),
+    commands: { media_save_as: { path: "/home/dev/Downloads/kite.png", size: 180000 }, ...commands },
+    streams: {},
+    ...extra,
+  }
+}
+const jobAsks = (p) => p.evaluate(() => window.__mock.api("GET", "/media/jobs/").length)
+const inWindow = (p, sel) => p.$$eval(sel, (l) => l.every((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.left >= -0.5 && b.right <= innerWidth + 0.5 }))
+
+test("MD1: what a tool call made is a card under the call -- a picture by the file's id, Open in Files, Download -- and a long generation a card that follows its job until it is done, then plays what was made", async () => {
+  const p = await page(md(), { width: 1280, height: 900, clock: true })
+  await openChatRow(p, "chat1")
+  // The picture: under its call, without a click, at an address asked for by the file's id.
+  await p.waitForSelector("#messages .mcard[data-media=image] img.mcard__image")
+  await p.waitForFunction(() => document.querySelector("#messages .mcard__image").naturalWidth === 1)
+  assert.deepEqual((await callsOf(p, "media_open"))[0], { source: "server", kind: "image", node: "node8" })
+  assert.ok((await p.getAttribute("#messages .mcard__image", "src")).startsWith("http://media.test/image/node8"))
+  assert.equal(await p.textContent("#messages .mcard[data-media=image] .mcard__name"), MADE[0].media.name)
+  assert.match(await p.textContent("#messages .mcard[data-media=image] .mcard__facts"), /1024 × 1024/)
+  assert.deepEqual(await p.$$eval("#messages .mcard[data-media=image] .mcard__do .btn", (l) => l.map((b) => b.textContent)), ["Open in Files", "Download"])
+  // The card is not inside the call's fold: it shows while the call is closed.
+  assert.equal(await p.$eval("#messages .mcard[data-media=image]", (el) => !!el.closest("details")), false)
+  // Download: by the id, to where the person chooses; said where it went.
+  await p.click("#messages .mcard[data-media=image] .mcard__download")
+  await p.waitForFunction(() => document.querySelector("#messages .mcard[data-media=image] .mcard__said").textContent === "Saved. /home/dev/Downloads/kite.png")
+  assert.deepEqual(await callsOf(p, "media_save_as"), [{ node: "node8", name: MADE[0].media.name, title: "Download" }])
+  // The job: what is being made, how it stands, for how long, Cancel -- asked for at once.
+  const job = '#messages .mjob[data-job="mjob1"]'
+  await p.waitForFunction((sel) => document.querySelector(`${sel} .mjob__time`)?.textContent === "0:42", job)
+  assert.deepEqual(await p.$eval(job, (el) => [el.querySelector(".mjob__kind").textContent, el.querySelector(".mjob__state").textContent, el.querySelector(".mjob__cancel").textContent]), ["Video", "Being made", "Cancel"])
+  assert.match(await p.textContent(`${job} .mjob__what`), /Studio · Text to video · a kite over dunes/)
+  assert.equal(await jobAsks(p), 1)
+  await shot(p, "md-cards-1280")
+  // Every three seconds while the card is there; the time counts on between.
+  await p.clock.fastForward(2000)
+  await p.waitForFunction((sel) => document.querySelector(`${sel} .mjob__time`).textContent === "0:44", job)
+  assert.equal(await jobAsks(p), 1)
+  await p.clock.fastForward(1000)
+  await p.waitForFunction(() => window.__mock.api("GET", "/media/jobs/").length === 2)
+  // It ends by itself: the player is drawn on the card of the call that started it, from the
+  // job's result, and the chat -- which the server wakes with a reply -- is read again.
+  const reads = await p.evaluate(() => window.__mock.api("GET", "/chats/chat1").length)
+  await p.evaluate((done) => window.__mock.answer("GET /media/jobs/mjob1", done), { ...fixture("media_job_done"), id: "mjob1" })
+  await p.clock.fastForward(3000)
+  await p.waitForSelector(`${job}[data-state=done] .mcard[data-media=video] video.mcard__video`)
+  assert.ok((await p.getAttribute(`${job} video`, "src")).startsWith("http://media.test/video/node7"))
+  assert.ok(await p.$eval(`${job} video`, (v) => v.controls))
+  assert.deepEqual((await callsOf(p, "media_open")).at(-1), { source: "server", kind: "video", node: "node7" })
+  await p.waitForFunction((n) => window.__mock.api("GET", "/chats/chat1").length > n, reads)
+  await p.waitForSelector(`${job}[data-state=done] video`)
+  // A job that has ended is asked for no more.
+  const asked = await jobAsks(p)
+  await p.clock.fastForward(12000)
+  assert.equal(await jobAsks(p), asked)
+  // Open in Files: the server's files, at the folder the file is in, the file chosen.
+  await p.click("#messages .mcard[data-media=image] .mcard__files")
+  await p.waitForSelector(`#server-list .frow.is-chosen[data-path="${MADE[0].media.path}"]`)
+  assert.ok(await p.isVisible("#pane-server"))
+  await shot(p, "md-files-1280")
+  assert.deepEqual(p.errors, [])
+})
+
+test("MD2: a long generation is cancelled from its card, and one that failed says the server's own sentence; neither is asked for again; at 390 px the cards stay inside the window", async () => {
+  const stopped = { ...fixture("media_job"), state: "cancelled", active: false, seconds: 50, ended: STAMP, error: "Stopped on the server that was making it." }
+  const p = await page(md({ "DELETE /media/jobs/mjob1": stopped }), { width: 390, height: 844, clock: true })
+  await p.evaluate(() => document.querySelector('.chatrow[data-id="chat1"]').click())
+  await p.waitForSelector("#messages .msg")
+  const job = '#messages .mjob[data-job="mjob1"]'
+  await p.waitForSelector(`${job} .mjob__cancel`)
+  await p.waitForFunction(() => document.querySelector("#messages .mcard__image")?.naturalWidth === 1)
+  // Narrow: nothing reaches out of the window, and the page does not scroll sideways.
+  assert.ok(await inWindow(p, "#messages .mcard, #messages .mjob, #messages .mcard__do .btn, #messages .mjob__cancel"))
+  assert.ok(await p.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth))
+  // The row's parts stand on one line, each in its own track.
+  assert.ok(await p.$eval(`${job} .mjob__row`, (row) => { const tops = [...row.children].filter((c) => c.getBoundingClientRect().width > 0).map((c) => { const b = c.getBoundingClientRect(); return b.top + b.height / 2 }); return Math.max(...tops) - Math.min(...tops) < 1 }))
+  await shot(p, "md-cards-390")
+  const reads = await p.evaluate(() => window.__mock.api("GET", "/chats/chat1").length)
+  await p.click(`${job} .mjob__cancel`)
+  await p.waitForFunction((sel) => document.querySelector(`${sel} .mjob__state`).textContent === "Cancelled", job)
+  assert.deepEqual(await p.evaluate(() => window.__mock.api("DELETE", "/media/jobs/mjob1").length), 1)
+  assert.equal(await p.textContent(`${job} .mjob__error`), stopped.error)
+  assert.equal(await p.locator(`${job} .mjob__cancel`).count(), 0)
+  assert.equal(await p.textContent(`${job} .mjob__time`), "0:50")
+  // Cancelled: nothing more is asked, and the chat is not read again (a cancelled job wakes nobody).
+  const asked = await jobAsks(p)
+  await p.clock.fastForward(12000)
+  assert.equal(await jobAsks(p), asked)
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/chats/chat1").length), reads)
+  assert.deepEqual(p.errors, [])
+
+  // One that failed before it was looked at: the server's sentence, no Cancel, asked for once.
+  const failed = fixture("media_job_failed")
+  const f = await page(md({ "GET /media/jobs/mjob1": { ...failed, id: "mjob1" } }), { width: 1280, height: 900, clock: true })
+  await openChatRow(f, "chat1")
+  await f.waitForFunction((sel) => document.querySelector(`${sel} .mjob__state`)?.textContent === "Failed", job)
+  assert.equal(await f.textContent(`${job} .mjob__error`), failed.error)
+  assert.equal(await f.locator(`${job} .mjob__cancel`).count(), 0)
+  await f.clock.fastForward(12000)
+  assert.equal(await jobAsks(f), 1)
+  assert.deepEqual(f.errors, [])
+})
+
+// A PDF of one page and a model of one triangle, written out here.
+function tinyPdf() {
+  const paint = "0 0 1 rg 20 20 160 60 re f"
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << >> >>", `<< /Length ${paint.length} >>\nstream\n${paint}\nendstream`]
+  let out = "%PDF-1.4\n"
+  const at = objects.map((o, i) => {
+    const here = out.length
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`
+    return here
+  })
+  const xref = out.length
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${at.map((n) => `${String(n).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  return [...Buffer.from(out, "latin1")]
+}
+const TINY_STL = [...Buffer.from("solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid t\n")]
+
+test("MD3: a PDF and a 3D model are drawn by the server's viewers in a sealed frame -- an opaque origin fed the bytes once -- in the file viewer and on a chat's card; PDF.js never runs in the app's page", async () => {
+  const rows = [fileRow("plan.pdf", "pdf", "application/pdf", 600), fileRow("wedge.stl", "model3d", "model/stl", 110)]
+  const none = (r) => ({ path: r.path, name: r.name, size: r.size, mime: r.mime, kind: r.file_kind, file_kind: r.file_kind, level: "commit", writable: true, language: "", sha: SHA, text: "", withheld: fixture("file_content_withheld").withheld })
+  const content = Object.fromEntries(rows.map((r) => [`GET /files/content${q(r.path)}`, none(r)]))
+  const model = { ...MADE[0], id: "call6", name: "model_generate", image: undefined, media: { kind: "model3d", path: `${GENERATED}/model-1.stl`, node_id: "node9", version_id: "ver9", name: "model-1.stl", mime: "model/stl", size: 110 }, block: { ...MADE[0].block, label: "3D model", title: "a wedge" } }
+  const reply = { id: "m2", role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", metrics: null, steps: [{ index: 0, kind: "tools", open: false, calls: [model] }] }
+  const p = await page(
+    f4(
+      { "GET /files": { ...F4_HOME, entries: rows }, ...content, "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m1", "Model a wedge"), reply], more: false, live: null }, "GET /models?chat=chat1": models() },
+      { file_save_as: { path: "/home/dev/Downloads/plan.pdf", size: 600 } },
+      { viewerBytes: { "plan.pdf": tinyPdf(), "wedge.stl": TINY_STL, node9: TINY_STL }, viewerLibs: { main: viewerFile("pdf.min.mjs"), worker: viewerFile("pdf.worker.min.mjs") } },
+    ),
+    { width: 1600, height: 900 },
+  )
+  await openServerTab(p)
+  const open = async (name) => {
+    await p.click(`${serverRow(name)} .frow__open`)
+    await p.dblclick(`${serverRow(name)} .frow__open`)
+  }
+  const frameOf = async (kind) => {
+    await p.waitForSelector(`iframe.sview__frame[data-view="${kind}"]`)
+    for (let i = 0; i < 100; i++) {
+      const f = p.frames().find((x) => x.url() === `${SEALED}/viewer/${kind}`)
+      if (f) return f
+      await new Promise((go) => setTimeout(go, 50))
+    }
+    throw new Error(`no ${kind} frame`)
+  }
+  // A PDF: its page drawn on a canvas, inside the frame.
+  await open("plan.pdf")
+  const pdf = await frameOf("pdf")
+  await pdf.waitForFunction(() => document.documentElement.getAttribute("data-drawn") === "1", null, { timeout: 30000 })
+  assert.equal(await pdf.evaluate(() => document.documentElement.getAttribute("data-pages")), "1")
+  assert.ok(await pdf.$eval("canvas.page", (c) => c.width > 100 && c.height > 50))
+  // Sealed: an opaque origin, scripts and nothing else; the app's page was handed the library
+  // as text and never ran it.
+  assert.equal(await pdf.evaluate(() => origin), "null")
+  assert.equal(await p.getAttribute("#viewer-body iframe.sview__frame", "sandbox"), "allow-scripts")
+  assert.equal(await p.evaluate(() => typeof window.pdfjsLib + typeof globalThis.pdfjsWorker), "undefinedundefined")
+  assert.deepEqual(await callsOf(p, "viewer_open"), [{ kind: "pdf" }])
+  assert.deepEqual(await callsOf(p, "viewer_bytes"), [{ source: "server", path: `${HOME}/plan.pdf`, root: null, node: null }])
+  // The frame fills the viewer; Download stays beside it.
+  assert.ok(await p.$eval("#viewer-body iframe.sview__frame", (f) => { const [a, b] = [f.getBoundingClientRect(), document.getElementById("viewer-body").getBoundingClientRect()]; return Math.abs(a.width - b.width) < 2 && Math.abs(a.height - b.height) < 2 && a.height > 200 }))
+  assert.deepEqual(await p.$$eval("#viewer-bar .btn", (l) => l.map((b) => b.textContent)), ["Download"])
+  await shot(p, "md-pdf-1600")
+  // A 3D model: its triangle read and drawn, or -- a browser without WebGL -- said so in the frame.
+  await open("wedge.stl")
+  const stl = await frameOf("model3d")
+  await stl.waitForFunction(() => document.documentElement.hasAttribute("data-triangles") || document.documentElement.hasAttribute("data-failed") || !!document.querySelector(".note"), null, { timeout: 30000 })
+  const drawn = await stl.evaluate(() => ({ triangles: document.documentElement.getAttribute("data-triangles"), note: document.querySelector(".note")?.textContent || "" }))
+  assert.ok(drawn.triangles === "1" || drawn.note === "3D cannot be drawn here.", JSON.stringify(drawn))
+  assert.deepEqual((await callsOf(p, "viewer_bytes")).at(-1), { source: "server", path: `${HOME}/wedge.stl`, root: null, node: null })
+  // The PDF's document was let go when the viewer moved on.
+  assert.ok((await callsOf(p, "sealed_close")).length >= 1)
+  // On a chat's card a model is drawn when asked for, by the file's id.
+  await p.click("#viewer-close")
+  await p.evaluate(() => document.querySelector('.chatrow[data-id="chat1"]').click())
+  await p.waitForSelector("#messages .mcard[data-media=model3d] .mcard__show")
+  assert.equal(await p.locator("#messages iframe").count(), 0, "nothing is loaded before it is asked for")
+  await p.click("#messages .mcard__show")
+  await p.waitForSelector("#messages .mcard iframe.sview__frame[data-view=model3d]")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "viewer_bytes" && c.args.node === "node9"))
+  assert.deepEqual((await callsOf(p, "viewer_bytes")).at(-1), { source: "server", path: null, root: null, node: "node9" })
+  assert.ok(await p.$eval("#messages .mcard iframe.sview__frame", (f) => f.getBoundingClientRect().height > 200 && f.getAttribute("sandbox") === "allow-scripts"))
+  await shot(p, "md-model-card-1600")
+  // A file that is gone says so, in the app's page, with no frame left behind.
+  await p.evaluate(() => (window.__mockConfig.commands.viewer_bytes = { __error: { status: 404, detail: "Not found" } }))
+  await p.evaluate(() => document.getElementById("nav-files").click())
+  await open("plan.pdf")
+  await p.waitForFunction(() => document.querySelector("#viewer-body .sview__note.is-error")?.textContent === "This file is no longer there.")
+  assert.equal(await p.locator("#viewer-body iframe").count(), 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("MD4: New file is made by the server and never written over -- a taken name is its sentence, with no listing read first; signing out with an edit not saved asks first", async () => {
+  const taken = fixture("file_create_exists")
+  const p = await page(f4({ "PUT /files/content": { __error: { status: 409, detail: taken.detail } } }), { width: 1280, height: 860 })
+  await openServerTab(p)
+  await p.waitForSelector(serverRow("lembas.md"))
+  const listings = await p.evaluate(() => window.__mock.api("GET", "/files").filter((c) => !c.args.path.startsWith("/files/")).length)
+  await p.click("#server-mkfile")
+  await p.fill("dialog[open] .dialog__input", "lembas.md")
+  await p.click("dialog[open] button[type=submit]")
+  await statusSays(p, "server-status", taken.detail)
+  assert.deepEqual(await bodies(p, "PUT", "/files/content"), [{ path: `${HOME}/lembas.md`, text: "", create: true }])
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/files").filter((c) => !c.args.path.startsWith("/files/")).length), listings, "the folder is not read before the file is made")
+  // A free name: made, and the folder read again.
+  await p.evaluate((made) => window.__mock.answer("PUT /files/content", made), { ...F4_CONTENT, path: `${HOME}/notes.md`, name: "notes.md", text: "", size: 0 })
+  await p.click("#server-mkfile")
+  await p.fill("dialog[open] .dialog__input", "notes.md")
+  await p.click("dialog[open] button[type=submit]")
+  await p.waitForFunction(() => window.__mock.api("PUT", "/files/content").length === 2)
+  assert.deepEqual((await bodies(p, "PUT", "/files/content"))[1], { path: `${HOME}/notes.md`, text: "", create: true })
+  // An edit that was not saved, then Sign out: asked first; Cancel keeps the edit and the sign-in.
+  await p.click(`${serverRow("lembas.md")} .frow__open`)
+  await p.dblclick(`${serverRow("lembas.md")} .frow__open`)
+  await p.waitForSelector("#viewer:not([hidden]) .viewer__md")
+  await p.locator("#viewer-modes .seg", { hasText: "Edit" }).click()
+  await p.waitForSelector("#viewer-body .cm-content[contenteditable=true]")
+  await p.click("#viewer-body .cm-content")
+  await p.keyboard.type("Twice.")
+  await p.waitForFunction(() => document.querySelector("#viewer-bar .viewer__said").textContent === "Not saved yet")
+  await p.evaluate(() => document.getElementById("settings-btn").click())
+  await p.waitForSelector("#sign-out")
+  await p.evaluate(() => document.getElementById("sign-out").click())
+  await p.waitForSelector("dialog[open] .dialog__title")
+  assert.equal(await p.textContent("dialog[open] .dialog__title"), "Not saved yet")
+  assert.deepEqual(await p.$$eval("dialog[open] .dialog__actions .btn", (l) => l.map((b) => b.textContent)), ["Cancel", "Discard"])
+  await p.locator("dialog[open] .dialog__actions .btn", { hasText: "Cancel" }).click()
+  await p.waitForFunction(() => !document.querySelector("dialog[open]"))
+  assert.equal((await callsOf(p, "sign_out")).length, 0)
+  assert.ok(await p.$eval("#viewer-body .cm-content", (el) => el.textContent.includes("Twice.")), "the edit is still there")
+  // Discard: signed out.
+  await p.evaluate(() => document.getElementById("sign-out").click())
+  await p.locator("dialog[open] .dialog__actions .btn", { hasText: "Discard" }).click()
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "sign_out"))
+  assert.equal((await callsOf(p, "sign_out")).length, 1)
+  assert.deepEqual(p.errors, [])
+})
+
+test("MD5: a model that is not for chatting is in no chat's picker; sound and video a message carries have players; Settings lists the MCP servers and opens a sign-in in the system's browser, only on the instance itself", async () => {
+  const listed = fixture("models")
+  const other = (id, name, capability) => ({ ...listed.models[0], id, ref: `cloud/${id}`, name, capability, default: false })
+  const all = { ...listed, models: [...listed.models, other("embed-small", "Embed Small", "embedding"), other("film-1", "Film One", "video")] }
+  const song = { id: "att9", name: "song.wav", mime: "audio/wav", size: 844, kind: "audio", image: false, width: 0, height: 0 }
+  const clip = { id: "att10", name: "clip.mp4", mime: "video/mp4", size: 9000, kind: "video", image: false, width: 0, height: 0 }
+  const mcp = fixture("mcp_servers")
+  const server = new URL(mcp.servers.find((m) => m.auth.signin_url).auth.signin_url).origin
+  const p = await page(
+    {
+      status: status({ server }),
+      routes: baseRoutes({
+        "GET /models": all,
+        "GET /models?chat=chat1": all,
+        "GET /chats/chat1": { chat: chatRow(), messages: [{ ...userMessage("m1", "Listen to this"), attachments: [song, clip] }], more: false, live: null },
+        "GET /mcp": mcp,
+      }),
+      streams: {},
+    },
+    { width: 1280, height: 900 },
+  )
+  await openChatRow(p, "chat1")
+  // The players: fed by the attachment's id, never a path.
+  await p.waitForSelector("#messages .ptile[data-kind=audio] audio.mcard__audio")
+  await p.waitForSelector("#messages .ptile[data-kind=video] video.mcard__video")
+  assert.deepEqual((await callsOf(p, "media_open")).sort((a, b) => a.kind.localeCompare(b.kind)), [{ source: "attachment", kind: "audio", attachment: "att9" }, { source: "attachment", kind: "video", attachment: "att10" }])
+  assert.ok(await p.$eval("#messages .ptile audio", (a) => a.controls && a.src.startsWith("http://media.test/audio/att9")))
+  assert.equal(await p.textContent("#messages .ptile[data-kind=audio] .ptile__name"), "song.wav")
+  assert.ok(await inWindow(p, "#messages .ptile"))
+  // The picker: every chat model the server lists, and neither of the two that are for something else.
+  await p.click(".cchip--model")
+  await p.waitForSelector(".menu .menu__item")
+  const offered = await p.$$eval(".menu .menu__item", (l) => l.map((x) => x.textContent))
+  for (const m of listed.models) assert.ok(offered.some((o) => o.includes(m.name)), m.name)
+  assert.ok(!offered.some((o) => /Embed Small|Film One/.test(o)), offered.join(" | "))
+  await p.keyboard.press("Escape")
+  // Settings: the MCP servers, each with how its sign-in stands.
+  await p.evaluate(() => document.getElementById("settings-btn").click())
+  await p.waitForSelector("#set-mcp .set__line[data-mcp]")
+  const rows = await p.$$eval("#set-mcp .set__line[data-mcp]", (l) => l.map((r) => ({ id: r.dataset.mcp, state: r.dataset.state, label: r.querySelector(".set__label").textContent, hint: r.querySelector(".set__hint").textContent, control: r.querySelector(".set__control").textContent, button: !!r.querySelector("button") })))
+  assert.deepEqual(rows.map((r) => [r.id, r.state, r.label, r.button]), [["mcp1", "ready", "Tracker", false], ["mcp2", "signed_in", "Mail", false], ["mcp3", "signed_out", "Notes", true], ["mcp4", "needs_signin", "Wiki", false]])
+  assert.equal(rows[0].hint, "4 tools")
+  assert.equal(rows[1].hint, "7 tools · Signed in as frodo@example.org.")
+  assert.match(rows[2].hint, /Not signed in/)
+  assert.match(rows[3].hint, /Needs sign-in/)
+  assert.equal(rows[3].control, "An administrator signs in to this one.", "a shared sign-in that is not the person's to make")
+  assert.ok(await p.$eval("#settings-nav", (n) => [...n.querySelectorAll(".navrow")].some((b) => b.dataset.id === "mcp")))
+  await shot(p, "md-mcp-1280")
+  // Sign in: the instance's own page, in the system's browser; asked again on coming back.
+  await p.click('#set-mcp .set__line[data-mcp="mcp3"] button')
+  assert.deepEqual(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "open_external").map((c) => c.args.url)), [mcp.servers[2].auth.signin_url])
+  const asks = await p.evaluate(() => window.__mock.api("GET", "/mcp").length)
+  const signedIn = { servers: mcp.servers.map((m) => (m.id === "mcp3" ? { ...m, auth: { ...m.auth, state: "signed_in", account: "frodo@example.org", signin_url: null } } : m)) }
+  await p.evaluate((now) => (window.__mock.answer("GET /mcp", now), window.dispatchEvent(new Event("focus"))), signedIn)
+  await p.waitForFunction(() => document.querySelector('#set-mcp .set__line[data-mcp="mcp3"]')?.dataset.state === "signed_in")
+  assert.equal(await p.evaluate(() => window.__mock.api("GET", "/mcp").length), asks + 1)
+  assert.equal(await p.locator('#set-mcp .set__line[data-mcp="mcp3"] button').count(), 0)
+  // Narrow: the rows keep their two tracks inside the window.
+  await p.setViewportSize({ width: 390, height: 844 })
+  assert.ok(await inWindow(p, "#set-mcp .set__line, #set-mcp .set__control"))
+  await shot(p, "md-mcp-390")
+  assert.deepEqual(p.errors, [])
+
+  // A sign-in page anywhere but on the instance is not opened at all: no button.
+  const elsewhere = await page({ status: status(), routes: baseRoutes({ "GET /mcp": mcp }), streams: {} }, { width: 1280, height: 900 })
+  await elsewhere.evaluate(() => document.getElementById("settings-btn").click())
+  await elsewhere.waitForSelector("#set-mcp .set__line[data-mcp]")
+  assert.equal(await elsewhere.locator("#set-mcp .set__line button").count(), 0)
+  assert.deepEqual(elsewhere.errors, [])
 })
 
 // --- Run ----------------------------------------------------------------------------------------

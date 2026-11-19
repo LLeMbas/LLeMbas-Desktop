@@ -10,9 +10,9 @@ import { renderBar, initBar } from "./titlebar.js"
 import { renderSetup, initSetup } from "./setup.js"
 import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer } from "./viewer.js"
-import { initExplorer, showLocal, showFilesTab, openServerFile } from "./explorer.js"
+import { initExplorer, showLocal, showFilesTab, openServerFile, revealServerFile } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId, mediaFor, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
+import { initChat, openChat, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
 import { initPython } from "./python.js"
 import { pythonChanged } from "./chat.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
@@ -28,7 +28,8 @@ import { showMemory } from "./memory.js"
 import { initVoice, voiceFor } from "./voice.js"
 import { canDraw, openDraw } from "./draw.js"
 import { closePopover } from "./popup.js"
-import { noteSubagentsCap } from "./models.js"
+import { noteSubagentsCap, forChat } from "./models.js"
+import { initMedia } from "./media.js"
 
 let status = null
 let view = "" // "setup" | "app"
@@ -128,7 +129,7 @@ let modelsAt = 0 // when /models was last read
 async function loadModels({ keep = false } = {}) {
   try {
     const r = await get("/models")
-    models = r.models || []
+    models = forChat(r.models)
     noteSubagentsCap(r.subagents_cap)
     modelsAt = Date.now()
   } catch {
@@ -314,6 +315,8 @@ async function boot() {
   })
   initVoice({ where: mediaFor, alert: (text) => alertIn(text), note: (text) => alertIn(text, true) })
   initPython({ me: () => me, changed: () => pythonChanged() })
+  // What a model made: "Open in Files" leads to the server's files, at the file where it is.
+  initMedia({ openInFiles: (m) => (showFiles("server"), revealServerFile(m.path || "")), woken: (job) => mediaJobEnded(job) })
   initChat({
     status: () => status,
     thisDevices,

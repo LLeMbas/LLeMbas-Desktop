@@ -69,3 +69,7 @@ fvers__get          a hook for the tests; styled as .btn
 fvers__restore      a hook for the tests; styled as .btn
 nbcell--words       a notebook's cell of words; styled as .nbcell and by its parts
 nbcell--code        a notebook's cell of code; styled as .nbcell and by its parts
+mcard__show         a hook for the tests: draws a 3D model when asked; styled as .btn
+mcard__files        a hook for the tests: Open in Files; styled as .btn
+mcard__download     a hook for the tests: Download; styled as .btn
+mjob__cancel        a hook for the tests: Cancel; styled as .btn

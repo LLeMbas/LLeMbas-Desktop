@@ -624,7 +624,14 @@ function explorer(el, source) {
     const hit = Number.isFinite(x) ? document.elementFromPoint(x, y)?.closest?.("[data-drop]") : null
     return hit && el.pane.contains(hit) ? hit.dataset.drop : (current ?? source.top())
   }
-  return { go, refresh, changed, drawTree, say, act, newIn, folderAt, current: () => current ?? source.top() }
+  /** Go to the folder a file is in and choose the file there; false when it is not there. */
+  const reveal = async (path) => {
+    await go(dirOf(path))
+    const e = shown.find((x) => x.path === path)
+    if (e) choose(e)
+    return !!e
+  }
+  return { go, refresh, changed, drawTree, say, act, newIn, folderAt, reveal, current: () => current ?? source.top() }
 }
 
 // --- This computer ------------------------------------------------------------------------------
@@ -666,6 +673,7 @@ function localSource(root) {
         size: f.size,
         sha: f.sha,
         media: () => invoke("media_open", { source: "local", kind: fileKind(f.name, f.kind), root, path: f.path }),
+        sealed: { source: "local", root, path: f.path },
         save: editable ? (text, { base, force }) => invoke("local_write", { root, path: f.path, text, base: base || null, force: !!force }) : undefined,
         reload: () => open(e),
       })
@@ -892,13 +900,12 @@ function serverSource() {
     open: (e) => openServerFile(e.path, e.name, e),
     ops: {
       mkdir: (dir, name) => post("/files/mkdir", { path: dir, name }),
-      // A save to a path with no file makes one: an empty file of that name. A save to a path
-      // with a file would empty it, so the folder is read first and a taken name is refused here.
+      // `create`: the server makes a new, empty file and never writes over one -- a taken name
+      // (a file's or a folder's) is its 409, said in its own sentence. Nothing is checked here
+      // first: between a look and a write somebody else's file could have appeared.
       mkfile: async (dir, name) => {
         if (name.includes("/")) throw { detail: t("A file needs a name without a slash.") }
-        const there = await get(SERVER_FILES.list(dir === serverRoot ? "/" : dir))
-        if ((there?.entries || []).some((e) => e.name === name)) throw { detail: t("There is already something called %(name)s here.", { name }) }
-        return api("PUT", "/files/content", { path: `${dir.replace(/\/$/, "")}/${name}`, text: "" })
+        return api("PUT", "/files/content", { path: `${dir.replace(/\/$/, "")}/${name}`, text: "", create: true })
       },
       rename: (e, name) => post("/files/rename", { path: e.path, name }),
       move: async (paths, to) => (paths.length === 1 ? (await post("/files/move", { path: paths[0], to }), { done: 1, failed: [] }) : batched(await post("/files/batch", { op: "move", paths, to }))),
@@ -978,6 +985,7 @@ export async function openServerFile(path, name, entry) {
       size: f.size,
       sha: f.sha,
       media: () => invoke("media_open", { source: "server", kind, path: at }),
+      sealed: { source: "server", path: at },
       download: () => downloadFile(at, f.name || name),
       // Only where the server says the person may write it (a server before that says nothing).
       save: f.writable === true && !f.withheld ? save : undefined,
@@ -986,6 +994,19 @@ export async function openServerFile(path, name, entry) {
   } catch (err) {
     return openViewer({ name, path, where, error: why(err) })
   }
+}
+
+/**
+ * Show a file of the server's tree where it is: its folder listed, the file chosen (a chat's
+ * "Open in Files"). One that is not there any more -- moved, renamed, in the trash -- is said.
+ */
+export async function revealServerFile(path) {
+  showFilesTab("server")
+  if (!server || !path || !path.startsWith("/")) return false
+  serverSaid("")
+  const found = await server.reveal(path).catch(() => false)
+  if (!found) serverSaid(t("This file is no longer there."), true)
+  return found
 }
 
 let tab = "local"

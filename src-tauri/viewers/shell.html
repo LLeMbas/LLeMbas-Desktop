@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg, Canvas); color: var(--ink, CanvasText);
+       font: 0.875rem/1.5 system-ui, sans-serif; }
+#view { box-sizing: border-box; min-height: 100%; padding: 0.5rem; }
+.note, .hint { margin: 0; padding: 1rem; color: var(--muted, GrayText); text-align: center; }
+.hint { padding: 0.25rem; font-size: 0.75rem; }
+.pages { display: grid; gap: 0.5rem; justify-items: center; }
+.page { display: block; max-width: 100%; height: auto; background: white;
+        border: thin solid var(--line, GrayText); }
+.model { display: block; width: 100%; height: calc(100vh - 3rem); touch-action: none;
+         cursor: grab; }
+button { display: block; margin: 0.75rem auto; padding: 0.5rem 1rem; font: inherit;
+         color: inherit; background: transparent; border: thin solid var(--line, GrayText);
+         border-radius: 0.375rem; min-height: 2.75rem; cursor: pointer; }
+</style></head>
+<body><div id="view"></div>
+<script>/*SCRIPT*/</script>
+</body></html>

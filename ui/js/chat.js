@@ -13,7 +13,7 @@ import { markdown } from "./markdown.js"
 import { openViewer, showKind } from "./viewer.js"
 import { readLocal } from "./explorer.js"
 import { menu, ask, showLine, popover, closePopover } from "./popup.js"
-import { avatar, modelKey, modelOf, modelFor, findModel, modelLabel, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
+import { avatar, forChat, modelKey, modelOf, modelFor, findModel, modelLabel, agentsControl, teamPossible, namedOnly, subagentsCap, noteSubagentsCap, SUBAGENTS_HINT, SUBAGENTS_OWN, levelsOf, levelWord, picture } from "./models.js"
 import { readyIds, sending, sent, discard } from "./attach.js"
 import { watchActivity, activityChanged, planList, activityButton, treeChanged, showPanel, panelOpen, stateWord } from "./activity.js"
 import { agentBlock, agentReady, agentState, onAgentChange } from "./agent.js"
@@ -30,6 +30,7 @@ import { aimTerminal, terminalButton, terminalOpen, toggleTerminal } from "./ter
 import { scopePopover } from "./scope.js"
 import { pickDirectory } from "./dirpick.js"
 import { readAloudButton } from "./voice.js"
+import { mediaCard, jobCard, attachmentTile, forgetMedia } from "./media.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
@@ -393,9 +394,11 @@ function copyText(text, button) {
 
 /**
  * A file a message carries, as a tile: a picture as its thumbnail (read through the bridge, as
- * a `data:` URL), anything else as its icon, name and size.
+ * a `data:` URL), sound and video with a player (media.js), anything else as its icon, name
+ * and size.
  */
 export function fileTile(a) {
+  if ((a.kind === "audio" || a.kind === "video") && a.id) return attachmentTile(a)
   const tile = h(
     "li",
     { class: `tile${a.image ? " tile--image" : ""}`, title: a.name },
@@ -689,12 +692,15 @@ function toolCall(c, chat, live, key) {
     h("span", { class: "call__facts" }, state === "denied" ? h("span", { class: "call__fact is-bad", text: t("Denied") }) : null, facts, took ? h("span", { class: "call__fact call__took", text: took }) : null),
     h("span", { class: "step__chev" }, icon(ICONS.chevron)),
   )
+  // What the call made (a picture, a video, a track, a 3D model) is drawn under its row,
+  // without a click; a long generation as its card, which follows the job (media.js).
+  const made = state === "done" ? (c.media ? mediaCard(c.media) : c.media_job ? jobCard(c.media_job) : null) : null
   // An edit shows its change without a click, as the web and the phone do.
   const el = h("details", { class: `call call--${kind} is-${state}`, open: kind === "edit" && !!c.diff ? true : null, dataset: { key, state, kind } }, summary, body.childElementCount ? body : null)
   if (isShow) {
     el.append(h("button", { type: "button", class: "btn btn--sm call__open", text: t("Open in the viewer"), onclick: () => openShown(c, chat) }))
   }
-  return el
+  return made ? [el, h("div", { class: "call__made" }, made)] : el
 }
 
 /** A file the agent showed: from this computer when the chat runs here, else from the server. */
@@ -878,7 +884,7 @@ class Live {
     // opened stays open as the frames come again.
     const calls = Array.isArray(tail.calls) ? tail.calls : []
     const was = new Set([...this.calls.querySelectorAll("details[open]")].map((d) => d.dataset.key))
-    this.calls.replaceChildren(...calls.map((c, i) => toolCall(c, this.chat, true, `tail.${c.id || i}`)).filter(Boolean))
+    this.calls.replaceChildren(...calls.flatMap((c, i) => toolCall(c, this.chat, true, `tail.${c.id || i}`)).filter(Boolean))
     for (const d of this.calls.querySelectorAll("details")) if (was.has(d.dataset.key)) d.open = true
     this.calls.hidden = !this.calls.childElementCount
   }
@@ -1349,7 +1355,7 @@ function initHead() {
 /** The models this chat may switch to (its data group's), or the account's when that fails. */
 async function chatModels(chat) {
   try {
-    return (await get(`/models?chat=${encodeURIComponent(chat.id)}`)).models || []
+    return forChat((await get(`/models?chat=${encodeURIComponent(chat.id)}`)).models)
   } catch {
     return ctx.models()
   }
@@ -2088,6 +2094,8 @@ export async function openChat(id) {
   if (!again && open?.chat?.id !== id) lastLive = null
   const was = again && lastLive?.chat?.id === id ? lastLive : null
   if (open?.chat?.id !== id) discard()
+  // Another chat: the cards of what this one made, their frames and their jobs' timers go.
+  if (open?.chat?.id !== id) forgetMedia()
   if (open?.live) open.live.stop()
   if (open?.chat?.id !== id) pythonFor(null)
   open = again ? { ...open, live: null } : { chat: { id }, live: null, more: false }
@@ -2201,8 +2209,22 @@ function reload() {
   if (open?.chat?.id) openChat(open.chat.id)
 }
 
+/**
+ * A long generation of this chat ended by itself (media.js saw its job end): the server wakes
+ * the chat with a reply nobody here asked for. Read the chat again -- now, and once more a
+ * moment later where the server had not yet told the chat -- unless a reply is being followed.
+ */
+export function mediaJobEnded(job) {
+  const id = open?.chat?.id
+  if (!id || (job?.chat_id && job.chat_id !== id)) return
+  const again = () => open?.chat?.id === id && !open.live && reload()
+  again()
+  if (job?.told !== true) setTimeout(again, 4000)
+}
+
 export function closeChat() {
   if (open?.live) open.live.stop()
+  forgetMedia()
   lastLive = null
   open = null
   pythonFor(null)

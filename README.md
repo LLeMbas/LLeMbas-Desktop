@@ -24,7 +24,10 @@ an app of its own.
 - **A viewer** for what you open and for what the agent shows you: Markdown drawn, code
   highlighted, text, HTML in a sealed frame that can reach neither the app nor the network,
   pictures (an SVG only ever as a picture), sound and video, a table for CSV and TSV, a notebook
-  read as text. A text file you may write is edited and saved there.
+  read as text, a PDF and a 3D model in a sealed frame of their own. A text file you may write is
+  edited and saved there.
+- **What a model made** -- a picture, a video, music, a 3D model -- as a card in the chat, with
+  Open in Files and Download; a long generation as a card that follows it and can cancel it.
 - **Attachments** from the file dialog, a drop on the window or a paste; **edit** a message,
   **regenerate** a reply, rename, archive or delete a chat, and open it in the web interface.
 - **A command palette** (Ctrl+K) for commands and every chat by its title.
@@ -103,6 +106,10 @@ device.
   (`llembas-media:`, `src-tauri/src/media.rs`): the page holds an address that names one file,
   never the token, and only what a webview decodes and never runs is served there. An SVG is
   drawn as an image, never as a document.
+- A PDF and a 3D model are drawn by the server's own viewers (PDF.js; a small WebGL reader),
+  pinned and compiled into the app (`src-tauri/viewers/`, `scripts/fetch-vendor.sh`) and run only
+  in a sealed frame, which is handed the file's bytes once: a parser of somebody else's file
+  never runs in the page that has the bridge, and nothing is loaded from the network.
 - HTML is shown in a sealed frame on an address of its own: scripts in it run, but it has no
   access to the app, no network and no way to navigate anywhere.
 - Links in a reply open in your browser, and only web and mail links.

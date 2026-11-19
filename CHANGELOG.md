@@ -41,11 +41,37 @@ server's tab keeps what it had, and what the server does not have says so in its
 - **A file is copied between the two.** *Copy to the server…* on a file of this computer and
   *Copy to this computer…* on a file of the server's, each into a folder walked to; a copy never
   replaces what is there.
+- **What a model made is shown in the chat.** A generated or edited picture, a video, a piece of
+  music and a 3D model each get a card under the tool call that made them: the picture drawn,
+  video and music in the system's own players (they can seek), a 3D model drawn when you press
+  *Preview*. Each card has **Open in Files**, which shows the file in *Files › Server* where it
+  is now, and **Download**, to a place chosen in the system's dialog. A file since put in the
+  trash says it is no longer there.
+- **A long generation has a card of its own**: what is being made, how it stands, for how long,
+  and **Cancel**. The card follows the job while it is on the screen; when the job is done the
+  player appears on the same card and the chat shows the reply the server adds. One that failed
+  says why, in the server's words.
+- **PDF and 3D models are drawn in the viewer** (and a 3D model on a chat's card), by the same
+  viewers as the server's web interface, carried in the app: PDF.js for a PDF, pages drawn as
+  you ask for more; a preview of a model's shape (`.glb`, `.gltf`, `.stl`, `.obj`) that turns
+  with the pointer. Nothing is fetched from the network for it.
+- **Sound and video attached to a message** are shown with a player.
+- **Settings › MCP servers**: the MCP servers your chats on the server may use, how many tools
+  each offers, and how its sign-in stands. One that needs you to sign in has a **Sign in** button
+  that opens your server's page for it in the system's browser; the list is read again when you
+  come back to the app.
 
 ### Changed
 
-- A PDF and a 3D model are shown as their details and Download for now; viewers for them come
-  with the server's own.
+- **New file** is made by the server and never written over an existing one: a name that is
+  taken is refused in the server's own sentence. (Before, the app looked at the folder first and
+  then wrote, and a file that appeared in between could have been emptied.)
+- **Signing out with an edit that was not saved asks first.** It used to be dropped without a
+  word. Signing out is also how another server is chosen.
+- A model that is not for chatting -- an embedding model, or one for speech, pictures or video --
+  is never offered in a chat's or a schedule's model picker, whatever a server lists.
+- An archive is still shown as its details and Download: the server's answer for a file carries
+  no listing of what is inside.
 
 ### Security
 
@@ -55,6 +81,17 @@ server's tab keeps what it had, and what the server does not have says so in its
   player wanted. Only what a webview decodes and never runs is served there, each answer
   sandboxed by its own policy. The page's policy gains that scheme for images and media, and
   `blob:` for media (a player that will not take the address is handed the file whole, once).
+- A PDF and a 3D model are somebody else's file read by a parser, so they are never read in the
+  app's own page. They are drawn in a sealed frame on the app's sealed scheme: an opaque origin
+  with no access to the app, no network and no sign-in. The viewer's page and scripts are the
+  server's own, pinned by hash and compiled into the app; the app's page hands the frame the
+  file's bytes (read by Rust) and PDF.js as text, which the page's own policy does not let it
+  run. Nothing comes back from the frame but the word that it is ready.
+- A generated file is fetched by its id, and an attached sound or video by its attachment's id,
+  through the same `llembas-media:` tickets: the page still never holds the sign-in, and only
+  pictures, sound and video are served there.
+- A sign-in page for an MCP server is opened only when it is a page of the server the app is
+  signed in to; the app never sees or stores that sign-in.
 
 ### Fixed
 

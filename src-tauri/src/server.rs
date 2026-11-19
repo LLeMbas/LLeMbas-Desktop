@@ -784,6 +784,35 @@ pub fn raw_path(path: &str, version: Option<&str>, inline: bool) -> Result<Strin
     Ok(out)
 }
 
+/// `/files/raw?node=…` for a file by its id (a generated file's `node_id`): the address keeps
+/// working after the file is renamed or moved. `inline` as in `raw_path`.
+pub fn raw_node(node: &str, inline: bool) -> Result<String, ApiError> {
+    if !plain_id(node) {
+        return Err(ApiError::new(400, format!("Not a file's id: {node}")));
+    }
+    Ok(format!(
+        "/files/raw?node={node}{}",
+        if inline { "&inline=1" } else { "" }
+    ))
+}
+
+/// `/attachments/<id>` for a file a message carries (sound or video the person attached).
+pub fn attachment_path(id: &str) -> Result<String, ApiError> {
+    if !plain_id(id) {
+        return Err(ApiError::new(400, format!("Not an attachment's id: {id}")));
+    }
+    Ok(format!("/attachments/{id}"))
+}
+
+/// An id the server made: letters, digits, `-` and `_`, nothing that could change the address.
+fn plain_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Where a download is written until it is whole: beside where it is going.
 fn part_of(dest: &Path) -> PathBuf {
     let mut name = dest
@@ -819,9 +848,13 @@ pub fn download(
     version: Option<&str>,
     dest: &Path,
 ) -> Result<u64, ApiError> {
-    let raw = raw_path(path, version, false)?;
+    download_raw(app, token, &raw_path(path, version, false)?, dest)
+}
+
+/// `raw` (from `raw_path` or `raw_node`), written to `dest` as it arrives.
+pub fn download_raw(app: &str, token: &str, raw: &str, dest: &Path) -> Result<u64, ApiError> {
     let res = agent(Duration::from_secs(120))
-        .get(&format!("{app}{}", checked_path(&raw)?))
+        .get(&format!("{app}{}", checked_path(raw)?))
         .set("authorization", &format!("Bearer {token}"))
         .call()?;
     save_body(res, dest)
@@ -1354,6 +1387,17 @@ mod tests {
         assert!(raw_path("/a\nb", None, false).is_err());
         assert!(raw_path("/a", Some("v&inline=1"), false).is_err());
         assert!(raw_path("/a", Some(""), false).is_err());
+        // By its id: a generated file, wherever it is now.
+        assert_eq!(
+            raw_node("node7", true).unwrap(),
+            "/files/raw?node=node7&inline=1"
+        );
+        assert_eq!(raw_node("a-b_9", false).unwrap(), "/files/raw?node=a-b_9");
+        assert_eq!(attachment_path("att1").unwrap(), "/attachments/att1");
+        for bad in ["", "a&path=/x", "a/b", "a b", "a?x", "..", "a#b"] {
+            assert!(raw_node(bad, true).is_err(), "{bad}");
+            assert!(attachment_path(bad).is_err(), "{bad}");
+        }
         assert_eq!(
             part_of(Path::new("/tmp/waybread.zip")),
             Path::new("/tmp/waybread.zip.part")

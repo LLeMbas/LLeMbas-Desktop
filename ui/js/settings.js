@@ -8,6 +8,7 @@ import { invoke, listen, get, openLink } from "./bridge.js"
 import { agentBlock, onAgentChange, link } from "./agent.js"
 import { localTheme, chooseTheme, accountTheme, accountThemes, chosenLanguage, chooseLanguage, accountLanguage } from "./look.js"
 import { why } from "./bridge.js"
+import { mayLeave } from "./viewer.js"
 
 let folderError = ""
 let current = () => null
@@ -16,6 +17,7 @@ const SECTIONS = [
   ["account", ICONS.user, () => t("Account")],
   ["agent", ICONS.terminal, () => t("Agent")],
   ["folders", ICONS.folder, () => t("Project folders")],
+  ["mcp", ICONS.tools, () => t("MCP servers")],
   ["look", ICONS.contrast, () => t("Appearance")],
   ["notify", ICONS.bell, () => t("Notifications")],
   ["about", ICONS.info, () => t("About")],
@@ -55,6 +57,7 @@ export function renderSettings(s) {
   const nav = clear($("settings-nav"))
   for (const [id, ico, title] of SECTIONS) {
     if (id === "folders" && !(s.linked && s.remote)) continue
+    if (id === "mcp" && !mcpShown(s)) continue
     nav.append(h("button", { type: "button", class: "navrow", dataset: { id }, onclick: () => scrollToSection(id) }, h("span", { class: "navrow__icon" }, icon(ico)), h("span", { text: title() })))
   }
   const box = clear($("settings-body"))
@@ -67,7 +70,9 @@ export function renderSettings(s) {
       line(
         who ? t("Signed in as %(who)s.", { who }) : t("Sign in"),
         t("Signing out gives the app's sign-in up on the server; the agent's link stays. Sign out to use another server."),
-        h("button", { type: "button", class: "btn btn--sm", text: t("Sign out"), onclick: () => invoke("sign_out") }),
+        // Signing out closes what is open (and is how another server is chosen): an edit in the
+        // viewer that was not saved is asked about first, never dropped without a word.
+        h("button", { type: "button", class: "btn btn--sm", id: "sign-out", text: t("Sign out"), onclick: async () => (await mayLeave()) && invoke("sign_out") }),
       ),
     ),
   )
@@ -129,6 +134,9 @@ export function renderSettings(s) {
     )
   }
 
+  const servers = mcpSection(s)
+  if (servers) box.append(servers)
+
   box.append(lookSection())
 
   box.append(
@@ -163,6 +171,90 @@ export function renderSettings(s) {
     ),
   )
   if (s.account && appsFor !== s.server) askApps(s.server)
+  if (s.account && mcpFor !== s.server) askMcp(s.server)
+}
+
+// --- The MCP servers and their sign-ins (GET /mcp) --------------------------------------------------
+//
+//   GET /mcp  { servers: [{ id, slug, name, tools, auth: { kind, state, shared, account,
+//                                                           expires_at, renews, signin_url } }] }
+//
+// The servers an administrator added whose tools the person's chats may be offered. One that
+// has to be signed in to (`signed_out`), or whose sign-in the provider stopped honouring
+// (`needs_signin`), offers none of its tools until somebody signs in -- which happens in a
+// browser, against the instance, on the page the server names. The app never sees a token: it
+// opens that page in the system's browser and asks again when the window is come back to.
+
+let mcp = null // the servers; null: not known (an older server, no permission, not asked yet)
+let mcpFor = null // the server it was asked of
+let mcpAwaited = false // a sign-in page was opened: ask again when the window has the focus
+
+async function askMcp(server) {
+  mcpFor = server
+  try {
+    const r = await get("/mcp")
+    mcp = Array.isArray(r?.servers) ? r.servers : null
+  } catch {
+    mcp = null
+  }
+  if (!$("settings").hidden) renderSettings(current())
+}
+
+const mcpShown = (s) => !!s.account && mcpFor === s.server && !!mcp?.length
+
+/** A sign-in page, only where it is a page of the instance the app is signed in to. */
+function signinPage(s, url) {
+  try {
+    const page = new URL(String(url || ""))
+    return page.origin === new URL(s.server).origin && /^https?:$/.test(page.protocol) ? page.href : ""
+  } catch {
+    return ""
+  }
+}
+
+function mcpSection(s) {
+  if (!mcpShown(s)) return null
+  const rows = mcp.map((m) => {
+    const auth = m.auth && typeof m.auth === "object" ? m.auth : {}
+    const waits = auth.state === "needs_signin" || auth.state === "signed_out"
+    const page = waits ? signinPage(s, auth.signin_url) : ""
+    const tools = t("%(n)s tools", { n: Number(m.tools) || 0 })
+    const state =
+      auth.state === "needs_signin"
+        ? t("Needs sign-in: its tools are not offered until somebody signs in again.")
+        : auth.state === "signed_out"
+          ? t("Not signed in: its tools are not offered until somebody signs in.")
+          : auth.state === "signed_in"
+            ? auth.account
+              ? t("Signed in as %(who)s.", { who: String(auth.account) })
+              : t("Signed in")
+            : ""
+    const control = page
+      ? h("button", {
+          type: "button",
+          class: "btn btn--sm btn--primary",
+          text: t("Sign in"),
+          "aria-label": `${t("Sign in")}: ${m.name || m.slug || ""}`,
+          onclick: () => {
+            mcpAwaited = true
+            openLink(page)
+          },
+        })
+      : waits
+        ? h("span", { class: "set__value", text: t("An administrator signs in to this one.") })
+        : h("span", { class: "set__value", text: auth.state === "signed_in" ? t("Signed in") : t("Ready") })
+    const row = line(String(m.name || m.slug || ""), [tools, state].filter(Boolean).join(" · "), control)
+    row.dataset.mcp = String(m.id || "")
+    row.dataset.state = String(auth.state || "")
+    return row
+  })
+  return section(
+    "mcp",
+    t("MCP servers"),
+    h("p", { class: "set__intro", text: t("Tools from other services that your chats on the server may use. Signing in to one happens in your browser, on your server.") }),
+    rows,
+    h("div", { class: "set__buttons" }, h("button", { type: "button", class: "btn btn--sm", id: "mcp-refresh", text: t("Read again"), onclick: () => askMcp(s.server) })),
+  )
 }
 
 // --- The release the server recommends (GET /apps) --------------------------------------------------
@@ -282,6 +374,13 @@ export function initSettings(getStatus) {
   })
   onAgentChange(() => {
     if (!$("settings").hidden) renderSettings(current())
+  })
+  // Back from the browser a sign-in was opened in: how the servers stand is asked again.
+  window.addEventListener("focus", () => {
+    const s = current()
+    if (!mcpAwaited || !s?.account) return
+    mcpAwaited = false
+    askMcp(s.server)
   })
   $("settings-body").addEventListener("scroll", () => {
     // The group at the top is the one marked beside them.

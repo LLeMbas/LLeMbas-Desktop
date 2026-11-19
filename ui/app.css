@@ -751,6 +751,53 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 }
 .call__open { justify-self: start; margin: 0 var(--sp-3) var(--sp-3); }
 
+/* What a call made: a picture, a video, a track, a 3D model, under the call's row. The card is
+   as wide as the reply at most; what it shows takes the room first, then one bar -- the name
+   (which gives), the facts, the two buttons -- which wraps to rows of its own where it is narrow. */
+.call__made { min-width: 0; padding: var(--sp-1) var(--sp-2) var(--sp-2); }
+.mcard { margin: 0; min-width: 0; max-width: var(--w-prose-sm); display: grid; gap: var(--sp-2); padding: var(--sp-2); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); container: mcard / inline-size; }
+.mcard__view { min-width: 0; display: grid; justify-items: center; background: var(--code-bg); border-radius: var(--radius-lg); overflow: hidden; }
+.mcard__view--model { height: var(--h-media); align-items: center; }
+.mcard__image { display: block; max-width: 100%; height: auto; max-height: var(--h-page-max); object-fit: contain; }
+.mcard__video { display: block; width: 100%; max-height: var(--h-page-max); background: var(--code-bg); }
+.mcard__audio { display: block; width: 100%; }
+.mcard__note { margin: 0; padding: var(--sp-4); font-size: var(--text-sm); color: var(--ink-muted); text-align: center; }
+.mcard__bar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--sp-2) var(--sp-3); align-items: center; min-width: 0; }
+.mcard__name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--text-sm) var(--font-ui); color: var(--ink); }
+.mcard__facts { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mcard__do { display: flex; gap: var(--sp-2); }
+.mcard__said { margin: 0; font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
+.mcard__said:empty { display: none; }
+.mcard__said.is-error { color: var(--warning); }
+@container mcard (max-width: 26rem) {
+  .mcard__bar { grid-template-columns: minmax(0, 1fr) auto; }
+  .mcard__do { grid-column: 1 / -1; }
+  .mcard__do .btn { flex: 1 1 0; min-height: var(--control-h); }
+}
+/* A long generation: mark · what · how it stands · for how long · Cancel, on fixed tracks (the
+   time's is as wide as the longest time, so nothing moves as it counts); what was asked under it. */
+.mjob { min-width: 0; max-width: var(--w-prose-sm); display: grid; gap: var(--sp-1); }
+.mjob:not([data-state="done"]) { padding: var(--sp-2) var(--sp-3); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
+.mjob__row { display: grid; grid-template-columns: var(--dot-size) auto minmax(0, 1fr) var(--w-num) auto; gap: var(--sp-2); align-items: center; min-height: var(--control-h-sm); font: var(--text-sm) var(--font-ui); }
+.mjob__dot.is-busy { animation: pulse 1.4s var(--ease-in-out) infinite; }
+@media (prefers-reduced-motion: reduce) { .mjob__dot.is-busy { animation: none; } }
+.mjob__kind { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.mjob__state { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink-muted); }
+.mjob__time { text-align: end; font: var(--text-xs) var(--font-mono); color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.mjob__do { display: grid; }
+.mjob__what { margin: 0; font-size: var(--text-xs); color: var(--ink-muted); overflow-wrap: anywhere; }
+.mjob__error, .mjob__said { margin: 0; font-size: var(--text-sm); color: var(--warning); overflow-wrap: anywhere; }
+/* Sound or video a message carries: its player, then its name and size on one line. */
+.ptile { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-1) var(--sp-2); align-items: center; width: min(100%, var(--w-menu)); padding: var(--sp-2); font: var(--text-xs) / var(--leading-tight) var(--font-body); background: var(--surface); border: var(--border-w) solid var(--border); border-radius: var(--radius-soft); }
+.ptile > .mcard__view { grid-column: 1 / -1; }
+.ptile__name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+.ptile__size { color: var(--ink-faint); white-space: nowrap; }
+/* A sealed viewer (a PDF, a 3D model): its frame fills the box it is given. */
+.sview { min-width: 0; min-height: 0; width: 100%; height: 100%; display: grid; }
+.sview__frame { width: 100%; height: 100%; border: 0; background: var(--surface); }
+.sview__note { margin: 0; padding: var(--sp-4); align-self: center; font-size: var(--text-sm); color: var(--ink-muted); text-align: center; }
+.sview__note.is-error { color: var(--warning); }
+
 /* A model's avatar: its initial on its own colour. Only the hue is the model's (models.js, the
    server's stable_hue); how strong it is comes from the theme, by mixing it into the surface. */
 .avatar {
@@ -1045,6 +1092,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .viewer__code .cm-editor { height: 100%; }
 .viewer__md { overflow: auto; padding: var(--sp-4); }
 .viewer__frame { width: 100%; height: 100%; border: 0; background: var(--surface); }
+.viewer__sealed { min-width: 0; min-height: 0; display: grid; }
 .viewer__note { padding: var(--sp-4); font-size: var(--text-sm); color: var(--ink-muted); }
 .viewer__note.is-error { color: var(--warning); }
 /* What is so on the left, taking the room there is; the buttons after it, each its own width.

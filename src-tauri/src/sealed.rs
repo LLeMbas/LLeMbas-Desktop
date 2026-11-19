@@ -136,6 +136,38 @@ impl Pages {
     }
 }
 
+// --- The viewers of a PDF and of a 3D model ----------------------------------------------------
+//
+// A PDF is drawn by PDF.js and a 3D model by a small WebGL reader: parsers of somebody else's
+// file, which therefore never run in the app's page (the one context with the bridge). They are
+// the server's own sealed viewers, copied unchanged at the pinned server commit by
+// `scripts/fetch-vendor.sh` into `src-tauri/viewers/` and compiled in: its page with one of its
+// two scripts written into it, held and served like any sealed page -- an opaque origin with no
+// network and no bridge. The document holds no file. The app's page hands it the file's bytes
+// (read by Rust, `viewer_bytes`) and, for a PDF, the library as text (`viewer_libs`) in one
+// message, exactly as the server's own page does for its frame; the page never runs either.
+
+const VIEWER_SHELL: &str = include_str!("../viewers/shell.html");
+const VIEWER_PDF: &str = include_str!("../viewers/sealed-pdf.js");
+const VIEWER_MODEL: &str = include_str!("../viewers/sealed-model.js");
+/// PDF.js and its worker, as text: only ever evaluated inside the sealed frame.
+pub const PDF_MAIN: &str = include_str!("../viewers/pdf.min.mjs");
+pub const PDF_WORKER: &str = include_str!("../viewers/pdf.worker.min.mjs");
+
+/// The kinds of file a sealed viewer draws.
+pub const VIEWER_KINDS: [&str; 2] = ["pdf", "model3d"];
+
+/// The sealed viewer's document for `kind` (`pdf`, `model3d`), as the server builds it; None
+/// for any other kind.
+pub fn viewer(kind: &str) -> Option<String> {
+    let script = match kind {
+        "pdf" => VIEWER_PDF,
+        "model3d" => VIEWER_MODEL,
+        _ => return None,
+    };
+    Some(VIEWER_SHELL.replace("/*SCRIPT*/", &script.replace("</script", "<\\/script")))
+}
+
 // --- A page of an answer, looked at before it is shown ---------------------------------------
 //
 // The server rebuilds a page as a static document and is the one place a model's markup is
@@ -419,6 +451,32 @@ mod tests {
         assert!(csp.contains("connect-src 'none'"));
         assert_eq!(respond(&p, "/nope").status(), 404);
         assert_eq!(id_of("/p7?x=1"), "p7");
+    }
+
+    #[test]
+    fn a_viewer_is_the_servers_page_with_its_script_and_holds_no_file() {
+        for kind in VIEWER_KINDS {
+            let html = viewer(kind).unwrap();
+            assert!(html.starts_with("<!doctype html>"), "{kind}");
+            assert!(!html.contains("/*SCRIPT*/"), "{kind}");
+            assert!(
+                html.contains(&format!("lembasViewerReady: \"{kind}\"")),
+                "{kind}"
+            );
+            // One script element, the viewer's own: nothing in it ends the element early.
+            assert_eq!(html.matches("</script>").count(), 1, "{kind}");
+            // Served sealed, like any held page.
+            let p = Pages::default();
+            let id = p.hold(html);
+            let res = respond(&p, &format!("/{id}"));
+            let csp = res.headers()["Content-Security-Policy"].to_str().unwrap();
+            assert!(csp.starts_with("sandbox allow-scripts") && csp.contains("connect-src 'none'"));
+            assert!(csp.contains("worker-src blob:"));
+        }
+        assert_eq!(viewer("html"), None);
+        assert_eq!(viewer(""), None);
+        // The library is what the server pins, not a stub.
+        assert!(PDF_MAIN.len() > 100_000 && PDF_WORKER.len() > 100_000);
     }
 
     /// The server's own rebuilt document (its fixture `page.json`), and pages like it.

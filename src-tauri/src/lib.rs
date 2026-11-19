@@ -1231,16 +1231,20 @@ async fn local_download(
 
 // --- What the viewer draws and plays (`media.rs`) --------------------------------------------------
 
-/// Let the page draw or play one file: a file of the server's tree (`source` "server", `path`
-/// in the tree) or of a folder of the agent's ("local", `root` and `path`), as `kind` (image,
-/// svg, audio, video). The address to give an `<img>`, `<audio>` or `<video>`.
+/// Let the page draw or play one file, as `kind` (image, svg, audio, video): a file of the
+/// server's tree (`source` "server", by its `path`, or by its id `node` -- a generated file,
+/// wherever it is now), a file a message carries ("attachment", by `attachment`, its id), or
+/// one in a folder of the agent's ("local", `root` and `path`). The address to give an `<img>`,
+/// `<audio>` or `<video>`.
 #[tauri::command]
 fn media_open(
     app: tauri::State<'_, App>,
     source: String,
     kind: String,
-    path: String,
+    path: Option<String>,
     root: Option<String>,
+    node: Option<String>,
+    attachment: Option<String>,
 ) -> Result<String, ApiError> {
     let Some(shown) = media::Shown::parse(&kind) else {
         return Err(ApiError::new(
@@ -1248,11 +1252,20 @@ fn media_open(
             format!("Not something to draw or play: {kind}"),
         ));
     };
-    let held = match (source.as_str(), root) {
-        ("server", _) => media::Source::Server {
+    let held = match (source.as_str(), path, root, node, attachment) {
+        ("server", _, _, Some(node), _) => media::Source::Server {
+            raw: server::raw_node(&node, true)?,
+        },
+        ("server", Some(path), _, None, _) => media::Source::Server {
             raw: server::raw_path(&path, None, true)?,
         },
-        ("local", Some(root)) => {
+        // Sound and video only: a picture a message carries is its thumbnail (`model_image`).
+        ("attachment", _, _, _, Some(id)) if shown == media::Shown::Sound => {
+            media::Source::Server {
+                raw: server::attachment_path(&id)?,
+            }
+        }
+        ("local", Some(path), Some(root), _, _) => {
             files::resolve(&app.roots(), &root, &path).map_err(|e| ApiError::new(400, e))?;
             media::Source::Local { root, path }
         }
@@ -1286,6 +1299,97 @@ async fn media_bytes(handle: AppHandle, url: String) -> Result<tauri::ipc::Respo
     })
     .await
     .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// Download a file of the server's tree by its id (a generated file) to where the person chooses.
+#[tauri::command]
+async fn media_save_as(
+    handle: AppHandle,
+    node: String,
+    name: String,
+    title: String,
+) -> Result<Option<Saved>, ApiError> {
+    let raw = server::raw_node(&node, false)?;
+    save_with_dialog(handle, name, title, move |app_url, token, dest| {
+        server::download_raw(app_url, token, &raw, dest)
+    })
+    .await
+}
+
+// --- The sealed viewers of a PDF and of a 3D model (`sealed.rs`) -------------------------------------
+
+/// Hold the sealed viewer's document for `kind` (`pdf`, `model3d`); the address its frame loads.
+/// The document holds no file: the page hands the frame the bytes (`viewer_bytes`).
+#[tauri::command]
+fn viewer_open(app: tauri::State<'_, App>, kind: String) -> Result<String, ApiError> {
+    sealed::viewer(&kind)
+        .map(|html| sealed::url(&app.sealed.hold(html)))
+        .ok_or_else(|| ApiError::new(400, format!("No viewer for: {kind}")))
+}
+
+/// PDF.js and its worker, as text, for the page to hand to the sealed frame. The page's own
+/// policy lets it run neither (no `eval`, no `blob:` script); only the frame evaluates them.
+#[derive(Serialize)]
+struct ViewerLibs {
+    main: &'static str,
+    worker: &'static str,
+}
+
+#[tauri::command]
+fn viewer_libs() -> ViewerLibs {
+    ViewerLibs {
+        main: sealed::PDF_MAIN,
+        worker: sealed::PDF_WORKER,
+    }
+}
+
+/// The whole of a PDF or a 3D model, as bytes, for the page to hand to its sealed frame (the
+/// frame has no network to fetch them with): a file of the server's tree by `path` or by its id
+/// `node`, or one in a folder of the agent's (`root` and `path`), which must be one of the two
+/// kinds by its own bytes. At most `media::WHOLE`.
+#[tauri::command]
+async fn viewer_bytes(
+    handle: AppHandle,
+    source: String,
+    path: Option<String>,
+    root: Option<String>,
+    node: Option<String>,
+) -> Result<tauri::ipc::Response, ApiError> {
+    let h = handle.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, ApiError> {
+        let app = h.state::<App>();
+        match (source.as_str(), path, root, node) {
+            ("server", path, _, node) => {
+                let raw = match (node, path) {
+                    (Some(node), _) => server::raw_node(&node, false)?,
+                    (None, Some(path)) => server::raw_path(&path, None, false)?,
+                    (None, None) => return Err(ApiError::new(400, "No such file.")),
+                };
+                let Some((app_url, token)) = app.door() else {
+                    return Err(ApiError::new(401, "Not signed in."));
+                };
+                server::request_bytes(&app_url, &token, &raw, media::WHOLE)
+            }
+            ("local", Some(path), Some(root), _) => {
+                let (file, kind, len) =
+                    files::media(&app.roots(), &root, &path).map_err(|e| ApiError::new(404, e))?;
+                if !sealed::VIEWER_KINDS.contains(&kind.kind) {
+                    return Err(ApiError::new(415, "Not a file a viewer draws."));
+                }
+                if len > media::WHOLE {
+                    return Err(ApiError::new(413, "The file is too large."));
+                }
+                std::fs::read(&file).map_err(|e| ApiError::new(404, format!("{path}: {e}")))
+            }
+            _ => Err(ApiError::new(400, "No such place.")),
+        }
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?;
+    if matches!(&result, Err(e) if e.status == 401) {
+        token_refused(&handle);
+    }
+    result.map(tauri::ipc::Response::new)
 }
 
 /// What the page needs to run the `python` tool for the chat it shows: whether the server has
@@ -2596,6 +2700,10 @@ pub fn run() {
             media_open,
             media_close,
             media_bytes,
+            media_save_as,
+            viewer_open,
+            viewer_libs,
+            viewer_bytes,
             library_upload_dropped,
             file_save_as,
             files_zip_save,
