@@ -4558,7 +4558,8 @@ test("H1: a long chat's pages are held by need: frames only near the window, mad
   const first = (await pageOpens(p)).map((a) => a.owner)
   assert.ok(first.length <= 8 && first.includes("p29"), `the newest, at the end, is among them: ${first}`)
   // To the start: the first ones are made, the last ones let go.
-  await p.evaluate(() => document.querySelector('.msg[data-id="p0"]').scrollIntoView())
+  // (Each move with the wheel's own word, as from a person's hand: see W1.)
+  await p.evaluate(() => (document.getElementById("thread").dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true })), document.querySelector('.msg[data-id="p0"]').scrollIntoView()))
   await p.waitForSelector('.msg[data-id="p0"] .hpage__frame')
   await p.waitForFunction(() => !document.querySelector('.msg[data-id="p29"] .hpage__frame'))
   assert.ok((await p.locator("#messages .hpage__frame").count()) <= 8)
@@ -4568,7 +4569,7 @@ test("H1: a long chat's pages are held by need: frames only near the window, mad
   assert.equal((await pageOpens(p)).filter((a) => a.owner === "p29").length, 2, "asked of Rust again, which holds it or fetches it")
   // It cannot be had just now (the server did not answer): said in its place, with Try again.
   await p.evaluate(() => (window.__mockConfig.pages = { __error: { status: 502, detail: "The server did not answer." } }))
-  await p.evaluate(() => document.querySelector('.msg[data-id="p15"]').scrollIntoView({ block: "center" }))
+  await p.evaluate(() => (document.getElementById("thread").dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true })), document.querySelector('.msg[data-id="p15"]').scrollIntoView({ block: "center" })))
   await p.waitForSelector('.msg[data-id="p15"] .hpage__note.is-error')
   assert.match(await p.textContent('.msg[data-id="p15"] .hpage__body'), /This page could not be shown: The server did not answer\./)
   await p.evaluate(() => (window.__mockConfig.pages = {}))
@@ -5546,6 +5547,9 @@ test("W1: a slow scroll up, a pixel at a time while frames arrive, and a frame t
   // One pixel up, and a frame before the engine has said anything of it; five times.
   for (let i = 1; i <= 5; i++) {
     await p.evaluate(([path, text]) => {
+      // (The wheel's own word comes with the move, as it does from a person's hand: a move up
+      // nothing was heard of is the engine's, and is put back.)
+      document.getElementById("thread").dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }))
       document.getElementById("thread").scrollTop -= 1
       window.__mock.frame(path, "tail", { thinking: "", text, label: "" })
     }, [STREAM2, W1_PARAS(4 + i)])
@@ -5595,6 +5599,7 @@ test("W1: a chat read again with earlier messages loaded keeps them, and the mes
   const offset = () => p.evaluate(() => document.querySelector('.msg[data-id="e5"]').getBoundingClientRect().top - document.getElementById("thread").getBoundingClientRect().top)
   await p.evaluate(() => {
     const th = document.getElementById("thread")
+    th.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }))
     th.scrollTop += document.querySelector('.msg[data-id="e5"]').getBoundingClientRect().top - th.getBoundingClientRect().top + 30
   })
   await w1At(p)
@@ -6945,7 +6950,7 @@ test("MD5: a model that is not for chatting is in no chat's picker; sound and vi
   // sight (the thread opens at its end, and they are above it).
   await p.waitForSelector("#messages .ptile[data-kind=audio]")
   assert.equal((await callsOf(p, "media_open")).length, 0, "nothing is asked for while they are out of sight")
-  await p.$eval("#messages .ptile[data-kind=audio]", (el) => el.scrollIntoView({ block: "center" }))
+  await p.$eval("#messages .ptile[data-kind=audio]", (el) => (document.getElementById("thread").dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true })), el.scrollIntoView({ block: "center" })))
   await p.waitForSelector("#messages .ptile[data-kind=audio] audio.mcard__audio")
   await p.waitForSelector("#messages .ptile[data-kind=video] video.mcard__video")
   assert.deepEqual((await callsOf(p, "media_open")).sort((a, b) => a.kind.localeCompare(b.kind)), [{ source: "attachment", kind: "audio", attachment: "att9" }, { source: "attachment", kind: "video", attachment: "att10" }])
@@ -7027,7 +7032,7 @@ test("RV3: a chat with more files than Rust keeps addresses for asks for each as
   // Scrolled to, the others are asked for and drawn, each once.
   const far = Array.from({ length: 40 }, (_, i) => `pic${i}`).find((n) => !first.includes(n))
   assert.ok(!(await drawn()).includes(far))
-  await p.$eval(`#messages .mcard[data-node="${far}"]`, (el) => el.scrollIntoView({ block: "center" }))
+  await p.$eval(`#messages .mcard[data-node="${far}"]`, (el) => (document.getElementById("thread").dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true })), el.scrollIntoView({ block: "center" })))
   await p.waitForFunction((node) => document.querySelector(`#messages .mcard[data-node="${node}"] .mcard__image`)?.naturalWidth === 1, far)
   assert.equal((await nodes()).filter((n) => n === far).length, 1)
   // The chat is left: every address asked for is given back, and none twice.
@@ -7506,6 +7511,8 @@ async function posLook(p, anchor, offset) {
       const pos = window.__pos
       pos.anchor = a
       const th = document.getElementById("thread")
+      // (The person's hand is on the thread: a move up nothing was heard of would be the engine's.)
+      th.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }))
       th.scrollTop += pos.find().getBoundingClientRect().top - th.getBoundingClientRect().top - off
       pos.sample()
       return { from: pos.log.length - 1, gap: th.scrollHeight - th.scrollTop - th.clientHeight }
@@ -7636,6 +7643,7 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
         const from = await p.evaluate(([s, id]) => {
           window.__pos.anchor = { sel: `.msg[data-id="${id}"]` }
           const th = document.getElementById("thread")
+          th.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }))
           th.scrollTop += document.querySelector(`${s} .mcard__view`).getBoundingClientRect().bottom - th.getBoundingClientRect().top - 30
           window.__pos.sample()
           return window.__pos.log.length - 1
@@ -7666,6 +7674,7 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
     await step("the player of the generation that ended comes into sight above what is read", "held", async () => {
       const at = await p.evaluate(() => {
         const th = document.getElementById("thread")
+        th.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }))
         th.scrollTop += document.querySelector('.mjob[data-job="mjob1"] .mcard__view').getBoundingClientRect().bottom - th.getBoundingClientRect().top - 30
         window.__pos.sample()
         return window.__pos.log.length - 1
@@ -7710,6 +7719,20 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
       await step("at the end: the side panel closed (or opened)", "end", side)
       await step("at the end: the side panel as it was", "end", side)
     }
+    // A move up nobody made -- no wheel, key, touch or pointer was heard of: WebKit cuts a
+    // thread back while the window is laid out anew, by the height of what is above or below
+    // it -- is put back before it is seen, and the end is still followed.
+    // (Just after the dock changed -- a note in it -- as the engine's cut comes with a layout of what is around the thread.)
+    const nobody = (by) =>
+      p.evaluate(async (n) => {
+        const note = document.getElementById("thread-note")
+        note.dataset.seen = String(Date.now())
+        await Promise.resolve()
+        document.getElementById("thread").scrollTop -= n
+      }, by)
+    await step("at the end: a move up nobody made is put back", "end", () => nobody(59))
+    await step("at the end: and what comes after is still followed", "end", () => p.fill("#composer-text", "one\ntwo\nthree\nfour"))
+    await p.fill("#composer-text", "")
     // Where the header's settings fold behind their button: opened, they are a row of their
     // own, and the header measures itself without them whenever it may have changed -- for a
     // moment the thread is taller, and what it could not scroll to then must not be lost.
@@ -7738,6 +7761,39 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
       await step("scrolled up: the side panel closed (or opened)", "held", side)
       await step("scrolled up: the side panel as it was", "held", side)
     }
+    await step("scrolled up: a move up nobody made is put back", "held", () => nobody(40))
+    // A way of scrolling this page hears nothing of is not held fast: a move up a frame, and
+    // by the fourth they are the person's -- from the end too, which is then no longer followed.
+    await posToEnd(p)
+    const crept = await p.evaluate(async () => {
+      const th = document.getElementById("thread")
+      for (let i = 0; i < 7; i++) {
+        document.getElementById("thread-note").dataset.seen = String(i)
+        await Promise.resolve()
+        th.scrollTop -= 30
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      }
+      return th.scrollHeight - th.scrollTop - th.clientHeight
+    })
+    assert.ok(crept >= 90 && crept <= 150, `moves up nothing was heard of, one a frame while the dock changes, are put back three times and the person's from the fourth (${crept} px from the end after seven)`)
+    // With nothing around the thread changing, a move up nothing was heard of is the person's at once.
+    await posToEnd(p)
+    await p.waitForTimeout(400)
+    await p.evaluate(() => void (document.getElementById("thread").scrollTop -= 200))
+    await posRest(p)
+    const quiet = await p.evaluate(() => {
+      const th = document.getElementById("thread")
+      return th.scrollHeight - th.scrollTop - th.clientHeight
+    })
+    assert.ok(Math.abs(quiet - 200) <= 1, `a move up nothing was heard of, with nothing around the thread changing, is the person's (${quiet} px from the end)`)
+    await p.fill("#composer-text", "one\ntwo\nthree")
+    await posRest(p)
+    const left = await p.evaluate(() => {
+      const th = document.getElementById("thread")
+      return th.scrollHeight - th.scrollTop - th.clientHeight
+    })
+    assert.ok(left >= 90, `and the end is no longer followed (${left} px from it after the composer grew)`)
+    await p.fill("#composer-text", "")
     // A call's row, opened and closed by the person: the row itself stays under the pointer.
     const row = '.msg[data-id="a3"] details.call[data-kind="shell"]'
     await posLook(p, `${row} > summary`, 120)

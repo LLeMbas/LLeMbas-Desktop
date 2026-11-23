@@ -389,13 +389,61 @@ function remember(th, place = true) {
 }
 
 /**
+ * The person's hand on the thread: when they last did something that moves it up -- the wheel
+ * turned up over it, a key that goes up or moves the focus, a touch -- and whether a pointer is
+ * held down on it (its scrollbar dragged, a selection drawn). A move up within HAND ms of that
+ * is theirs.
+ */
+const hand = { up: -Infinity, pressed: false }
+const HAND = 1000
+/** When what is above or below the thread -- the header, the dock, the panels beside it, the window -- last changed. */
+let shaken = -Infinity
+const SHAKEN = 250
+/** Moves up nobody was seen to make, one soon after another: how many, and when the last. */
+const unseen = { n: 0, at: -Infinity }
+/** One soon after another: no more than so long (ms) apart -- and not in the same frame, which a person's scrolling never is. */
+const UNSEEN_WITHIN = 100
+const UNSEEN_FRAME = 8
+const UNSEEN_THEIRS = 4
+
+/**
+ * A move up that no layout need have made (the thread could still stand where it stood): is it
+ * the person's? Yes with their hand on the thread. Yes too while nothing around the thread has
+ * just changed -- whatever moved it then (a reader's own way of scrolling this page hears
+ * nothing of) was not the layout. But just after the header, the dock, a panel or the window
+ * changed, and with no hand on the thread, it is the engine's: WebKit cuts a thread back in the
+ * middle of laying the window out -- while the header above it is measured anew the thread is
+ * for a moment as tall as if the header were not there, and a thread at its end is left that
+ * much above its end with every size as it was before (seen under WebKit: 59 px, the header's
+ * height, when the chat's settings were drawn into it). That is put back, and says nothing of
+ * what the person wants. Even then a way of scrolling nothing is heard of is not held fast: the
+ * fourth such move in a row, each a frame or a few after the one before, is taken for theirs.
+ */
+function theirsUp() {
+  const now = performance.now()
+  if (hand.pressed || now - hand.up < HAND) {
+    hand.up = now // a long scroll stays theirs for as long as it goes on
+    return true
+  }
+  if (now - shaken > SHAKEN) return true
+  const since = now - unseen.at
+  // (Several in one frame are the page's own changes, each laid out by itself: one move between them.)
+  if (since >= UNSEEN_FRAME) unseen.n = since < UNSEEN_WITHIN ? unseen.n + 1 : 1
+  unseen.at = now
+  if (unseen.n < UNSEEN_THEIRS) return false
+  hand.up = now
+  return true
+}
+
+/**
  * The thread moved, or a size changed, or it is about to be changed: was that the person? A
- * move up is theirs whenever no layout can have made it -- the thread could still stand where
- * it stood (its furthest place is no nearer than that) and stands higher: however little, also
- * at the very end, also when a size changed in the same moment (a reply grows as they scroll).
- * A move down is theirs only with the sizes as they were; one that comes with a change of size
- * says nothing of what they want. And where a size did change: the end again while it is
- * followed, else what was at the top edge put back there (less the person's own move).
+ * move up is theirs when no layout need have made it -- the thread could still stand where it
+ * stood (its furthest place is no nearer than that) and stands higher -- and their hand was on
+ * the thread (`theirsUp`): however little, also at the very end, also when a size changed in
+ * the same moment (a reply grows as they scroll). A move down is theirs; near the end, with the
+ * sizes as they were, it is them coming back to it. Whatever else moved the thread is put right:
+ * the end again while it is followed, else what was at the top edge put back there (less the
+ * person's own move).
  */
 function noticed() {
   const th = $("thread")
@@ -404,19 +452,26 @@ function noticed() {
   const moved = th.scrollTop - seen.top
   const same = th.scrollHeight === seen.height && th.clientHeight === seen.client && th.clientWidth === seen.width
   const room = th.scrollHeight - th.clientHeight >= seen.top
-  if (moved < -0.5 && room) following = false
+  const up = moved < -0.5 && room
+  const theirs = up && theirsUp()
+  if (theirs) following = false
   else if (gap <= 2) {
     // At the end is followed -- but not in the moment after the wheel was turned up, while the
     // scroll it asked for has not moved the thread yet, or only by its first pixel.
-    if (performance.now() > leaving) following = true
+    // (A move down to the end is them coming back to it, whatever the wheel did a moment ago.)
+    if (performance.now() > leaving || moved > 1) following = true
   } else if (same) {
     if (moved > 1 && gap < NEAR) following = true
   }
   let kept = false
-  if (!same) {
-    if (following) th.scrollTop = th.scrollHeight
+  if (following) {
+    if (gap > 2 && (!same || up)) th.scrollTop = th.scrollHeight
+  } else if (up && !theirs) {
+    // Not the person's and not at the end: what they look at is put back where it was.
+    kept = keep()
+  } else if (!same) {
     // (A thread cut shorter than where it stood was moved by that, not by the person.)
-    else kept = keep(room ? moved : 0)
+    kept = keep(room ? moved : 0)
   }
   // (Nothing moved and no size changed: what is held is still what is there, to the part of a pixel.)
   remember(th, !kept && !(same && held && Math.abs(moved) < 0.5))
@@ -489,6 +544,7 @@ function initFollowing() {
   th.addEventListener(
     "wheel",
     (e) => {
+      if (e.deltaY < 0) hand.up = performance.now()
       if (e.deltaY > 0) leaving = 0
       if (!(e.deltaY < 0) || e.ctrlKey || th.scrollTop <= 0) return
       for (let el = e.target; el && el !== th; el = el.parentElement) {
@@ -502,6 +558,33 @@ function initFollowing() {
     },
     { passive: true },
   )
+  // The person's hand on the thread otherwise (see `theirsUp`): a touch; a pointer held down on
+  // it, which is how its scrollbar is dragged and a selection drawn past its edge; a key that
+  // goes up, wherever it is pressed -- the thread scrolls for one pressed after a click in it.
+  const touch = () => (hand.up = performance.now())
+  for (const type of ["touchstart", "touchmove"]) th.addEventListener(type, touch, { passive: true })
+  for (const type of ["pointerdown", "mousedown"]) th.addEventListener(type, () => (hand.pressed = true), { passive: true })
+  for (const type of ["pointerup", "pointercancel", "mouseup", "blur"])
+    window.addEventListener(type, () => {
+      if (!hand.pressed) return
+      hand.pressed = false
+      touch()
+    })
+  // (Not in a box that is typed into, where these keys move the caret: only Tab leaves it.)
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      const typing = e.target instanceof HTMLElement && e.target.matches("input, textarea, select, [contenteditable]")
+      if (e.key === "Tab" || (!typing && (e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home" || (e.key === " " && e.shiftKey)))) touch()
+    },
+    true,
+  )
+  // What is around the thread, changing (see `theirsUp`).
+  const shake = () => (shaken = performance.now())
+  const around = new MutationObserver(shake)
+  for (const id of ["chat-head", "dock"]) around.observe($(id), { subtree: true, childList: true, attributes: true, characterData: true })
+  for (const id of ["shell", "main"]) around.observe($(id), { attributes: true })
+  window.addEventListener("resize", shake)
   // What changes a size without a frame of a reply: a picture that arrived, a block opened, the
   // dock grown by a card or a longer message, the window; and the thread back on the screen
   // after another page, with what was written meanwhile.

@@ -16,12 +16,13 @@ All notable changes to LLeMbas Desktop. The format follows
   folding into its row while you read the reply; a generation that ends and wakes the chat; the
   window, the side panel or the message box taking another size (the text is cut by the top edge
   at the same place of the same paragraph). At the end of the chat you stay at the end, as before.
-- **A chat at its end is no longer thrown a line up, and then left behind by the reply.** The
-  header measures whether the chat's settings fit beside the title, and for that moment the
-  conversation under it had another height: at its end it was cut back by a row, stood that far
-  above its end afterwards, and was taken for scrolled up by you -- so what followed was not
-  followed. It happened where the header's settings were folded behind their button and opened
-  as a row of their own. The measuring leaves the conversation where it was now.
+- **A chat at its end is no longer thrown a line up, and then left behind by the reply.** When
+  the header was laid out anew -- it measures whether the chat's settings fit beside the title --
+  the conversation under it was for a moment taller: at its end it was cut back by a row, stood
+  that far above its end afterwards, and was taken for scrolled up by you, so what followed was
+  not followed. The measuring leaves the conversation where it was now, and a move up that no
+  wheel, key, touch or pointer of yours made is put back at once instead of being taken for
+  yours.
 - **A chat that is read again is not drawn again.** The messages that have not changed stay as
   they are -- what you opened in them, their pictures and players included -- and only what is
   new or changed is drawn.
