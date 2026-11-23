@@ -1484,6 +1484,13 @@ function fitHead() {
   const box = $("chat-settings")
   if (!head || !box) return
   const any = box.childElementCount > 0
+  // Measuring lays the header out unfolded for a moment, and where that is another height the
+  // thread under it is another height too: a thread at its end was cut back by as much (its
+  // furthest place came nearer), stood that far above its end once the header was as before,
+  // and that read as the person having scrolled up -- seen under WebKit, where the settings
+  // fold at widths they fit in elsewhere. So it is a change like any other: the thread is put
+  // back where it stood (`mark`, `settle`).
+  mark()
   head.dataset.fold = "false"
   // Folded when the settings are cut at their end, or when they leave where the chat works (its
   // folder) less than its own width or 10rem, whichever is less.
@@ -1495,6 +1502,7 @@ function fitHead() {
   if (!fold) head.dataset.unfold = "false"
   $("chat-fold").hidden = !fold
   $("chat-fold").setAttribute("aria-expanded", String(head.dataset.unfold === "true"))
+  settle()
 }
 
 function initHead() {

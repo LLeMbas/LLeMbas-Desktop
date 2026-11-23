@@ -7689,8 +7689,23 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
       await step("at the end: the side panel closed (or opened)", "end", side)
       await step("at the end: the side panel as it was", "end", side)
     }
+    // Where the header's settings fold behind their button: opened, they are a row of their
+    // own, and the header measures itself without them whenever it may have changed -- for a
+    // moment the thread is taller, and what it could not scroll to then must not be lost.
+    const folds = await p.isVisible("#chat-fold")
+    const fold = () => p.evaluate(() => document.getElementById("chat-fold").click())
+    if (folds) {
+      await step("at the end: the header's settings opened as a row of their own", "end", fold)
+      await step("at the end: the header measures itself (the chat read again)", "end", () => posReadAgain(p))
+      await step("at the end: the header's settings folded again", "end", fold)
+    }
     // Scrolled up: a prompt's first line exactly at the thread's top edge.
     await posLook(p, '.msg[data-id="q3"]', 0)
+    if (folds) {
+      await step("scrolled up: the header's settings opened as a row of their own", "held", fold)
+      await step("scrolled up: the header measures itself (the chat read again)", "held", () => posReadAgain(p))
+      await step("scrolled up: the header's settings folded again", "held", fold)
+    }
     await step("scrolled up: the chat is read again", "held", () => posReadAgain(p))
     await step("scrolled up: another chat and back", "back", other)
     await posLook(p, '.msg[data-id="q3"]', 0)
