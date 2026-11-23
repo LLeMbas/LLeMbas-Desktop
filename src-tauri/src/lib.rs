@@ -2504,6 +2504,29 @@ fn report_filed(handle: &AppHandle, data: &str, door: &(String, String)) {
         .show();
 }
 
+/// A `reply` frame of the events stream as the page is to get it: the chat's id, the reply's,
+/// and whether the reply is being written -- each checked for what it must be (an id as the
+/// server makes them, `page_name`; a boolean) and put into a frame of exactly those three.
+/// `None` for anything else: a frame that is not an object, lacks one of them, has one of
+/// another kind, or is longer than two ids and a boolean can be.
+fn reply_frame(data: &str) -> Option<Value> {
+    if data.len() > 512 {
+        return None;
+    }
+    let frame = serde_json::from_str::<Value>(data).ok()?;
+    let id = |key: &str| {
+        frame
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| page_name(s))
+            .map(str::to_string)
+    };
+    let chat = id("chat_id")?;
+    let message = id("message_id")?;
+    let live = frame.get("live").and_then(Value::as_bool)?;
+    Some(serde_json::json!({ "chat_id": chat, "message_id": message, "live": live }))
+}
+
 /// Follow the server's event stream for the signed-in person (`GET /events`): each `schedules`
 /// frame goes to the page as it is (the Scheduled page redraws from it), and a scheduled task's
 /// newly finished run is told by its notify decision (`watch::decide`). Said even with the window
@@ -2534,9 +2557,10 @@ fn watch_events(handle: AppHandle) {
                 return true;
             }
             if event == "reply" {
-                // A reply started in one of the person's chats, whoever started it: the page
-                // decides what it is to the chat that is open and to the list.
-                if let Ok(frame) = serde_json::from_str::<Value>(data) {
+                // A reply started in one of the person's chats, whoever started it, or ended:
+                // the page decides what it is to the chat that is open and to the list. It is
+                // given the frame's three facts and nothing else of what was sent.
+                if let Some(frame) = reply_frame(data) {
                     let _ = handle.emit("reply", &frame);
                 }
                 return true;
@@ -2910,6 +2934,51 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_reply_frame_is_two_ids_and_a_boolean_or_nothing() {
+        // What the server sends, and nothing more of it than the three facts.
+        assert_eq!(
+            super::reply_frame(
+                r#"{"chat_id":"0f3a-b_1","message_id":"9c2e","live":true,"more":{"a":[1,2]}}"#
+            ),
+            Some(serde_json::json!({ "chat_id": "0f3a-b_1", "message_id": "9c2e", "live": true }))
+        );
+        assert_eq!(
+            super::reply_frame(r#"{"live":false,"message_id":"m1","chat_id":"c1"}"#),
+            Some(serde_json::json!({ "chat_id": "c1", "message_id": "m1", "live": false }))
+        );
+        let long_id = "a".repeat(97);
+        let long_frame = format!(
+            r#"{{"chat_id":"c1","message_id":"m1","live":true,"pad":"{}"}}"#,
+            "x".repeat(600)
+        );
+        let bad = [
+            String::new(),
+            "null".to_string(),
+            "[]".to_string(),
+            r#""c1""#.to_string(),
+            r#"{"chat_id":"c1","message_id":"m1"}"#.to_string(),
+            r#"{"chat_id":"c1","live":true}"#.to_string(),
+            r#"{"message_id":"m1","live":true}"#.to_string(),
+            r#"{"chat_id":"c1","message_id":"m1","live":"true"}"#.to_string(),
+            r#"{"chat_id":"c1","message_id":"m1","live":1}"#.to_string(),
+            r#"{"chat_id":"c1","message_id":"m1","live":null}"#.to_string(),
+            r#"{"chat_id":7,"message_id":"m1","live":true}"#.to_string(),
+            r#"{"chat_id":"","message_id":"m1","live":true}"#.to_string(),
+            r#"{"chat_id":"c1","message_id":["m1"],"live":true}"#.to_string(),
+            r#"{"chat_id":"c/1","message_id":"m1","live":true}"#.to_string(),
+            r#"{"chat_id":"c1","message_id":"m 1","live":true}"#.to_string(),
+            r#"{"chat_id":"c1","message_id":"m\"1","live":true}"#.to_string(),
+            r#"{"chat_id":"c1","message_id":"<m1>","live":true}"#.to_string(),
+            format!(r#"{{"chat_id":"{long_id}","message_id":"m1","live":true}}"#),
+            long_frame,
+            r#"{"chat_id":"c1","message_id":"m1","live":true"#.to_string(),
+        ];
+        for frame in bad {
+            assert_eq!(super::reply_frame(&frame), None, "{frame}");
+        }
+    }
+
     #[test]
     fn a_page_of_an_answer_is_asked_for_by_names_and_colours_only() {
         const D: &str = "526b3a6b58f09769d9f81f628942cc7f";
