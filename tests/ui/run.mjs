@@ -273,6 +273,8 @@ async function page(config, { width = 1280, height = 860, clock = false, wait = 
     const [, kind, name] = new URL(route.request().url()).pathname.split("/")
     // An address Rust has given up (the mock's `mediaStale`), and a file that is not there.
     if (kind === "stale" || decodeURIComponent(name || "").includes("broken")) return route.fulfill({ status: 404, body: "" })
+    // A picture of a size of its own (640 x 480), for where the room a picture takes is the question.
+    if (kind === "image" && (name || "").includes("big")) return route.fulfill({ status: 200, contentType: "image/svg+xml", body: POS_BIG })
     if (kind === "image") return route.fulfill({ status: 200, contentType: "image/png", body: MEDIA_PNG })
     if (kind === "svg") return route.fulfill({ status: 200, contentType: "image/svg+xml", body: MEDIA_SVG })
     return route.fulfill({ status: 200, contentType: "audio/wav", body: MEDIA_WAV })
@@ -7250,6 +7252,408 @@ test("RV7: Open in Files asks where the file is now, by its id -- moved, it is f
   assert.equal(await a.locator("#viewer-body .viewer__facts .btn").count(), 1)
   assert.deepEqual(a.errors, [])
 })
+
+// --- POS: where the chat stands, measured ------------------------------------------------------------
+//
+// The rule: at the end of the thread, the person stays at the end; anywhere else, what they look
+// at does not move by a pixel, whatever is added above or below it, and a chat read again is not
+// drawn in a way that loses the place. Each test here scripts a chat and watches the thread after
+// every frame the browser paints -- where it stands, how tall it is, and where one thing the
+// person looks at (a prompt, a paragraph, a row) is from the thread's top edge -- so a place lost
+// for one frame counts as much as one lost for good. With $POS_TRACE set the measurements are
+// printed (`POS|case|window|rule|worst|final`) and nothing fails: the table of what moved.
+
+const POS_WINDOWS = { wide: [1280, 860], narrow: [390, 844] }
+const POS_BIG = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="#888"/></svg>`
+const posText = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i}: ${"lembas ".repeat(40)}`).join("\n\n")
+const posReply = (id, steps) => ({ id, role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", metrics: null, steps })
+const posWords = (id, n) => posReply(id, [{ index: 0, kind: "text", open: true, markdown: posText(n) }])
+const posMedia = (id, media) => ({ ...MADE[0], id, image: undefined, media: { ...MADE[0].media, version_id: `v-${id}`, ...media } })
+/** What one reply made: a picture whose size the server says, a long generation, a picture and a video it says no size for, a video with one, a track. */
+const POS_MADE = () => [
+  MADE[0],
+  MADE[1],
+  posMedia("call6", { node_id: "bignode", name: "sketch.svg", mime: "image/svg+xml", width: 0, height: 0 }),
+  posMedia("call7", { kind: "video", node_id: "node5", name: "kite.mp4", mime: "video/mp4", width: 832, height: 480, seconds: 5 }),
+  posMedia("call8", { kind: "video", node_id: "node4", name: "dunes.mp4", mime: "video/mp4", width: 0, height: 0, seconds: 5 }),
+  posMedia("call9", { kind: "music", node_id: "node6", name: "tune.mp3", mime: "audio/mpeg", width: 0, height: 0, seconds: 30 }),
+]
+const posMade = (id) => posReply(id, [{ index: 0, kind: "tools", open: false, calls: POS_MADE() }, { index: 1, kind: "text", open: true, markdown: "A kite, a film of it, and a tune." }])
+const POS_FILES = [
+  { id: "att5", kind: "image", image: true, name: "oven.png", size: 1000, media_type: "image/png" },
+  { id: "att6", kind: "audio", image: false, name: "note.wav", size: 800, media_type: "audio/wav" },
+]
+/** A long chat: questions and answers, what a model made in the middle of it (or as its last message), files on a question. */
+function posMessages({ madeLast = false } = {}) {
+  const calls = [call(), call({ id: "t2", name: "edit", args: { path: "a.txt" }, diff: "--- a\n+++ b\n@@ -1 +1,3 @@\n-old\n+new\n+newer\n+newest", text: "", block: { kind: "edit", title: "a.txt", chips: [], added: 3, removed: 1 } })]
+  const list = [
+    userMessage("q0", `Question 0\n\n${"word ".repeat(120)}`),
+    posWords("a0", 6),
+    userMessage("q1", `Question 1\n\n${"word ".repeat(120)}`),
+    posWords("a1", 6),
+    userMessage("q2", "Draw a kite, film it, and write it a tune"),
+    posMade("a2"),
+    userMessage("q3", `Question 3\n\n${"word ".repeat(60)}`),
+    posReply("a3", [{ index: 0, kind: "text", open: true, markdown: posText(2) }, { index: 1, kind: "tools", open: false, calls }, { index: 2, kind: "text", open: true, markdown: posText(5) }]),
+    { ...userMessage("q4", "And what is on this one?"), attachments: POS_FILES },
+    posWords("a4", 5),
+  ]
+  return madeLast ? [...list, userMessage("q5", "Once more, all of it"), posMade("a5")] : list
+}
+function posChat(over = {}, opts = {}) {
+  const messages = posMessages(opts)
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /chats/chat2": { chat: agentChat(), messages, more: false, live: null },
+      "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?"), posWords("m6", 12)], more: false, live: null },
+      "GET /models?chat=chat2": models(),
+      "GET /models?chat=chat1": models(),
+      "POST /chats/chat2/messages": { message: userMessage("m1", "What is in build?"), reply: { id: "m2" } },
+      "GET /media/jobs/mjob1": fixture("media_job"),
+      ...over,
+    }),
+    commands: { model_image: `data:image/png;base64,${MEDIA_PNG.toString("base64")}` },
+    streams: { [STREAM2]: [["status", { text: "Writing…" }]] },
+  }
+}
+
+const posRows = []
+const posMissed = []
+
+/** Watch the thread: after every frame painted, where it stands and where what the person looks at (`__pos.anchor`) is. */
+async function posWatch(p) {
+  await p.evaluate(() => {
+    const th = document.getElementById("thread")
+    const pos = (window.__pos = { log: [], anchor: null })
+    pos.find = () => {
+      const a = pos.anchor
+      if (!a) return null
+      if (!a.text) return document.querySelector(a.sel)
+      for (const el of document.querySelectorAll(a.sel)) if (el.textContent.startsWith(a.text)) return el
+      return null
+    }
+    pos.sample = () => {
+      const el = pos.find()
+      const s = { top: th.scrollTop, height: th.scrollHeight, client: th.clientHeight, a: el ? el.getBoundingClientRect().top - th.getBoundingClientRect().top : null }
+      pos.log.push(s)
+      return s
+    }
+    // A task of its own after each frame's callbacks, layout and observers: what was painted.
+    const after = new MessageChannel()
+    after.port1.onmessage = () => {
+      pos.sample()
+      requestAnimationFrame(() => after.port2.postMessage(0))
+    }
+    requestAnimationFrame(() => after.port2.postMessage(0))
+  })
+}
+
+/** Until the thread has stood still for some frames (three seconds at most). */
+const posRest = (p) =>
+  p.evaluate(async () => {
+    const pos = window.__pos
+    const key = (s) => `${s.top}|${s.height}|${s.client}|${s.a}`
+    const from = performance.now()
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 60))
+      const last = pos.log.slice(-12)
+      if (last.length === 12 && last.every((s) => key(s) === key(last[0]))) return
+      if (performance.now() - from > 3000) return
+    }
+  })
+
+/**
+ * One thing happens (`act`), and the thread is judged over every frame from just before it until
+ * it rests: by `rule` "end" (never further than a pixel from its end), "held" (what the person
+ * looks at never further than a pixel from where it was) or "back" (the same, of where it comes
+ * to rest only: the thread showed something else meanwhile). `act` may return the sample to
+ * judge from, where it had to move the thread itself first.
+ */
+async function posStep(p, win, name, rule, act = async () => {}) {
+  await posRest(p)
+  const mark = await p.evaluate(() => (window.__pos.sample(), window.__pos.log.length - 1))
+  const own = await act()
+  await posRest(p)
+  const r = await p.evaluate(
+    ([from, how]) => {
+      const log = window.__pos.log.slice(from)
+      const gap = (s) => s.height - s.top - s.client
+      if (how === "end") return { first: gap(log[0]), worst: Math.max(...log.map(gap)), final: gap(log.at(-1)) }
+      const was = log[0].a
+      const moved = (how === "back" ? [log.at(-1)] : log).map((s) => (s.a === null || was === null ? NaN : s.a - was))
+      return { first: was, worst: moved.reduce((m, x) => (Number.isNaN(m) || Number.isNaN(x) ? NaN : Math.abs(x) > Math.abs(m) ? x : m), 0), final: moved.at(-1) }
+    },
+    [typeof own === "number" ? own : mark, rule],
+  )
+  const round = (x) => Math.round(x * 10) / 10
+  const row = { name, win, rule, worst: round(r.worst), final: round(r.final) }
+  posRows.push(row)
+  const ok = rule === "end" ? r.first <= 1 && r.worst <= 1 : Math.abs(r.worst) <= 1
+  if (process.env.POS_TRACE) console.log(`POS|${name}|${win}|${rule}|${row.worst}|${row.final}${rule === "end" && r.first > 1 ? `|not at the end to begin with (${round(r.first)})` : ""}`)
+  if (!ok) posMissed.push(rule === "end" ? `${name} (${win}): ${row.worst} px from the end at worst, ${row.final} at rest` : `${name} (${win}): moved ${row.worst} px at worst, ${row.final} at rest`)
+  return r
+}
+function posEnd(p) {
+  const missed = posMissed.splice(0)
+  if (!process.env.POS_TRACE) assert.deepEqual(missed, [], "where the thread stood")
+  assert.deepEqual(p.errors, [])
+}
+
+/** The person leaves the end, and has `anchor` (a selector, or `{ sel, text }`) `offset` px under the thread's top edge. */
+async function posLook(p, anchor, offset) {
+  const spec = typeof anchor === "string" ? { sel: anchor } : anchor
+  const gap = await p.evaluate(() => {
+    const th = document.getElementById("thread")
+    return th.scrollHeight - th.scrollTop - th.clientHeight
+  })
+  if (gap < 100) await w1Wheel(p, -300)
+  return p.evaluate(
+    ([a, off]) => {
+      const pos = window.__pos
+      pos.anchor = a
+      const th = document.getElementById("thread")
+      th.scrollTop += pos.find().getBoundingClientRect().top - th.getBoundingClientRect().top - off
+      pos.sample()
+      return pos.log.length - 1
+    },
+    [spec, offset],
+  )
+}
+
+const posOpen = async (p, id = "chat2", last = "a4") => {
+  // (Clicked from the page: at a narrow window the list is off the screen until asked for.)
+  await p.evaluate((c) => document.querySelector(`.chatrow[data-id="${c}"]`).click(), id)
+  await p.waitForSelector(`#messages .msg[data-id="${last}"]`)
+  await posWatch(p)
+}
+const posToEnd = async (p) => {
+  await w1Wheel(p, 200000)
+  await p.evaluate(() => (window.__pos.anchor = null))
+}
+const posReads = (p, id = "chat2") => p.evaluate((c) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length, id)
+/** The chat read again as a notification's click reads it (the chat that is open, asked for anew). */
+async function posReadAgain(p, times = 1) {
+  const n = await posReads(p)
+  await p.evaluate(() => window.__mock.emit("open-chat", "chat2"))
+  await p.waitForFunction(([c, m]) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length >= m, ["chat2", n + times])
+}
+
+for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
+  test(`POS: ${win} 1 -- a message sent from the end, a reply written past one screen, the person scrolling up to their prompt: nothing moves through the frames, the calls, a card, the end and the title`, async () => {
+    const p = await page(posChat(), { width, height })
+    await posOpen(p)
+    const step = (name, rule, act) => posStep(p, win, name, rule, act)
+    await step("a chat opened stands at its end", "end")
+    await step("the composer grows while typing (at the end)", "end", () => p.fill("#composer-text", "one\ntwo\nthree\nfour\nfive\nsix"))
+    await step("a message sent from the end, the composer shrinking", "end", async () => {
+      await p.focus("#composer-text")
+      await p.keyboard.press("Enter")
+      await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+    })
+    await step("a reply written past one screen (at the end)", "end", async () => {
+      await w1Send(p, "tail", { thinking: "Let me think. ".repeat(60), text: "", label: "1s" })
+      for (let i = 1; i <= 6; i++) await w1Send(p, "tail", { thinking: "", text: posText(i * 2), label: "" })
+    })
+    const tall = await p.evaluate(() => document.querySelector(".msg.is-live").getBoundingClientRect().height > document.getElementById("thread").clientHeight)
+    assert.ok(tall, "the reply is taller than the thread")
+    // Up, to the prompt just sent.
+    await posLook(p, '.msg[data-id="m1"]', 24)
+    const steps = [W1_THOUGHT]
+    await step("scrolled up to the prompt: the reply is written on", "held", async () => {
+      for (let i = 13; i <= 15; i++) await w1Send(p, "tail", { thinking: "", text: posText(i), label: "" })
+    })
+    steps.push({ index: 1, kind: "text", open: false, markdown: posText(15) })
+    await step("scrolled up to the prompt: the reasoning folds, a call runs", "held", () => w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: "", label: "", calls: [fixture("event_tail").calls[0]] } }))
+    steps.push({ index: 2, kind: "tools", open: false, calls: [W1_CALL(), { ...W1_CALL(), id: "c2" }] })
+    await step("scrolled up to the prompt: the calls finish", "held", () => w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: posText(2), label: "", calls: [] } }))
+    await step("scrolled up to the prompt: a card asks under the thread", "held", async () => {
+      await w1Send(p, "ask", { cards: [deviceBashCard()] })
+      await p.waitForSelector("#cards:not([hidden]) .ask")
+    })
+    await step("scrolled up to the prompt: the card goes", "held", () => w1Send(p, "ask", { cards: [] }))
+    steps.push({ index: 3, kind: "text", open: false, markdown: posText(2) })
+    await step("scrolled up to the prompt: the reply ends", "held", async () => {
+      await w1Send(p, "done", { message: { ...fixture("event_done").message, id: "m2", steps }, chat: { id: "chat2", title: "Tidy the build" } })
+      await p.waitForSelector(".msg.is-live", { state: "detached" })
+    })
+    await step("scrolled up to the prompt: the title arrives", "held", async () => {
+      await w1Send(p, "title", { chat: { id: "chat2", title: "The build, tidied, and a far longer name for it than the head has room for" } })
+      await p.waitForFunction(() => document.getElementById("chat-title").textContent.startsWith("The build, tidied"))
+    })
+    posEnd(p)
+  })
+
+  test(`POS: ${win} 2 -- reading the reply while it is written: the paragraph under the eyes stays through the reasoning folding above it, the calls, the end, and the chat read again`, async () => {
+    const p = await page(posChat(), { width, height })
+    await posOpen(p)
+    const step = (name, rule, act) => posStep(p, win, name, rule, act)
+    await p.fill("#composer-text", "What is in build?")
+    await p.focus("#composer-text")
+    await p.keyboard.press("Enter")
+    await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+    await w1Send(p, "tail", { thinking: "Let me think. ".repeat(60), text: "", label: "1s" })
+    await step("the reasoning gives way to the reply's first words (at the end)", "end", () => w1Send(p, "tail", { thinking: "", text: posText(8), label: "" }))
+    await posLook(p, { sel: "#messages > .msg:last-child p", text: "Paragraph 3:" }, 30)
+    await step("reading the reply: it is written on", "held", async () => {
+      for (let i = 9; i <= 11; i++) await w1Send(p, "tail", { thinking: "", text: posText(i), label: "" })
+    })
+    const steps = [W1_THOUGHT, { index: 1, kind: "text", open: false, markdown: posText(11) }]
+    await step("reading the reply: the reasoning becomes a row above, a call runs", "held", () => w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: "", label: "", calls: [fixture("event_tail").calls[0]] } }))
+    steps.push({ index: 2, kind: "tools", open: false, calls: [W1_CALL(), { ...W1_CALL(), id: "c2" }] })
+    await step("reading the reply: the calls finish, more is written", "held", () => w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: `Then:\n\n${posText(3)}`, label: "", calls: [] } }))
+    await step("reading the reply: the reasoning thinks again at its end", "held", () => w1Send(p, "tail", { thinking: "More thought. ".repeat(30), text: "", label: "2s" }))
+    steps.push({ index: 3, kind: "text", open: false, markdown: `Then:\n\n${posText(3)}` })
+    const done = { ...fixture("event_done").message, id: "m2", steps }
+    await p.evaluate(([key, m, d]) => window.__mock.answer(key, { ...window.__mockConfig.routes[key], messages: [...window.__mockConfig.routes[key].messages, m, d] }), ["GET /chats/chat2", userMessage("m1", "What is in build?"), done])
+    await step("reading the reply: it ends", "held", async () => {
+      await w1Send(p, "done", { message: done, chat: { id: "chat2", title: "Tidy the build" } })
+      await p.waitForSelector(".msg.is-live", { state: "detached" })
+    })
+    await step("reading the reply: the chat is read again", "held", () => posReadAgain(p))
+    // The person opens the reasoning above what they read: a block opened above the window.
+    await step("reading the reply: the chat is read again, twice at once", "held", async () => {
+      const n = await posReads(p)
+      await p.evaluate(() => (window.__mock.emit("open-chat", "chat2"), window.__mock.emit("open-chat", "chat2")))
+      await p.waitForFunction((m) => window.__mock.api("GET", "/chats/chat2").filter((x) => x.args.path === "/chats/chat2").length >= m, n + 2)
+    })
+    posEnd(p)
+  })
+
+  test(`POS: ${win} 3 -- pictures, players and a generation's card take their room without moving the thread: coming into sight above the window, a generation ending above it, and at the end of a chat just opened`, async () => {
+    const p = await page(posChat(), { width, height })
+    await posOpen(p)
+    const step = (name, rule, act) => posStep(p, win, name, rule, act)
+    await step("a chat opened stands at its end", "end")
+    // Each card of the reply above, from the last up: its lower edge brought 30 px into sight.
+    const cards = [
+      ["a sound file's player on a prompt", '.msg[data-id="q4"] .ptile', "audio", "a4"],
+      ["a track's player", '.mcard[data-node="node6"]', "audio", "q3"],
+      ["a video the server gave no size for", '.mcard[data-node="node4"]', "video", "q3"],
+      ["a video whose size the server gave", '.mcard[data-node="node5"]', "video", "q3"],
+      ["a picture the server gave no size for", '.mcard[data-node="bignode"]', "img", "q3"],
+      ["a picture whose size the server gave", '.mcard[data-node="node8"]', "img", "q3"],
+    ]
+    await w1Wheel(p, -300)
+    for (const [what, sel, tag, read] of cards) {
+      await step(`${what} comes into sight above what is read`, "held", async () => {
+        const from = await p.evaluate(([s, id]) => {
+          window.__pos.anchor = { sel: `.msg[data-id="${id}"]` }
+          const th = document.getElementById("thread")
+          th.scrollTop += document.querySelector(`${s} .mcard__view`).getBoundingClientRect().bottom - th.getBoundingClientRect().top - 30
+          window.__pos.sample()
+          return window.__pos.log.length - 1
+        }, [sel, read])
+        await p.waitForSelector(`${sel} ${tag}`)
+        if (tag === "img") await p.waitForFunction((s) => document.querySelector(`${s} img`).complete, sel)
+        return from
+      })
+    }
+    // The generation ends while the person reads below it: its row becomes a player's card, and
+    // the chat -- woken by the server with a reply nobody here asked for -- is read again, twice.
+    const woken = posReply("a9", [{ index: 0, kind: "text", open: true, markdown: "The film is ready." }])
+    const from = await posLook(p, '.msg[data-id="q3"]', 20)
+    await step("a generation ends above what is read: its card becomes a player, the chat is read again twice", "held", async () => {
+      const n = await posReads(p)
+      await p.evaluate(
+        ([done, m]) => {
+          window.__mock.answer("GET /media/jobs/mjob1", done)
+          const key = "GET /chats/chat2"
+          window.__mock.answer(key, { ...window.__mockConfig.routes[key], messages: [...window.__mockConfig.routes[key].messages, m] })
+        },
+        [{ ...fixture("media_job_done"), id: "mjob1", chat_id: "chat2", told: false }, woken],
+      )
+      await p.waitForFunction((m) => window.__mock.api("GET", "/chats/chat2").filter((x) => x.args.path === "/chats/chat2").length >= m, n + 2, { timeout: 15000 })
+      await p.waitForSelector('.msg[data-id="a9"]')
+      return from
+    })
+    await step("the player of the generation that ended comes into sight above what is read", "held", async () => {
+      const at = await p.evaluate(() => {
+        const th = document.getElementById("thread")
+        th.scrollTop += document.querySelector('.mjob[data-job="mjob1"] .mcard__view').getBoundingClientRect().bottom - th.getBoundingClientRect().top - 30
+        window.__pos.sample()
+        return window.__pos.log.length - 1
+      })
+      await p.waitForSelector('.mjob[data-job="mjob1"] video')
+      return at
+    })
+    // Another chat like it, the cards in its last message: opened, it stands at its end while they are drawn.
+    const q = await page(posChat({}, { madeLast: true }), { width, height })
+    await posOpen(q, "chat2", "a5")
+    await posStep(q, win, "a chat opened with pictures and players at its end stands there while they are drawn", "end", async () => {
+      await q.waitForSelector('.msg[data-id="a5"] .mcard[data-node="node6"] audio')
+    })
+    assert.deepEqual(q.errors, [])
+    posEnd(p)
+  })
+
+  test(`POS: ${win} 4 -- the chat read again, another chat and back, a call's row opened and closed, the composer, the window and the side panel: at the end the thread stays there, and scrolled up what is read does not move`, async () => {
+    const older = Array.from({ length: 6 }, (_, i) => userMessage(`e${i}`, `Earlier ${i}\n\n${"word ".repeat(120)}`))
+    const cfg = posChat({ "GET /chats/chat2/messages?before=q0": { messages: older, more: false } })
+    cfg.routes["GET /chats/chat2"].more = true
+    const p = await page(cfg, { width, height })
+    await posOpen(p)
+    const step = (name, rule, act) => posStep(p, win, name, rule, act)
+    const other = async () => {
+      await p.evaluate(() => document.querySelector('.chatrow[data-id="chat1"]').click())
+      await p.waitForSelector('#messages .msg[data-id="m6"]')
+      await p.waitForTimeout(150)
+      await p.evaluate(() => document.querySelector('.chatrow[data-id="chat2"]').click())
+      await p.waitForSelector('#messages .msg[data-id="a4"]')
+    }
+    const side = async () => {
+      await p.evaluate(() => document.getElementById("side-toggle").click())
+      await p.waitForTimeout(400)
+    }
+    const [w2, h2] = win === "wide" ? [720, 700] : [800, 600]
+    await step("at the end: the chat is read again", "end", () => posReadAgain(p))
+    await step("at the end: another chat and back", "end", other)
+    await step("at the end: the window made another size", "end", () => p.setViewportSize({ width: w2, height: h2 }))
+    await step("at the end: the window made its own size again", "end", () => p.setViewportSize({ width, height }))
+    if (await p.isVisible("#side-toggle")) {
+      await step("at the end: the side panel closed (or opened)", "end", side)
+      await step("at the end: the side panel as it was", "end", side)
+    }
+    // Scrolled up: a prompt's first line exactly at the thread's top edge.
+    await posLook(p, '.msg[data-id="q3"]', 0)
+    await step("scrolled up: the chat is read again", "held", () => posReadAgain(p))
+    await step("scrolled up: another chat and back", "back", other)
+    await posLook(p, '.msg[data-id="q3"]', 0)
+    await step("scrolled up: the composer grows while typing", "held", () => p.fill("#composer-text", "one\ntwo\nthree\nfour\nfive\nsix"))
+    await step("scrolled up: the composer shrinks", "held", () => p.fill("#composer-text", ""))
+    await step("scrolled up: the window made another size", "held", () => p.setViewportSize({ width: w2, height: h2 }))
+    await step("scrolled up: the window made its own size again", "held", () => p.setViewportSize({ width, height }))
+    if (await p.isVisible("#side-toggle")) {
+      await step("scrolled up: the side panel closed (or opened)", "held", side)
+      await step("scrolled up: the side panel as it was", "held", side)
+    }
+    // A call's row, opened and closed by the person: the row itself stays under the pointer.
+    const row = '.msg[data-id="a3"] details.call[data-kind="shell"]'
+    await posLook(p, `${row} > summary`, 120)
+    await step("scrolled up: a call's row opened", "held", async () => {
+      await p.click(`${row} > summary`)
+      await p.waitForSelector(`${row}[open]`)
+    })
+    await step("scrolled up: the row closed", "held", async () => {
+      await p.click(`${row} > summary`)
+      await p.waitForSelector(`${row}:not([open])`)
+    })
+    // The same row above the window (the text under it is what is read), opened from the keyboard.
+    await p.evaluate((sel) => document.querySelector(`${sel} > summary`).focus({ preventScroll: true }), row)
+    await posLook(p, { sel: '.msg[data-id="a3"] p', text: "Paragraph 2:" }, 10)
+    await step("scrolled up: a row above what is read opens", "held", () => p.evaluate((sel) => (document.querySelector(sel).open = true), row))
+    await step("scrolled up: a row above what is read closes", "held", () => p.evaluate((sel) => (document.querySelector(sel).open = false), row))
+    // Earlier messages, asked for at the thread's top: put in above the first message, which stays.
+    // (At the thread's very top, the button whole on the screen: the click moves nothing by itself.)
+    await posLook(p, '.msg[data-id="q0"]', 5000)
+    await step("earlier messages are put in above the first one", "held", async () => {
+      await p.click(".thread__earlier")
+      await p.waitForSelector('.msg[data-id="e0"]')
+    })
+    await step("with earlier messages loaded: the composer grows", "held", () => p.fill("#composer-text", "one\ntwo\nthree"))
+    posEnd(p)
+  })
+}
 
 // --- Run ----------------------------------------------------------------------------------------
 

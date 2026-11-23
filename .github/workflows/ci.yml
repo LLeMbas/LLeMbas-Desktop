@@ -80,9 +80,10 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # The thread's place while a reply is written (tests/ui, the W1 tests) under Playwright's WebKit
-  # as well: the app's engine on Linux and macOS is a WebKit, and where a scroller stands as its
-  # content changes is the one thing here the engines do not agree on.
+  # The thread's place while a reply is written, and where it stands through everything else that
+  # changes a chat (tests/ui, the W1 and the POS tests), under Playwright's WebKit as well: the
+  # app's engine on Linux and macOS is a WebKit, and where a scroller stands as its content
+  # changes is the one thing here the engines do not agree on.
   ui-webkit:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -100,6 +101,12 @@ jobs:
           NODE_PATH: ${{ runner.temp }}/pw/node_modules
           ENGINE: webkit
         run: node tests/ui/run.mjs "W1:"
+      - name: Where the chat stands, measured, under WebKit
+        if: always()
+        env:
+          NODE_PATH: ${{ runner.temp }}/pw/node_modules
+          ENGINE: webkit
+        run: node tests/ui/run.mjs "POS:"
 
   # The app started for real: it must still be running after 25 seconds (timeout's 124), and its
   # log must not say it stopped. Once under Xvfb (X11) and once under a headless Weston (Wayland,

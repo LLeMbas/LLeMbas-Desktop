@@ -250,68 +250,195 @@ export function intoComposer(text) {
   box.focus()
 }
 
-// --- Following the newest words ------------------------------------------------------------------
+// --- Where the thread stands ----------------------------------------------------------------------
 //
-// Whether the thread keeps to its end as it grows is a state of its own, set by the person's
-// scrolling and by nothing else: up, and it stays where they are; back at the end, and it follows
-// again. It is never worked out from the distance to the end after the page's own changes -- one
-// frame of a reply can add more than any such distance, and the thread was then left behind at
-// the reply's first line. No engine's scroll anchoring is relied on either (`overflow-anchor:
-// none` in app.css): what is drawn anew keeps its place because `settle` puts it back.
+// Two rules, and nothing else moves the thread. At its end, it keeps to its end as it grows:
+// that is a state of its own (`following`), set by the person's scrolling and by nothing else --
+// up, and it stays where they are; back at the end, and it follows again. It is never worked out
+// from the distance to the end after the page's own changes: one frame of a reply can add more
+// than any such distance. Anywhere else, what the person looks at stays where it is on the
+// screen, whatever is added, taken away or given another size above or below it: the thing at
+// the thread's top edge is kept (`held`: the message, and inside it the paragraph, the row or the
+// card the edge runs through) and put back where it was after every change -- the page's own
+// (`mark` before, `settle` after) and those nobody announces (a picture arriving, a block opened,
+// the window or the composer another size: the observer in `initFollowing`). It is found again
+// by what it is, not by where it was: a reply is drawn anew with every frame, and a chat read
+// again may have other rows. A remembered `scrollTop` says nothing once anything above has
+// changed, so none is relied on. No engine's scroll anchoring is relied on either
+// (`overflow-anchor: none` in app.css): the engines do not agree on it.
 
 let following = true
 /** The thread as it last was: where it stood, and the sizes that stood for. */
-const seen = { top: 0, height: 0, client: 0 }
+const seen = { top: 0, height: 0, client: 0, width: 0 }
+/** What is at the thread's top edge while the end is not followed (`placeOf`), else null. */
+let held = null
 /** How near the end (px) scrolling down has to come for following to begin again. */
 const NEAR = 80
 /** Until when (performance.now()) the wheel turned up counts as the person leaving the end. */
 let leaving = 0
 const LEAVING = 500
 
-function remember(th) {
-  seen.top = th.scrollTop
-  seen.height = th.scrollHeight
-  seen.client = th.clientHeight
+/** What is not looked into for a nearer thing at the edge: a block of text or a thing with one size of its own. */
+const WHOLE = "p, pre, h1, h2, h3, h4, h5, h6, table, summary, figcaption, footer, button, img, video, audio, iframe, .tiles, .msg__bubble, .msg__actions, .mjob, .hpage, .md-code, .md-table"
+/** So many of a thing's first characters are what it is known by when it is drawn anew. */
+const KNOWN_BY = 64
+
+/**
+ * What is at the thread's top edge, nearest first: the paragraph (row, card) the edge runs
+ * through or that begins just under it, the step it is in, ... and last the message. Of each,
+ * where its top is from the edge, its size, and what it is known by should it be drawn anew.
+ */
+function placeOf() {
+  const th = $("thread")
+  const edge = th.getBoundingClientRect().top
+  const place = []
+  let base = 0
+  for (let within = $("messages"), depth = 0; within && depth < 8; depth++) {
+    let at = null
+    let box = null
+    for (const el of within.children) {
+      // (Of the thread's own children only the messages: they are what is found again by a name.)
+      if (!depth && !el.dataset.id) continue
+      const b = el.getBoundingClientRect()
+      if (b.height > 0 && b.bottom > edge + 0.5) {
+        at = el
+        box = b
+        break
+      }
+    }
+    if (!at) break
+    if (!depth) base = box.top
+    const whole = at.matches(WHOLE) || !at.childElementCount
+    place.unshift({
+      el: at,
+      id: depth ? "" : at.dataset.id || "",
+      tag: at.tagName,
+      // (Not of a thing with very many parts -- a long listing: reading its words costs too much to do at every move.)
+      text: depth && whole && at.childElementCount < 200 ? (at.textContent || "").slice(0, KNOWN_BY) : "",
+      offset: box.top - edge,
+      rel: box.top - base,
+      width: box.width,
+      height: box.height,
+    })
+    // Wholly under the edge, its top is the place; so is a thing that is one block.
+    if (box.top >= edge - 0.5 || whole) break
+    within = at
+  }
+  return place.length ? place : null
 }
 
 /**
- * The thread moved, or is about to be changed: was that the person? A move up is theirs
- * whenever no layout can have made it -- the thread could still stand where it stood (its
- * furthest place is no nearer than that) and stands higher: however little, also at the very
- * end, also when a size changed in the same moment (a reply grows as they scroll). A move down
- * is theirs only with the sizes as they were; one that comes with a change of size is the
- * layout's (the end came nearer, the box grew), and says nothing of what they want.
+ * A place's thing as the thread has it now: `[element, which of the place's entries it is]`,
+ * the nearest that can be found -- itself where it is still drawn, else the same kind of thing
+ * with the same first words in the same message (of several, the one nearest to where it was),
+ * else what it was in, and at last the message. Null where the message is no longer drawn.
+ */
+function found(place) {
+  const list = $("messages")
+  const top = place.at(-1)
+  const msg = top.el?.isConnected && top.el.parentElement === list ? top.el : top.id ? list.querySelector(`:scope > .msg[data-id="${CSS.escape(top.id)}"]`) : null
+  if (!msg) return null
+  const drawn = (el) => el.getBoundingClientRect().height > 0
+  for (const e of place) {
+    if (e === top) break
+    if (e.el?.isConnected && msg.contains(e.el) && drawn(e.el)) return [e.el, e]
+    if (e.text.length < 12) continue
+    const from = msg.getBoundingClientRect().top
+    let best = null
+    let far = Infinity
+    for (const el of msg.querySelectorAll(e.tag)) {
+      if (!(el.textContent || "").startsWith(e.text) || !drawn(el)) continue
+      const d = Math.abs(el.getBoundingClientRect().top - from - e.rel)
+      if (d < far) [best, far] = [el, d]
+    }
+    if (best) return [best, e]
+  }
+  return [msg, top]
+}
+
+/**
+ * What was at the thread's top edge is put there again, `own` px further for what the person
+ * scrolled themselves meanwhile. A thing the edge runs through that has another width now (the
+ * window, a panel: its words run differently) is cut by the edge at the same part of its
+ * height. False where there is nothing to go by.
+ */
+function keep(own = 0) {
+  const th = $("thread")
+  const at = held && found(held)
+  if (!at) return false
+  const [el, e] = at
+  const box = el.getBoundingClientRect()
+  const through = e.offset < 0 && e.height > 0 && Math.abs(box.width - e.width) > 0.5 ? (e.offset * box.height) / e.height : e.offset
+  const want = through - own
+  const off = box.top - th.getBoundingClientRect().top - want
+  if (Math.abs(off) > 0.5) th.scrollTop += off
+  // Held from here on by what is drawn now, at the very place meant: a thread that stands on
+  // whole pixels is a part of one off each time, and that must not add up over a long reply.
+  held = placeOf()
+  if (held && held[0].el === el) held[0].offset = want
+  return true
+}
+
+function remember(th, place = true) {
+  seen.top = th.scrollTop
+  seen.height = th.scrollHeight
+  seen.client = th.clientHeight
+  seen.width = th.clientWidth
+  if (following) held = null
+  else if (place) held = placeOf()
+}
+
+/**
+ * The thread moved, or a size changed, or it is about to be changed: was that the person? A
+ * move up is theirs whenever no layout can have made it -- the thread could still stand where
+ * it stood (its furthest place is no nearer than that) and stands higher: however little, also
+ * at the very end, also when a size changed in the same moment (a reply grows as they scroll).
+ * A move down is theirs only with the sizes as they were; one that comes with a change of size
+ * says nothing of what they want. And where a size did change: the end again while it is
+ * followed, else what was at the top edge put back there (less the person's own move).
  */
 function noticed() {
   const th = $("thread")
   if (!th.clientHeight) return // not on the screen: nothing to read
   const gap = th.scrollHeight - th.scrollTop - th.clientHeight
   const moved = th.scrollTop - seen.top
-  const same = th.scrollHeight === seen.height && th.clientHeight === seen.client
-  if (moved < -0.5 && th.scrollHeight - th.clientHeight >= seen.top) following = false
+  const same = th.scrollHeight === seen.height && th.clientHeight === seen.client && th.clientWidth === seen.width
+  const room = th.scrollHeight - th.clientHeight >= seen.top
+  if (moved < -0.5 && room) following = false
   else if (gap <= 2) {
     // At the end is followed -- but not in the moment after the wheel was turned up, while the
     // scroll it asked for has not moved the thread yet, or only by its first pixel.
     if (performance.now() > leaving) following = true
   } else if (same) {
     if (moved > 1 && gap < NEAR) following = true
-  } else if (following) th.scrollTop = th.scrollHeight
-  remember(th)
+  }
+  let kept = false
+  if (!same) {
+    if (following) th.scrollTop = th.scrollHeight
+    // (A thread cut shorter than where it stood was moved by that, not by the person.)
+    else kept = keep(room ? moved : 0)
+  }
+  // (Nothing moved and no size changed: what is held is still what is there, to the part of a pixel.)
+  remember(th, !kept && !(same && held && Math.abs(moved) < 0.5))
 }
 
-/** Before the page changes the thread: what the person did meanwhile, and where the thread stands. */
+/** Before the page changes the thread: what the person did meanwhile, and what they look at. */
 function mark() {
   noticed()
-  return $("thread").scrollTop
 }
 
-/** After the page changed the thread: its end when followed, else exactly where it stood (`top`). */
-function settle(top) {
+/** After the page changed the thread: its end when followed, else what was at its top edge is there again. */
+function settle() {
   const th = $("thread")
   if (!th.clientHeight) return
+  let kept = false
   if (following) th.scrollTop = th.scrollHeight
-  else if (top !== undefined && Math.abs(th.scrollTop - top) > 0.5) th.scrollTop = top
-  remember(th)
+  else {
+    kept = keep()
+    // Nothing to go by (no message drawn): where it stood.
+    if (!kept && Math.abs(th.scrollTop - seen.top) > 0.5) th.scrollTop = seen.top
+  }
+  remember(th, !kept)
 }
 
 /** To the end, and following from here on: a chat opened, a message sent. */
@@ -319,6 +446,36 @@ function toBottom() {
   following = true
   leaving = 0
   settle()
+}
+
+/** Where each chat left while the person read it somewhere else than at its end: what was at the top edge, and its last message then. */
+const places = new Map()
+
+const lastDrawn = () => $("messages").lastElementChild?.dataset?.id || ""
+
+/** The open chat is left for another: where the person was reading it is kept (nothing, at its end). */
+function leavePlace() {
+  const id = open?.chat?.id
+  if (!id) return
+  if (following || !held) places.delete(id)
+  // (Without the elements themselves: they go with the chat, and are found again by what they were.)
+  else places.set(id, { place: held.map((e) => ({ ...e, el: null })), last: lastDrawn() })
+}
+
+/**
+ * A chat just opened and drawn: at its end, and followed -- or, where the person left it reading
+ * somewhere else and nothing has been said in it since, where they left it.
+ */
+function arrive(id) {
+  const was = places.get(id)
+  places.delete(id)
+  if (was && was.last && was.last === lastDrawn() && found(was.place)) {
+    following = false
+    leaving = 0
+    held = was.place
+    return settle()
+  }
+  toBottom()
 }
 
 function initFollowing() {
@@ -349,7 +506,7 @@ function initFollowing() {
   // dock grown by a card or a longer message, the window; and the thread back on the screen
   // after another page, with what was written meanwhile.
   // Read as every other change is (`noticed`): the person's move up in the same moment ends
-  // following here too, and the end is kept only while it is followed.
+  // following here too; the end is kept while it is followed, and what is at the top edge otherwise.
   const sized = new ResizeObserver(noticed)
   for (const el of [th, $("messages"), $("new-chat")]) sized.observe(el)
 }
@@ -468,7 +625,7 @@ function startEdit(el, m) {
     save.disabled = cancel.disabled = true
     try {
       await post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/edit`, { text })
-      reload()
+      readAgain()
     } catch (err) {
       said.textContent = why(err)
       said.hidden = false
@@ -492,7 +649,7 @@ async function regenerate(m) {
   alertIn("")
   try {
     await post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/regenerate`)
-    reload()
+    readAgain()
   } catch (err) {
     alertIn(why(err))
   }
@@ -769,9 +926,9 @@ class Live {
     if (ticks && !this.clock)
       this.clock = setInterval(() => {
         if (this.done) return this.stopClock()
-        const top = mark()
+        mark()
         this.drawStatus()
-        settle(top)
+        settle()
       }, 1000)
     else if (!ticks) this.stopClock()
   }
@@ -805,7 +962,7 @@ class Live {
     // 2.0.0-beta.11: the reply ends when it is saved, the naming a moment later).
     if (event === "title") return this.named(data?.chat)
     if (this.done) return
-    const top = mark()
+    mark()
     this.frames = (this.frames || 0) + 1
     // Any frame that carries `progress` (the status frame does, from server 2.0.0-beta.8 on):
     // the object, or null for nothing running -- then the status text again.
@@ -849,30 +1006,30 @@ class Live {
         ended = { id: "", n: 0 }
         this.stopClock()
         // How it ended (stopped, failed) stays on the reply: the stream's last progress says why.
-        this.el.replaceWith(assistantMessage(data.message, this.chat, this.progress))
+        this.el.replaceWith(row(data.message, this.chat, this.progress))
         renderCards(this.chat, [])
         if (data.chat?.title) setTitle(data.chat.title)
         ctx.changed(this.chat)
         if (open?.live === this) open.live = null
         setRunning(false)
         // A message queued behind this reply has one of its own now: read the chat again.
-        if (data.next) reload()
+        if (data.next) readAgain()
         break
       default:
         break
     }
-    settle(top)
+    settle()
   }
 
   named(chat) {
     if (!chat?.title || chat.id !== this.chat.id) return
-    const top = mark()
+    mark()
     if (open?.chat?.id === chat.id) {
       open.chat = { ...open.chat, title: chat.title }
       setTitle(chat.title)
     }
     ctx.changed(this.chat)
-    settle(top)
+    settle()
   }
 
   tailed(tail) {
@@ -891,11 +1048,11 @@ class Live {
 
   /** The reply cannot be followed: said on it, with a way to read the chat again. */
   lost(err) {
-    const top = mark()
+    mark()
     this.status.textContent = t("The connection to the reply was lost: %(why)s", { why: why(err) })
     this.status.classList.add("is-error")
-    if (!this.el.querySelector(".msg__again")) this.el.append(h("button", { type: "button", class: "btn btn--sm msg__again", text: t("Read again"), onclick: reload }))
-    settle(top)
+    if (!this.el.querySelector(".msg__again")) this.el.append(h("button", { type: "button", class: "btn btn--sm msg__again", text: t("Read again"), onclick: () => readAgain() }))
+    settle()
   }
 
   end(err) {
@@ -918,7 +1075,7 @@ class Live {
     }
     if (err) this.lost(err)
     else {
-      reload()
+      readAgain()
       activityChanged()
     }
   }
@@ -1061,7 +1218,7 @@ function cardOf(chat, card) {
     } catch (err) {
       if (err?.status === 409) {
         el.remove()
-        reload()
+        readAgain()
         return
       }
       said.textContent = why(err)
@@ -2058,28 +2215,14 @@ const note = (text) => alertIn(text, true)
 /** Which reading of a chat is the latest: an older one's answer, or its failure, is dropped. */
 let reads = 0
 
-/**
- * The message at the top of what the thread shows -- the first one reaching below the thread's
- * top edge -- and how far its top is from that edge: what a thread drawn anew is put back by.
- */
-function anchorOf() {
-  const th = $("thread")
-  const edge = th.getBoundingClientRect().top
-  for (const el of $("messages").querySelectorAll(".msg[data-id]")) {
-    const box = el.getBoundingClientRect()
-    if (box.bottom > edge) return { id: el.dataset.id, offset: box.top - edge }
-  }
-  return null
-}
+/** A row was drawn from this: the message as the server sent it. A chat read again keeps the rows that still say the same. */
+const drawnFrom = new WeakMap()
 
-/** The thread drawn anew, put back: at its end when followed, else with `anchor` where it was; the end if that message is gone. */
-function settleOn(anchor) {
-  const th = $("thread")
-  if (!th.clientHeight) return
-  const el = !following && anchor ? $("messages").querySelector(`.msg[data-id="${CSS.escape(anchor.id)}"]`) : null
-  if (!el) return toBottom()
-  th.scrollTop += el.getBoundingClientRect().top - th.getBoundingClientRect().top - anchor.offset
-  remember(th)
+/** A message's row, as the server sent the message. */
+function row(m, chat, last = null) {
+  const el = m.role === "user" ? userMessage(m) : assistantMessage(m, chat, last)
+  drawnFrom.set(el, JSON.stringify(m))
+  return el
 }
 
 /** Open a chat by id: its newest page, and the reply being written, if one is. */
@@ -2091,6 +2234,8 @@ export async function openChat(id) {
   // the person has it. Cleared first, it shrank to one line and stood at its top. Only a chat
   // read whole counts: while its first reading is on its way, a second is a first one too.
   const again = open?.chat?.id === id && !!open.chat.kind && !!$("messages").querySelector(".msg")
+  // Another chat: where the person was reading this one is kept for when they come back to it.
+  if (open?.chat?.id !== id) leavePlace()
   if (!again && open?.chat?.id !== id) lastLive = null
   const was = again && lastLive?.chat?.id === id ? lastLive : null
   if (open?.chat?.id !== id) discard()
@@ -2136,6 +2281,8 @@ export async function openChat(id) {
     return
   }
   if (mine !== reads || open?.chat?.id !== id) return
+  // What they look at, before anything of the answer is drawn (the head and the dock may take another size too).
+  mark()
   open.chat = r.chat
   // This window is the chat's page for the `python` tool (a chat on the server, Python on there).
   pythonFor(r.chat)
@@ -2143,22 +2290,39 @@ export async function openChat(id) {
   renderHead(r.chat)
   renderChips()
   renderNotice()
-  mark()
-  const anchor = again ? anchorOf() : null
   const seed = seedOf(r.chat, r.messages, r.more)
   // A report's conversation opens with a line the server wrote in the person's place: not shown.
   const shown = r.messages.filter((m) => m.id !== r.live && m.id !== seed)
-  // Read again with earlier pages drawn above the newest one: they stay, and what is drawn anew
-  // begins at the newest page's first message. Where that message is not on the screen (the
+  // Read again with earlier pages drawn above the newest one: they stay, and what is looked at
+  // anew begins at the newest page's first message. Where that message is not on the screen (the
   // summary replaced the messages), the thread is the newest page alone, as when it is opened.
   const first = again && shown[0] ? list.querySelector(`.msg[data-id="${CSS.escape(shown[0].id)}"]`) : null
-  if (first?.previousElementSibling) {
-    while (first.nextSibling) first.nextSibling.remove()
-    first.remove()
-  } else {
-    clear(list)
-    if (r.more) list.append(earlier())
+  const above = first?.previousElementSibling || null
+  if (!again) clear(list)
+  // A chat read again is not drawn again: a row whose message the server sends as it sent it
+  // before stays as it is -- the same element, with what the person opened in it, its pictures
+  // and its players -- and only what changed is drawn anew, what is gone taken away, what is new
+  // put in its place. (The reply being written is the stream's: its row is made by `follower`.)
+  const have = new Map()
+  for (let el = above ? first : list.firstElementChild; el; el = el.nextElementSibling) if (el.matches(".msg[data-id]:not(.is-live)")) have.set(el.dataset.id, el)
+  const rows = shown.map((m) => {
+    const el = have.get(m.id)
+    return el && drawnFrom.get(el) === JSON.stringify(m) ? el : row(m, r.chat)
+  })
+  const stay = new Set(rows)
+  for (let el = above ? first : list.firstElementChild, next; el; el = next) {
+    next = el.nextElementSibling
+    if (!stay.has(el)) el.remove()
+  }
+  let before = above
+  if (!above) {
+    if (r.more) list.prepend((before = earlier()))
     open.more = r.more
+  }
+  for (const el of rows) {
+    const at = before ? before.nextSibling : list.firstChild
+    if (at !== el) list.insertBefore(el, at)
+    before = el
   }
   if (again) {
     invoke("pages_clear")
@@ -2166,14 +2330,15 @@ export async function openChat(id) {
     // The cards are the stream's to say (its `ask` frame); with no reply being written, none waits.
     if (!r.live) renderCards(r.chat, [])
   }
-  for (const m of shown) list.append(m.role === "user" ? userMessage(m) : assistantMessage(m, r.chat))
   ctx.opened(r.chat)
   if (r.live) follower(r.chat, r.live, was)
   else setRunning(false)
-  // A chat opened is at its end and followed (what the reply's first frames bring included);
-  // one read again is where it was: the message at the top of the window is there again.
-  if (again) settleOn(anchor)
-  else toBottom()
+  // A chat opened is at its end and followed (what the reply's first frames bring included) --
+  // or where the person left it; one read again is where it was: what was at the top of the
+  // window is there again, and where that message is gone, the thread is at its end.
+  if (!again) arrive(id)
+  else if (!following && !(held && found(held))) toBottom()
+  else settle()
   $("composer-text").focus({ preventScroll: true })
 }
 
@@ -2188,15 +2353,17 @@ function earlier() {
       e.target.disabled = true
       try {
         const r = await get(`/chats/${encodeURIComponent(open.chat.id)}/messages?before=${encodeURIComponent(first)}`)
-        const th = $("thread")
-        const from = th.scrollHeight
+        // Asked for at the thread's top, the person is not at its end any more: what they look
+        // at -- the first message there was -- stays where it is, the earlier ones above it.
+        mark()
+        following = false
+        held = placeOf()
         const frag = document.createDocumentFragment()
         if (r.more) frag.append(earlier())
         const seed = seedOf(open.chat, r.messages, r.more)
-        for (const m of r.messages) if (m.id !== seed) frag.append(m.role === "user" ? userMessage(m) : assistantMessage(m, open.chat))
+        for (const m of r.messages) if (m.id !== seed) frag.append(row(m, open.chat))
         e.target.replaceWith(frag)
-        th.scrollTop += th.scrollHeight - from
-        remember(th)
+        settle()
       } catch (err) {
         e.target.disabled = false
         alertIn(why(err))
@@ -2205,8 +2372,16 @@ function earlier() {
   })
 }
 
-function reload() {
-  if (open?.chat?.id) openChat(open.chat.id)
+/**
+ * The chat that is open, read again from the server -- the one way it is: a reply's stream that
+ * ended, a message edited, a generation that woke the chat, the summary made, and whatever else
+ * says the chat has something this window did not start. `id` names the chat meant (the open one
+ * where none is named); another chat than the open one is nobody's to read. The thread stays
+ * where the person has it (see `openChat`).
+ */
+export function readAgain(id = open?.chat?.id) {
+  if (!id || open?.chat?.id !== id) return Promise.resolve()
+  return openChat(id)
 }
 
 /**
@@ -2217,12 +2392,13 @@ function reload() {
 export function mediaJobEnded(job) {
   const id = open?.chat?.id
   if (!id || (job?.chat_id && job.chat_id !== id)) return
-  const again = () => open?.chat?.id === id && !open.live && reload()
+  const again = () => open?.chat?.id === id && !open.live && readAgain(id)
   again()
   if (job?.told !== true) setTimeout(again, 4000)
 }
 
 export function closeChat() {
+  leavePlace()
   if (open?.live) open.live.stop()
   forgetMedia()
   lastLive = null
@@ -2518,7 +2694,7 @@ async function compactNow() {
   try {
     await post(`/chats/${encodeURIComponent(id)}/compact`)
     alertIn("")
-    if (openChatId() === id) reload()
+    readAgain(id)
     activityChanged()
   } catch (err) {
     alertIn(why(err))
@@ -2672,10 +2848,10 @@ function grow() {
   const box = $("composer-text")
   // Measuring the box takes its height away for a moment, and the thread above it is laid out
   // taller meanwhile: it is put back where it stood.
-  const top = mark()
+  mark()
   box.style.height = "auto"
   box.style.height = `${Math.min(box.scrollHeight, window.innerHeight * 0.4)}px`
-  settle(top)
+  settle()
 }
 
 export function initChat(context) {

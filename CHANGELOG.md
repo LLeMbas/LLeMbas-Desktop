@@ -4,6 +4,27 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **What you are reading in a chat stays where it is.** Scrolled up from the end, the line at the
+  top of the window no longer moves when something above or below it changes: a picture, a video
+  or a player that comes into sight while you scroll up (its room is kept for it before it has
+  arrived -- at the size the server says, else one fixed frame -- so the prompt under it no
+  longer slides down); a row of a tool call opened or closed above; the reasoning of a reply
+  folding into its row while you read the reply; a generation that ends and wakes the chat; the
+  window, the side panel or the message box taking another size (the text is cut by the top edge
+  at the same place of the same paragraph). At the end of the chat you stay at the end, as before.
+- **A chat that is read again is not drawn again.** The messages that have not changed stay as
+  they are -- what you opened in them, their pictures and players included -- and only what is
+  new or changed is drawn.
+- **A chat you left while reading further up opens there again** when you come back to it and
+  nothing has been said in it since; with a new message in it, or left at its end, it opens at
+  its end.
+- **Earlier messages** loaded at the top of a chat no longer let the next thing that changes take
+  you back down to the end.
+
 ## [1.0.0-beta.13] — 2026-11-19
 
 For LLeMbas server after 2.0.0-beta.15 (its files routes on `/api/v2`); with an older server the

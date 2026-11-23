@@ -85,6 +85,23 @@ export function forgetMedia() {
   }
 }
 
+/**
+ * The frame a picture or a player is drawn in, inside the card's view. Its room is known before
+ * the file is, so nothing in the thread moves when the file arrives: from the size the server
+ * says (`width` x `height`: never wider than the picture is, at its proportions), else one fixed
+ * size for the kind (app.css, `.mcard__frame`). What is put in it -- the line that says it is
+ * loading, the picture, the player, a line that says why not -- fills it or sits in its middle.
+ */
+function frameOf(kind, width, height) {
+  const sized = kind !== "audio" && width > 0 && height > 0
+  const frame = h("div", { class: "mcard__frame", dataset: { kind, sized: String(sized) } })
+  if (sized) {
+    frame.style.setProperty("--w", String(Math.round(width)))
+    frame.style.setProperty("--h", String(Math.round(height)))
+  }
+  return frame
+}
+
 const gone = () => t("This file is no longer there.")
 const cannot = () => t("This file could not be shown here. It can still be downloaded.")
 
@@ -96,7 +113,9 @@ const cannot = () => t("This file could not be shown here. It can still be downl
  */
 function shown(kind, open, { name = "", mime = "", width = 0, height = 0 } = {}) {
   const note = (text) => h("p", { class: "mcard__note", text })
-  const box = h("div", { class: "mcard__view" }, note(t("Loading…")))
+  const box = frameOf(kind, width, height)
+  box.append(note(t("Loading…")))
+  const view = h("div", { class: "mcard__view" }, box)
   const mine = chat
   let url = ""
   /** A new address for the file; the one before it is given back. */
@@ -116,8 +135,6 @@ function shown(kind, open, { name = "", mime = "", width = 0, height = 0 } = {})
           kind === "image"
             ? h("img", { class: "mcard__image", alt: name, src: first, draggable: "false", width: width > 0 ? width : null, height: height > 0 ? height : null })
             : h(kind, { class: kind === "audio" ? "mcard__audio" : "mcard__video", controls: true, preload: "metadata", src: first, "aria-label": name })
-        // The room a video takes is known before its first frame is: nothing under it moves.
-        if (kind === "video" && width > 0 && height > 0) el.style.aspectRatio = `${width} / ${height}`
         let asked = false
         let again = false
         el.addEventListener("error", async () => {
@@ -154,8 +171,8 @@ function shown(kind, open, { name = "", mime = "", width = 0, height = 0 } = {})
       },
       (err) => box.replaceChildren(note(why(err))),
     )
-  onSight(box, draw)
-  return box
+  onSight(view, draw)
+  return view
 }
 
 /** A 3D model: drawn when asked for, in a sealed frame. */
@@ -229,8 +246,8 @@ export function pictureCard(image, attachmentPicture) {
   if (!image || typeof image !== "object" || !image.id) return null
   const key = `image:${image.id}`
   if (cards.has(key)) return cards.get(key)
-  const box = h("div", { class: "mcard__view" })
-  const el = h("figure", { class: "mcard", dataset: { media: "image" } }, box)
+  const box = frameOf("image", image.width, image.height)
+  const el = h("figure", { class: "mcard", dataset: { media: "image" } }, h("div", { class: "mcard__view" }, box))
   attachmentPicture(`/attachments/${image.id}`).then((url) => {
     if (!url || !url.startsWith("data:image/")) return void box.replaceChildren(h("p", { class: "mcard__note", text: cannot() }))
     box.replaceChildren(h("img", { class: "mcard__image", alt: "", src: url, draggable: "false", width: image.width > 0 ? image.width : null, height: image.height > 0 ? image.height : null }))

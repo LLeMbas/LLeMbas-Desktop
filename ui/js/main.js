@@ -12,7 +12,7 @@ import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer, closeViewerKeeping, keptEdit, dropKeptEdit, restoreEdit } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab, openServerFile, revealServerFile } from "./explorer.js"
 import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
+import { initChat, openChat, readAgain, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
 import { initPython } from "./python.js"
 import { pythonChanged } from "./chat.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
@@ -397,7 +397,7 @@ async function boot() {
     },
     here: onThisComputer,
     // The conversation as it now stands: the summary's divider, read again, if it is still open.
-    compacted: (id) => openChatId() === id && openChat(id),
+    compacted: (id) => readAgain(id),
   })
 
   $("new-chat-btn").prepend(icon(ICONS.plus))
