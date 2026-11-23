@@ -11,8 +11,8 @@ import { renderSetup, initSetup } from "./setup.js"
 import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer, closeViewerKeeping, keptEdit, dropKeptEdit, restoreEdit } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab, openServerFile, revealServerFile } from "./explorer.js"
-import { initList, refreshList, markCurrent } from "./list.js"
-import { initChat, openChat, readAgain, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
+import { initList, refreshList, markCurrent, busyElsewhere } from "./list.js"
+import { initChat, openChat, readAgain, replyStarted, eventsOpened, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
 import { initPython } from "./python.js"
 import { pythonChanged } from "./chat.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
@@ -478,6 +478,17 @@ async function boot() {
     route()
     // The agent came up or went: which devices are linked changes with it.
     if (started && before && before.agent.state !== status.agent.state) loadDevices().then(() => (refreshList(), statusChanged()))
+  })
+  // A reply started in one of the person's chats (the server's `reply` frame, handed on by
+  // Rust): the open chat's is the chat's to follow; any chat's shows in the list -- the running
+  // mark, the order -- and nothing is opened or brought to the front for it.
+  listen("reply", (e) => {
+    if (view !== "app") return
+    const mine = replyStarted(e.payload)
+    if (typeof e.payload?.chat_id === "string") busyElsewhere(e.payload.chat_id, !mine && e.payload.live !== false)
+  })
+  listen("events-open", () => {
+    if (view === "app") eventsOpened()
   })
   listen("open-settings", () => {
     if (view === "app") showSettings(true)

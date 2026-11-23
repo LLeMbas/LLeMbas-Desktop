@@ -6,6 +6,30 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## Unreleased
 
+For a LLeMbas server that says its replies as they start (the `reply` frame of its events stream,
+after 2.0.0-beta.17); with an older server everything is as it was.
+
+### Added
+
+- **A reply nobody asked for here shows by itself.** When a helper finishes and the agent answers
+  on its own, when a scheduled task's result, a finished generation or the linked computer starts
+  a reply in the chat you have open, the note it answers and the reply appear at once and the
+  reply is written before your eyes -- its words, its tool calls, its cards, with Stop -- exactly
+  as one you asked for. Until now it showed only after the chat was opened again. At the end of
+  the chat you stay at the end; scrolled up, what you read does not move; and what you are typing
+  in elsewhere in the window (the terminal, the search line) keeps the keyboard.
+- **A reply that starts in another chat shows in the list** at once -- the chat is marked as
+  running and takes its place in the order -- and the mark goes when it has ended. The chat you
+  have open stays open.
+- **"The reply to this was not recorded."** on a reply in an agent chat that answers the
+  computer's own note and holds nothing: an older server did not write such replies down, and
+  the row stood blank.
+
+### Changed
+
+- A generation's card no longer reads the chat again when its job ends on a server that says
+  its replies: the reply that wakes the chat comes by itself, once.
+
 ### Fixed
 
 - **What you are reading in a chat stays where it is.** Scrolled up from the end, the line at the

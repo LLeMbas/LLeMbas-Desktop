@@ -707,7 +707,7 @@ function startEdit(el, m) {
     if (!text && !m.attachments?.length) return box.focus()
     save.disabled = cancel.disabled = true
     try {
-      await post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/edit`, { text })
+      await asking(post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/edit`, { text }))
       readAgain()
     } catch (err) {
       said.textContent = why(err)
@@ -731,7 +731,7 @@ async function regenerate(m) {
   if (!open?.chat?.id) return
   alertIn("")
   try {
-    await post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/regenerate`)
+    await asking(post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/regenerate`))
     readAgain()
   } catch (err) {
     alertIn(why(err))
@@ -761,11 +761,24 @@ function endOf(m, last) {
   return null
 }
 
-function assistantMessage(m, chat, last = null) {
+/**
+ * A finished reply in an agent chat that holds nothing at all and answers a turn nobody typed
+ * (`before`: a job's note, a team report): the computer answered and what it said was never
+ * written on the server. The row says so in one line, as the web interface does; no text is
+ * made up for it.
+ */
+function unrecorded(m, chat, before) {
+  if (chat?.kind !== "agent" || !before || before.role !== "user" || !before.machine) return false
+  if (m.role !== "assistant" || !m.complete || m.stopped || m.error || endLine(m.end)) return false
+  return !(m.steps || []).some((s) => (s.markdown || s.text || "").trim() || s.calls?.length || s.messages?.length)
+}
+
+function assistantMessage(m, chat, last = null, before = null) {
   const el = h("article", { class: "msg msg--assistant", dataset: { id: m.id } })
   const steps = h("div", { class: "msg__steps" })
   renderSteps(steps, m.steps || [], chat, false, m.id)
   el.append(steps)
+  if (!endLine(last) && unrecorded(m, chat, before)) el.append(h("p", { class: "msg__note msg__unrecorded", text: t("The reply to this was not recorded.") }))
   const end = endOf(m, last)
   if (end) {
     el.append(h("p", { class: `msg__end is-${end.phase}`, text: endLine(end) }))
@@ -1089,7 +1102,8 @@ class Live {
         ended = { id: "", n: 0 }
         this.stopClock()
         // How it ended (stopped, failed) stays on the reply: the stream's last progress says why.
-        this.el.replaceWith(row(data.message, this.chat, this.progress))
+        // (What it answers is the row above it: a note of the machine's is drawn as one.)
+        this.el.replaceWith(row(data.message, this.chat, this.progress, this.el.previousElementSibling?.matches(".msg--user.is-machine") ? { role: "user", machine: true } : null))
         renderCards(this.chat, [])
         if (data.chat?.title) setTitle(data.chat.title)
         ctx.changed(this.chat)
@@ -1178,6 +1192,72 @@ const QUICK_END = 5000
 
 /** The reply last followed, its stream ended or not: what is drawn of it, for when it is followed again. */
 let lastLive = null
+
+// --- A reply this window did not start -------------------------------------------------------------
+//
+// The server says every reply that starts in one of the person's chats (`reply` on GET /events:
+// {chat_id, message_id, live}; Rust hands the frame on as it is) -- a subagent that woke its
+// manager, a schedule's result, a finished generation's note, a turn the linked computer began
+// by itself, and this window's own too. For the chat that is open, a reply not yet known here
+// is one more reason to read the chat again (`readAgain`): the answer has the turn it answers
+// and names the reply being written, which is then followed exactly as one asked for here --
+// the same `Live`, the same stream, Stop in Send's place. Known already -- followed now, or
+// drawn as finished -- the frame is nothing: no reply is read or followed twice.
+
+/** This window's own requests that may start a reply, on their way: their answer names it. */
+const asks = new Set()
+function asking(promise) {
+  asks.add(promise)
+  const over = () => asks.delete(promise)
+  promise.then(over, over)
+  return promise
+}
+
+/** The reading of the open chat that is on its way, if one is. */
+let reading = null
+
+/** The server whose stream has said a reply: it says every one, and nothing else has to look for them. */
+let saidBy = ""
+const repliesSaid = () => !!saidBy && saidBy === (ctx.status()?.server || "")
+
+/** Whether the open chat already has this reply: followed now, or drawn as finished. */
+function knows(messageId) {
+  if (open?.live && !open.live.done && open.live.id === messageId) return true
+  return !!$("messages").querySelector(`.msg--assistant[data-id="${CSS.escape(messageId)}"]:not(.is-live)`)
+}
+
+/**
+ * The stream's `reply` frame. For the open chat: read again unless the reply is known -- after
+ * whatever of this window's is on its way that would bring it (a message being sent, a reading).
+ * Answers whether the frame was the open chat's.
+ */
+export function replyStarted(frame) {
+  const chat = frame?.chat_id
+  const reply = frame?.message_id
+  if (typeof chat !== "string" || typeof reply !== "string" || !chat || !reply) return false
+  saidBy = ctx.status()?.server || ""
+  if (open?.chat?.id !== chat) return false
+  ;(async () => {
+    // (A turn more after each: what ran on the answer -- `follower`, a reading begun -- has run.)
+    while (asks.size || reading) {
+      await Promise.allSettled([...asks, reading])
+      await null
+    }
+    if (open?.chat?.id !== chat || knows(reply)) return
+    await readAgain(chat, true)
+  })()
+  return true
+}
+
+/**
+ * The events stream was opened anew (the app came back, the connection was lost for a while): a
+ * reply that started and ended meanwhile was said to nobody. The open chat is read again, unless
+ * it is being read or a reply is followed (whose end reads it anyway).
+ */
+export function eventsOpened() {
+  if (!repliesSaid() || !open?.chat?.kind || open.live || reading || asks.size) return
+  readAgain(open.chat.id, true)
+}
 
 function follower(chat, messageId, from = null) {
   if (open?.live) open.live.stop()
@@ -2309,15 +2389,23 @@ let reads = 0
 /** A row was drawn from this: the message as the server sent it. A chat read again keeps the rows that still say the same. */
 const drawnFrom = new WeakMap()
 
-/** A message's row, as the server sent the message. */
-function row(m, chat, last = null) {
-  const el = m.role === "user" ? userMessage(m) : assistantMessage(m, chat, last)
+/** A message's row, as the server sent the message; `before` is the message it follows (what a reply answers). */
+function row(m, chat, last = null, before = null) {
+  const el = m.role === "user" ? userMessage(m) : assistantMessage(m, chat, last, before)
   drawnFrom.set(el, JSON.stringify(m))
   return el
 }
 
 /** Open a chat by id: its newest page, and the reply being written, if one is. */
-export async function openChat(id) {
+export function openChat(id, quiet = false) {
+  const mine = read(id, quiet)
+  reading = mine
+  const over = () => reading === mine && (reading = null)
+  mine.then(over, over)
+  return mine
+}
+
+async function read(id, quiet) {
   const mine = ++reads
   // The chat that is open, read again (a reply's stream ended, a message was edited, the summary
   // was made): what is on the screen stays there until the answer has come -- the thread, the
@@ -2399,9 +2487,9 @@ export async function openChat(id) {
   // nothing moves for it.)
   const have = new Map()
   for (let el = above ? first : list.firstElementChild; el; el = el.nextElementSibling) if (el.matches(".msg[data-id]:not(.is-live)")) have.set(el.dataset.id, el)
-  const rows = shown.map((m) => {
+  const rows = shown.map((m, i) => {
     const el = have.get(m.id)
-    return el && !el.querySelector(".hpage") && drawnFrom.get(el) === JSON.stringify(m) ? el : row(m, r.chat)
+    return el && !el.querySelector(".hpage") && drawnFrom.get(el) === JSON.stringify(m) ? el : row(m, r.chat, null, shown[i - 1])
   })
   const stay = new Set(rows)
   for (let el = above ? first : list.firstElementChild, next; el; el = next) {
@@ -2433,7 +2521,8 @@ export async function openChat(id) {
   if (!again) arrive(id)
   else if (!following && !(held && found(held))) toBottom()
   else settle()
-  $("composer-text").focus({ preventScroll: true })
+  // (Read for a reply nobody here asked for, the chat takes the focus from nothing the person is in: a terminal, a field.)
+  if (!quiet || !document.activeElement || document.activeElement === document.body) $("composer-text").focus({ preventScroll: true })
 }
 
 function earlier() {
@@ -2455,7 +2544,7 @@ function earlier() {
         const frag = document.createDocumentFragment()
         if (r.more) frag.append(earlier())
         const seed = seedOf(open.chat, r.messages, r.more)
-        for (const m of r.messages) if (m.id !== seed) frag.append(row(m, open.chat))
+        r.messages.forEach((m, i) => m.id !== seed && frag.append(row(m, open.chat, null, r.messages[i - 1])))
         e.target.replaceWith(frag)
         settle()
       } catch (err) {
@@ -2473,20 +2562,22 @@ function earlier() {
  * where none is named); another chat than the open one is nobody's to read. The thread stays
  * where the person has it (see `openChat`).
  */
-export function readAgain(id = open?.chat?.id) {
+export function readAgain(id = open?.chat?.id, quiet = false) {
   if (!id || open?.chat?.id !== id) return Promise.resolve()
-  return openChat(id)
+  return openChat(id, quiet)
 }
 
 /**
  * A long generation of this chat ended by itself (media.js saw its job end): the server wakes
- * the chat with a reply nobody here asked for. Read the chat again -- now, and once more a
- * moment later where the server had not yet told the chat -- unless a reply is being followed.
+ * the chat with a reply nobody here asked for. A server that says its replies as they start
+ * (`replyStarted`) says this one too, and the card has nothing to read the chat for. One that
+ * does not: read the chat again -- now, and once more a moment later where the server had not
+ * yet told the chat -- unless a reply is being followed.
  */
 export function mediaJobEnded(job) {
   const id = open?.chat?.id
   if (!id || (job?.chat_id && job.chat_id !== id)) return
-  const again = () => open?.chat?.id === id && !open.live && readAgain(id)
+  const again = () => open?.chat?.id === id && !open.live && !repliesSaid() && readAgain(id)
   again()
   if (job?.told !== true) setTimeout(again, 4000)
 }
@@ -2641,7 +2732,7 @@ async function createChat(text, attachments) {
     }
     Object.assign(body, { kind: "agent", device, directory: draft.dir, mode: draft.mode || "edit" })
   }
-  const r = await post("/chats", draft.kind === "chat" ? takePicture(body) : body)
+  const r = await asking(post("/chats", draft.kind === "chat" ? takePicture(body) : body))
   pictureSent()
   draft = null
   $("new-chat").hidden = true
@@ -2692,7 +2783,7 @@ async function submit() {
       let body = { text }
       if (files.length) body.attachments = files
       if (open.chat.kind === "chat") body = takePicture(body)
-      const r = await post(`/chats/${encodeURIComponent(open.chat.id)}/messages`, body)
+      const r = await asking(post(`/chats/${encodeURIComponent(open.chat.id)}/messages`, body))
       pictureSent()
       if (r.message) $("messages").append(userMessage(r.message))
       if (r.reply) follower(open.chat, r.reply.id)
@@ -2799,7 +2890,7 @@ async function continueReply() {
   const id = chatId()
   if (!id || !$("messages").querySelector(".msg--assistant")) return note(t("There is no reply to continue yet."))
   try {
-    const r = await post(`/chats/${encodeURIComponent(id)}/continue`)
+    const r = await asking(post(`/chats/${encodeURIComponent(id)}/continue`))
     if (openChatId() !== id) return
     if (r.message) $("messages").append(userMessage(r.message))
     if (r.reply) follower(open.chat, r.reply.id)

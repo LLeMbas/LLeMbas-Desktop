@@ -2426,10 +2426,6 @@ fn notification_action(handle: &AppHandle, done: &ActionPerformed) {
 const EVENTS_AGAIN: std::time::Duration = std::time::Duration::from_secs(5);
 const EVENTS_NONE: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Follow the server's event stream for the signed-in person (`GET /events`): each `schedules`
-/// frame goes to the page as it is (the Scheduled page redraws from it), and a scheduled task's
-/// newly finished run is told by its notify decision (`watch::decide`). Said even with the window
-/// in front: it ran on its own. Signing out or another server ends the stream (`Watch::reset`).
 /// The account the reports' mark is kept for: `server|email`.
 fn reports_key(app: &App) -> Option<String> {
     let account = app.account.lock().unwrap().clone()?;
@@ -2508,6 +2504,12 @@ fn report_filed(handle: &AppHandle, data: &str, door: &(String, String)) {
         .show();
 }
 
+/// Follow the server's event stream for the signed-in person (`GET /events`): each `schedules`
+/// frame goes to the page as it is (the Scheduled page redraws from it), and a scheduled task's
+/// newly finished run is told by its notify decision (`watch::decide`). Said even with the window
+/// in front: it ran on its own. Signing out or another server ends the stream (`Watch::reset`).
+/// A `reply` frame (a reply started in one of the person's chats, or is being written as the
+/// stream opens) goes to the page as it is: an open chat follows a reply it did not start.
 fn watch_events(handle: AppHandle) {
     std::thread::spawn(move || loop {
         let app = handle.state::<App>();
@@ -2520,9 +2522,23 @@ fn watch_events(handle: AppHandle) {
         let kept = reports_key(&app).and_then(|k| app.settings().reports_seen.get(&k).cloned());
         app.watch.begin(kept);
         let door = (app_url.clone(), token.clone());
+        // The stream's first frame says it is open (anew, where it was lost): what was said to
+        // nobody meanwhile is the page's to look for.
+        let opened = AtomicBool::new(false);
         let result = server::stream(&app_url, &token, "/events", &stop, |event, data| {
+            if !opened.swap(true, Ordering::SeqCst) {
+                let _ = handle.emit("events-open", ());
+            }
             if event == "reports" {
                 report_filed(&handle, data, &door);
+                return true;
+            }
+            if event == "reply" {
+                // A reply started in one of the person's chats, whoever started it: the page
+                // decides what it is to the chat that is open and to the list.
+                if let Ok(frame) = serde_json::from_str::<Value>(data) {
+                    let _ = handle.emit("reply", &frame);
+                }
                 return true;
             }
             if event != "schedules" {

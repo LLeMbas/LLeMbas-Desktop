@@ -49,6 +49,31 @@ async function loadMore() {
   render()
 }
 
+// A reply started in a chat by itself (the server's `reply` frame): the list is read again, a
+// moment later so that frames in a row are one reading -- and, for a chat that is not the open
+// one, now and then until the list no longer shows it running: nothing else says when a reply
+// nobody here follows has ended. (The open chat's reply is followed, and its end reads the list.)
+const BUSY_EVERY = 5000
+const busy = new Set()
+let busyTimer = 0
+let soon = 0
+
+export function busyElsewhere(id, watch) {
+  if (watch) busy.add(id)
+  clearTimeout(soon)
+  soon = setTimeout(refreshList, 150)
+  if (busy.size && !busyTimer) busyTimer = setInterval(busyLook, BUSY_EVERY)
+}
+
+async function busyLook() {
+  if (document.visibilityState === "visible") await refreshList()
+  for (const id of [...busy]) if (!rows.find((r) => r.id === id)?.running) busy.delete(id)
+  if (!busy.size) {
+    clearInterval(busyTimer)
+    busyTimer = 0
+  }
+}
+
 export function markCurrent() {
   const id = ctx.current()
   for (const b of $("chat-list").querySelectorAll(".chatrow")) b.setAttribute("aria-current", String(b.dataset.id === id))

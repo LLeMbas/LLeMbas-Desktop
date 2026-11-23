@@ -7822,6 +7822,265 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
   })
 }
 
+// --- A reply nobody here started (the server's `reply` frame on GET /events) ---------------------
+//
+// Rust hands the frame to the page as it is (`reply`: {chat_id, message_id, live}); the tests say
+// it as Rust would. The server, meanwhile, has the turn the reply answers and the reply itself:
+// `rpServer` puts them into what it answers for the chat.
+
+const rpStream = (chat, id) => `/chats/${chat}/messages/${id}/stream`
+const rpNote = (id, text) => ({ ...userMessage(id, text), machine: true, origin: "harness" })
+const rpFrame = (p, chat, message, live = true) => p.evaluate((f) => window.__mock.emit("reply", f), { ...fixture("event_reply"), chat_id: chat, message_id: message, live })
+const rpSend = (p, chat, id, event, data) => p.evaluate(([path, e, d]) => window.__mock.frame(path, e, d), [rpStream(chat, id), event, data])
+const rpOpens = (p, chat, id) => p.evaluate((path) => window.__mock.calls.filter((c) => c.cmd === "stream_open" && c.args.path === path).length, rpStream(chat, id))
+const rpReads = (p, chat) => p.evaluate((c) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length, chat)
+const rpLists = (p) => p.evaluate(() => window.__mock.api("GET", "/chats?limit=50").length)
+/** What the server now has of a chat: `add` after its messages (one of the same id is replaced), `live` the reply being written. */
+const rpServer = (p, chat, add, live = null) =>
+  p.evaluate(
+    ([c, more, l]) => {
+      const key = `GET /chats/${c}`
+      const was = window.__mockConfig.routes[key]
+      const ids = new Set(more.map((m) => m.id))
+      window.__mock.answer(key, { ...was, messages: [...was.messages.filter((m) => !ids.has(m.id)), ...more], live: l })
+    },
+    [chat, add, live],
+  )
+const rpWriting = [["status", { text: "Writing…" }]]
+
+function rpChat(over = {}, extra = {}) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /chats": { chats: [agentChat({ running: false }), chatRow()], more: false },
+      "GET /chats/chat2": { chat: agentChat({ running: false }), messages: [userMessage("m1", "Tidy the build with two helpers"), posWords("m2", 1)], more: false, live: null },
+      "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How is lembas made?"), posWords("m6", 1)], more: false, live: null },
+      "GET /models?chat=chat2": models(),
+      "GET /models?chat=chat1": models(),
+      "POST /chats/chat2/messages/r9/stop": {},
+      ...over,
+    }),
+    streams: { [rpStream("chat2", "r9")]: rpWriting, [rpStream("chat2", "r10")]: rpWriting },
+    ...extra,
+  }
+}
+
+test("RP1: a reply the app did not start is followed in the open chat as one it started -- the machine's note, the words, a running call, a card, Stop, its end -- and a frame for a reply already followed or drawn reads nothing", async () => {
+  const p = await page(rpChat())
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="m2"]')
+  // The person is somewhere else in the window: the search line.
+  await p.focus("#side-search")
+  const before = await rpReads(p, "chat2")
+  await rpServer(p, "chat2", [rpNote("n1", "Background job helper-1 finished: 3 files changed.")], "r9")
+  await rpFrame(p, "chat2", "r9")
+  await p.waitForSelector('#messages .msg.is-live[data-id="r9"]')
+  // The turn it answers: the machine's note, not something the person typed (nothing to edit).
+  const note = '#messages .msg--user.is-machine[data-id="n1"]'
+  assert.equal(await p.textContent(`${note} .msg__text`), "Background job helper-1 finished: 3 files changed.")
+  assert.equal(await p.$(`${note} .msg__actions`), null)
+  assert.equal(await rpReads(p, "chat2"), before + 1)
+  assert.equal(await rpOpens(p, "chat2", "r9"), 1)
+  assert.ok(await p.isVisible("#stop"), "Stop takes Send's place")
+  assert.equal(await p.evaluate(() => document.activeElement.id), "side-search", "the focus stays where the person has it")
+  // Written as any reply: words, a call running, a card.
+  await p.waitForFunction((path) => window.__mock.started(path), rpStream("chat2", "r9"))
+  await rpSend(p, "chat2", "r9", "tail", { thinking: "", text: "Both helpers are done.", label: "", calls: [fixture("event_tail").calls[0]] })
+  await p.waitForFunction(() => document.querySelector(".msg.is-live .msg__tail").textContent.includes("Both helpers are done."))
+  assert.ok(await p.isVisible(".msg.is-live .msg__running details"), "the call that runs is drawn")
+  await rpSend(p, "chat2", "r9", "ask", { cards: [deviceBashCard()] })
+  await p.waitForSelector("#cards:not([hidden]) .ask")
+  // Said again (the events stream opened anew says every reply being written): nothing is read, nothing followed twice.
+  await rpFrame(p, "chat2", "r9")
+  await rpFrame(p, "chat2", "r9")
+  await p.waitForTimeout(300)
+  assert.equal(await rpReads(p, "chat2"), before + 1)
+  assert.equal(await rpOpens(p, "chat2", "r9"), 1)
+  assert.equal(await p.$$eval("#messages .msg.is-live", (l) => l.length), 1)
+  // Stop stops it.
+  await p.click("#stop")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/messages/r9/stop").length === 1)
+  await p.focus("#side-search")
+  // Its end.
+  const done = posReply("r9", [{ index: 0, kind: "text", open: true, markdown: "Both helpers are done." }])
+  await rpServer(p, "chat2", [done])
+  await rpSend(p, "chat2", "r9", "ask", { cards: [] })
+  await rpSend(p, "chat2", "r9", "done", { message: done, chat: { id: "chat2", title: "Tidy the build" } })
+  await p.waitForSelector(".msg.is-live", { state: "detached" })
+  assert.ok(await p.isHidden("#stop"))
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((m) => m.dataset.id)), ["m1", "m2", "n1", "r9"])
+  // Said once more as ended: it is drawn, nothing is read.
+  await rpFrame(p, "chat2", "r9", false)
+  await p.waitForTimeout(300)
+  assert.equal(await rpReads(p, "chat2"), before + 1)
+  // A reply that had ended before it was said: read, drawn, no stream.
+  const short = posReply("r10", [{ index: 0, kind: "text", open: true, markdown: "Nothing more to do." }])
+  await rpServer(p, "chat2", [rpNote("n2", "Team member helper-2 reports: done."), short])
+  await rpFrame(p, "chat2", "r10", false)
+  await p.waitForSelector('#messages .msg--assistant[data-id="r10"]:not(.is-live)')
+  assert.equal(await rpOpens(p, "chat2", "r10"), 0)
+  assert.equal(await rpReads(p, "chat2"), before + 2)
+  assert.ok(await p.isHidden("#stop"))
+  // The events stream opened anew: what was said to nobody meanwhile is looked for, once.
+  await p.evaluate(() => window.__mock.emit("events-open", null))
+  await p.waitForFunction(([c, n]) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length === n, ["chat2", before + 3])
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((m) => m.dataset.id)), ["m1", "m2", "n1", "r9", "n2", "r10"])
+  assert.equal(await p.evaluate(() => document.activeElement.id), "side-search")
+  assert.deepEqual(p.errors, [])
+})
+
+test("RP2: the app's own reply is said too: a frame that comes before the answer to the message sent waits for it, and the reply is drawn and followed once", async () => {
+  const sent = userMessage("m3", "And the tests?")
+  const p = await page(rpChat({ "POST /chats/chat2/messages": { message: sent, reply: { id: "r9" } } }, { hold: ["POST /chats/chat2/messages"] }))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="m2"]')
+  const before = await rpReads(p, "chat2")
+  await p.fill("#composer-text", "And the tests?")
+  await p.focus("#composer-text")
+  await p.keyboard.press("Enter")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/messages").length === 1)
+  // The server has the message and its reply, and says the reply, before the app has its answer.
+  await rpServer(p, "chat2", [sent], "r9")
+  await rpFrame(p, "chat2", "r9")
+  await p.waitForTimeout(300)
+  assert.equal(await rpReads(p, "chat2"), before, "the frame waits for the answer that is on its way")
+  await p.evaluate(() => window.__mock.release("POST /chats/chat2/messages"))
+  await p.waitForSelector('#messages .msg.is-live[data-id="r9"]')
+  await p.waitForTimeout(300)
+  assert.equal(await rpReads(p, "chat2"), before)
+  assert.equal(await rpOpens(p, "chat2", "r9"), 1)
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((m) => m.dataset.id)), ["m1", "m2", "m3", "r9"])
+  // And the usual order -- the answer first, the frame after: nothing more.
+  await rpFrame(p, "chat2", "r9")
+  await p.waitForTimeout(300)
+  assert.equal(await rpReads(p, "chat2"), before)
+  assert.equal(await rpOpens(p, "chat2", "r9"), 1)
+  assert.deepEqual(p.errors, [])
+})
+
+test("RP3: a reply that starts in another chat shows in the list -- running, in the server's order -- without the open chat being left or the other read; the list is looked at until it has ended, then no more", async () => {
+  const p = await page(rpChat(), { clock: true })
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="m2"]')
+  assert.deepEqual(await p.$$eval("#chat-list .chatrow", (l) => l.map((b) => b.dataset.id)), ["chat2", "chat1"])
+  await p.evaluate(([one, two]) => window.__mock.answer("GET /chats", { chats: [one, two], more: false }), [chatRow({ running: true }), agentChat({ running: false })])
+  await rpFrame(p, "chat1", "x1")
+  await p.clock.fastForward(200)
+  await p.waitForSelector('.chatrow[data-id="chat1"] .chatrow__state.is-busy')
+  assert.deepEqual(await p.$$eval("#chat-list .chatrow", (l) => l.map((b) => b.dataset.id)), ["chat1", "chat2"])
+  assert.equal(await p.getAttribute('.chatrow[data-id="chat2"]', "aria-current"), "true")
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((m) => m.dataset.id)), ["m1", "m2"])
+  assert.equal(await rpReads(p, "chat1"), 0)
+  assert.equal(await p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "stream_open" && c.args.path.endsWith("/stream")).length), 0)
+  // Still running at the next look; ended at the one after: the mark goes, and the looking stops.
+  const lists = await rpLists(p)
+  await p.clock.fastForward(5000)
+  await p.waitForFunction((n) => window.__mock.api("GET", "/chats?limit=50").length === n + 1, lists)
+  assert.ok(await p.$('.chatrow[data-id="chat1"] .chatrow__state.is-busy'))
+  await p.evaluate(([one, two]) => window.__mock.answer("GET /chats", { chats: [one, two], more: false }), [chatRow({ unread: true }), agentChat({ running: false })])
+  await p.clock.fastForward(5000)
+  await p.waitForSelector('.chatrow[data-id="chat1"] .chatrow__state.is-new')
+  const after = await rpLists(p)
+  await p.clock.fastForward(11000)
+  assert.equal(await rpLists(p), after)
+  assert.deepEqual(p.errors, [])
+})
+
+test("RP4: an empty, finished reply after the machine's note in an agent chat says it was not recorded -- one line, in the person's language -- and nowhere else", async () => {
+  const empty = (id) => posReply(id, [])
+  const cfg = rpChat({
+    "GET /chats/chat2": { chat: agentChat({ running: false }), messages: [userMessage("m1", "Tidy the build"), empty("e0"), rpNote("n1", "Background job helper-1 finished."), empty("e1"), rpNote("n2", "Background job helper-2 finished."), posWords("m2", 1), rpNote("n3", "Background job helper-3 finished."), { ...empty("e3"), stopped: true }], more: false, live: null },
+    "GET /chats/chat1": { chat: chatRow(), messages: [{ ...userMessage("n5", "A scheduled task ran."), machine: true }, empty("e5")], more: false, live: null },
+  })
+  const p = await page(cfg)
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="e3"]')
+  assert.deepEqual(await p.$$eval("#messages .msg__unrecorded", (l) => l.map((x) => [x.closest(".msg").dataset.id, x.textContent])), [["e1", "The reply to this was not recorded."]])
+  // The notes are the machine's rows, each of them; none can be edited.
+  assert.deepEqual(await p.$$eval("#messages .msg--user.is-machine", (l) => l.map((m) => [m.dataset.id, !!m.querySelector(".msg__actions")])), [["n1", false], ["n2", false], ["n3", false]])
+  await openChatRow(p, "chat1")
+  await p.waitForSelector('#messages .msg[data-id="e5"]')
+  assert.equal(await p.$("#messages .msg__unrecorded"), null)
+  assert.deepEqual(p.errors, [])
+  const q = await page(cfg, { lang: "sk" })
+  await openChatRow(q, "chat2")
+  await q.waitForSelector('#messages .msg[data-id="e3"]')
+  assert.equal(await q.textContent("#messages .msg__unrecorded"), "Odpoveď na toto nebola zaznamenaná.")
+  assert.deepEqual(q.errors, [])
+})
+
+test("RP5: on a server that says its replies, a generation's card that sees its job end reads the chat for nothing: the woken reply comes by the frame, once", async () => {
+  const p = await page(md(), { width: 1280, height: 900, clock: true })
+  await openChatRow(p, "chat1")
+  const job = '#messages .mjob[data-job="mjob1"]'
+  await p.waitForFunction((sel) => document.querySelector(`${sel} .mjob__time`)?.textContent === "0:42", job)
+  // The server has said a reply (any chat's): it says them all.
+  await rpFrame(p, "chat2", "x1", false)
+  const before = await rpReads(p, "chat1")
+  await p.evaluate((done) => window.__mock.answer("GET /media/jobs/mjob1", done), { ...fixture("media_job_done"), id: "mjob1", chat_id: "chat1", told: false })
+  await p.clock.fastForward(3000)
+  await p.waitForSelector(`${job}[data-state=done] video.mcard__video`)
+  await p.clock.fastForward(6000)
+  assert.equal(await rpReads(p, "chat1"), before, "the card read the chat for nothing")
+  // The chat is woken: the note and the reply, said by the frame.
+  const woken = posReply("a9", [{ index: 0, kind: "text", open: true, markdown: "The film is ready." }])
+  await rpServer(p, "chat1", [{ ...userMessage("n9", "The video is ready."), machine: true }, woken])
+  await rpFrame(p, "chat1", "a9", false)
+  await p.waitForSelector('#messages .msg[data-id="a9"]')
+  await p.clock.fastForward(6000)
+  assert.equal(await rpReads(p, "chat1"), before + 1)
+  assert.ok(await p.$(`${job}[data-state=done] video.mcard__video`), "the card is as it was")
+  assert.deepEqual(p.errors, [])
+})
+
+for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
+  test(`POS: ${win} 5 -- a reply nobody here asked for arrives by itself: at the end the thread stays at its end through the note, the reply written past a screen and its end; scrolled up, what is read does not move, nor for one that had already ended`, async () => {
+    const cfg = posChat()
+    for (const id of ["r9", "r10"]) cfg.streams[rpStream("chat2", id)] = rpWriting
+    const p = await page(cfg, { width, height })
+    await posOpen(p)
+    const step = (name, rule, act) => posStep(p, win, name, rule, act)
+    const arrives = async (note, id) => {
+      await rpServer(p, "chat2", [rpNote(note, `Background job ${note} finished: ${"word ".repeat(60)}`)], id)
+      await rpFrame(p, "chat2", id)
+      await p.waitForSelector(`#messages .msg.is-live[data-id="${id}"]`)
+      await p.waitForFunction((path) => window.__mock.started(path), rpStream("chat2", id))
+    }
+    const written = async (id) => {
+      await rpSend(p, "chat2", id, "tail", { thinking: "Let me think. ".repeat(60), text: "", label: "1s" })
+      for (let i = 1; i <= 5; i++) await rpSend(p, "chat2", id, "tail", { thinking: "", text: posText(i * 3), label: "" })
+    }
+    const ends = async (id) => {
+      const done = posWords(id, 15)
+      await rpServer(p, "chat2", [done])
+      await rpSend(p, "chat2", id, "done", { message: done, chat: { id: "chat2", title: "Tidy the build" } })
+      await p.waitForSelector(".msg.is-live", { state: "detached" })
+    }
+    await step("a chat opened stands at its end", "end", async () => 0)
+    await step("at the end: a reply arrives by itself, after the machine's note", "end", () => arrives("n1", "r9"))
+    await step("at the end: it is written past a screen", "end", () => written("r9"))
+    await step("at the end: it ends", "end", () => ends("r9"))
+    // Scrolled up, reading an earlier question.
+    await posLook(p, '.msg[data-id="q3"]', 20)
+    await step("scrolled up: a reply arrives by itself, after the machine's note", "held", () => arrives("n2", "r10"))
+    await step("scrolled up: it is written past a screen", "held", () => written("r10"))
+    await step("scrolled up: it ends", "held", () => ends("r10"))
+    await step("scrolled up: a reply that had ended before it was said", "held", async () => {
+      await rpServer(p, "chat2", [rpNote("n3", "Background job n3 finished."), posWords("r11", 4)])
+      await rpFrame(p, "chat2", "r11", false)
+      await p.waitForSelector('#messages .msg[data-id="r11"]')
+    })
+    // Back at the end, it is followed again.
+    await posToEnd(p)
+    await step("back at the end: a reply that had ended before it was said", "end", async () => {
+      await rpServer(p, "chat2", [rpNote("n4", "Background job n4 finished."), posWords("r12", 4)])
+      await rpFrame(p, "chat2", "r12", false)
+      await p.waitForSelector('#messages .msg[data-id="r12"]')
+    })
+    posEnd(p)
+  })
+}
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

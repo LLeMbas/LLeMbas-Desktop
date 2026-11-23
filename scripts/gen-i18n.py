@@ -45,6 +45,7 @@ KEYS = (
     "Settings",
     # chat.js
     "Waiting for the reply before it",
+    "The reply to this was not recorded.",
     "%(n)s tokens",
     "Thought",
     "Taken in while it ran:",

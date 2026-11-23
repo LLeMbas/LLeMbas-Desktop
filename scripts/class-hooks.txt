@@ -73,3 +73,4 @@ mcard__show         a hook for the tests: draws a 3D model when asked; styled as
 mcard__files        a hook for the tests: Open in Files; styled as .btn
 mcard__download     a hook for the tests: Download; styled as .btn
 mjob__cancel        a hook for the tests: Cancel; styled as .btn
+msg__unrecorded     a hook for the tests: the line on a reply that was never written; styled as .msg__note
