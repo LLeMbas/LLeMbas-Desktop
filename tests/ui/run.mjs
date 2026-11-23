@@ -7354,9 +7354,29 @@ async function posWatch(p) {
     // and every size in it -- against the sizes at rest, what grew after the thread was put.
     const own = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")
     pos.puts = []
+    // And each time the page looks where the thread stands and finds it, or its sizes, other
+    // than at its last look: what it found, what in the thread took another size since, and
+    // from where in the page it looked.
+    pos.looks = []
+    let looked = ""
+    let sizesThen = null
+    const look = () => {
+      const top = own.get.call(th)
+      const state = `${Math.round(top)}/${th.scrollHeight}/${th.clientHeight}`
+      if (state !== looked) {
+        const now = pos.sizes()
+        const grew = []
+        if (sizesThen) for (const k of new Set([...Object.keys(sizesThen), ...Object.keys(now)])) if (sizesThen[k] !== now[k]) grew.push(`${k}: ${sizesThen[k] ?? "-"} -> ${now[k] ?? "-"}`)
+        const from = String(new Error().stack || "").split("\n").filter((l) => !l.includes("look") && l.trim()).slice(1, 5).map((l) => l.trim().replace(/^at /, "").replace(/https?:\/\/[^/]+\//, "")).join(" < ")
+        pos.looks.push({ at: pos.log.length, state, grew: grew.slice(0, 8).join("; "), from })
+        looked = state
+        sizesThen = now
+      }
+      return top
+    }
     Object.defineProperty(th, "scrollTop", {
       configurable: true,
-      get: () => own.get.call(th),
+      get: look,
       set: (v) => {
         own.set.call(th, v)
         pos.puts.push({ at: pos.log.length, to: Math.round(v), top: Math.round(own.get.call(th)), height: th.scrollHeight, client: th.clientHeight, sizes: pos.sizes() })
@@ -7450,7 +7470,8 @@ async function posStep(p, win, name, rule, act = async () => {}) {
         if (c.state !== last) changed.push(`<${c.what} => ${c.state} before frame ${c.at - from}>`)
         last = c.state
       }
-      const how_ = `${went.slice(0, 40).join(" ")} ${put.join(" ")} ${grew.slice(0, 30).join(" ")} ${changed.slice(0, 40).join(" ")}`
+      const looks = window.__pos.looks.filter((e) => e.at >= since).slice(0, 12).map((e) => `«looked: ${e.state}; ${e.grew}; from ${e.from}»`)
+      const how_ = `${went.slice(0, 40).join(" ")} ${put.join(" ")} ${grew.slice(0, 30).join(" ")} ${changed.slice(0, 40).join(" ")} ${looks.join(" ")}`
       if (how === "end") return { first: gap(log[0]), worst: Math.max(...log.map(gap)), final: gap(log.at(-1)), went: how_ }
       const was = log[0].a
       const moved = (how === "back" ? [log.at(-1)] : log).map((s) => (s.a === null || was === null ? NaN : s.a - was))
