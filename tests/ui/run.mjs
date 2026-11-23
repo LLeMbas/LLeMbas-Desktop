@@ -7362,6 +7362,16 @@ async function posWatch(p) {
         pos.puts.push({ at: pos.log.length, to: Math.round(v), top: Math.round(own.get.call(th)), height: th.scrollHeight, client: th.clientHeight, sizes: pos.sizes() })
       },
     })
+    // And after everything the page changes in itself (a microtask after each change): where the
+    // thread stands and its sizes, with what was changed -- a size that changed and changed back
+    // between two frames is seen here and nowhere else.
+    pos.changes = []
+    const name = (el) => (el.nodeType === 1 ? `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}.${String(el.className).split(" ")[0]}` : "text")
+    new MutationObserver((records) => {
+      const state = `${Math.round(own.get.call(th))}/${th.scrollHeight}/${th.clientHeight}`
+      const what = [...new Set(records.map((r) => `${r.type === "attributes" ? `@${r.attributeName} ` : ""}${name(r.target)}`))].slice(0, 6).join(",")
+      pos.changes.push({ at: pos.log.length, state, what })
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true })
     // For a step that went wrong, what the thread was told between the frames: its scroll events
     // and the changes of size, each with where it stood then.
     const told = (what) => pos.seen.push({ at: pos.log.length, what, top: th.scrollTop, height: th.scrollHeight, client: th.clientHeight })
@@ -7431,7 +7441,16 @@ async function posStep(p, win, name, rule, act = async () => {}) {
         const [a, b] = [puts.at(-1).sizes, log.at(-1).sizes]
         for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) if (a[k] !== b[k]) grew.push(`[since the last put, ${k}: ${a[k] ?? "-"} -> ${b[k] ?? "-"}]`)
       }
-      const how_ = `${went.slice(0, 40).join(" ")} ${put.join(" ")} ${grew.slice(0, 30).join(" ")}`
+      // The page's own changes from the last put on, where the thread's state differs from the change before (the first forty).
+      const changed = []
+      const since = puts.length ? puts.at(-1).at : from
+      for (let i = 0, last = ""; i < window.__pos.changes.length; i++) {
+        const c = window.__pos.changes[i]
+        if (c.at < since) continue
+        if (c.state !== last) changed.push(`<${c.what} => ${c.state} before frame ${c.at - from}>`)
+        last = c.state
+      }
+      const how_ = `${went.slice(0, 40).join(" ")} ${put.join(" ")} ${grew.slice(0, 30).join(" ")} ${changed.slice(0, 40).join(" ")}`
       if (how === "end") return { first: gap(log[0]), worst: Math.max(...log.map(gap)), final: gap(log.at(-1)), went: how_ }
       const was = log[0].a
       const moved = (how === "back" ? [log.at(-1)] : log).map((s) => (s.a === null || was === null ? NaN : s.a - was))
