@@ -7333,12 +7333,35 @@ async function posWatch(p) {
       for (const el of document.querySelectorAll(a.sel)) if (el.textContent.startsWith(a.text)) return el
       return null
     }
+    // How tall each thing in the thread is, by a name for it: for a step that went wrong, what took another size.
+    pos.sizes = () => {
+      const out = {}
+      const put = (name, el) => (out[name] = Math.round(el.getBoundingClientRect().height * 10) / 10)
+      for (const msg of document.querySelectorAll("#messages > *")) {
+        const id = msg.dataset.id || msg.className
+        put(id, msg)
+        msg.querySelectorAll(":scope > *, .msg__steps > *, .step--tools > *, .tiles > *, .mcard > *, .mcard__frame, .mcard__frame > *, .ptile > *, .call > *").forEach((el, i) => put(`${id} ${i} ${el.tagName.toLowerCase()}.${String(el.className).split(" ")[0]}`, el))
+      }
+      return out
+    }
     pos.sample = () => {
       const el = pos.find()
-      const s = { top: th.scrollTop, height: th.scrollHeight, client: th.clientHeight, a: el ? el.getBoundingClientRect().top - th.getBoundingClientRect().top : null }
+      const s = { top: th.scrollTop, height: th.scrollHeight, client: th.clientHeight, a: el ? el.getBoundingClientRect().top - th.getBoundingClientRect().top : null, sizes: pos.sizes() }
       pos.log.push(s)
       return s
     }
+    // Each time the page itself puts the thread somewhere: where, how tall the thread was then,
+    // and every size in it -- against the sizes at rest, what grew after the thread was put.
+    const own = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")
+    pos.puts = []
+    Object.defineProperty(th, "scrollTop", {
+      configurable: true,
+      get: () => own.get.call(th),
+      set: (v) => {
+        own.set.call(th, v)
+        pos.puts.push({ at: pos.log.length, to: Math.round(v), top: Math.round(own.get.call(th)), height: th.scrollHeight, client: th.clientHeight, sizes: pos.sizes() })
+      },
+    })
     // For a step that went wrong, what the thread was told between the frames: its scroll events
     // and the changes of size, each with where it stood then.
     const told = (what) => pos.seen.push({ at: pos.log.length, what, top: th.scrollTop, height: th.scrollHeight, client: th.clientHeight })
@@ -7396,7 +7419,19 @@ async function posStep(p, win, name, rule, act = async () => {}) {
         const key = `${Math.round(s.top * 10) / 10}/${s.height}/${s.client}${s.a === null ? "" : `@${Math.round(s.a * 10) / 10}`}`
         if (key !== last) went.push((last = key))
       }
-      const how_ = went.slice(0, 40).join(" ")
+      // And what in the thread took another size from one frame to the next (the first thirty).
+      const grew = []
+      for (let i = 1; i < log.length; i++) {
+        const [a, b] = [log[i - 1].sizes, log[i].sizes]
+        for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) if (a[k] !== b[k]) grew.push(`[${k}: ${a[k] ?? "-"} -> ${b[k] ?? "-"}]`)
+      }
+      const puts = window.__pos.puts.filter((e) => e.at >= from)
+      const put = puts.slice(-6).map((e) => `{put ${e.to} -> ${e.top} of ${e.height}/${e.client} before frame ${e.at - from}}`)
+      if (puts.length) {
+        const [a, b] = [puts.at(-1).sizes, log.at(-1).sizes]
+        for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) if (a[k] !== b[k]) grew.push(`[since the last put, ${k}: ${a[k] ?? "-"} -> ${b[k] ?? "-"}]`)
+      }
+      const how_ = `${went.slice(0, 40).join(" ")} ${put.join(" ")} ${grew.slice(0, 30).join(" ")}`
       if (how === "end") return { first: gap(log[0]), worst: Math.max(...log.map(gap)), final: gap(log.at(-1)), went: how_ }
       const was = log[0].a
       const moved = (how === "back" ? [log.at(-1)] : log).map((s) => (s.a === null || was === null ? NaN : s.a - was))
