@@ -774,7 +774,8 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .mcard__frame[data-kind="audio"] { min-height: calc(2 * var(--control-h)); }
 /* A line in a frame (it is loading; why it is not shown) fits the frame: two lines of it in a player's. */
 .mcard__frame > .mcard__note { padding-block: var(--sp-2); }
-.mcard__frame[data-sized="true"] { width: min(100%, calc(var(--w) * 1px)); height: auto; aspect-ratio: var(--w) / var(--h); max-height: var(--h-page-max); }
+/* A frame whose size the server says: at the picture's proportions always. No wider than the picture, than the card, or than the width at which it would be taller than it may be. */
+.mcard__frame[data-sized="true"] { width: min(100%, calc(var(--w) * 1px), calc(var(--h-page-max) * var(--w) / var(--h))); min-width: 1px; height: auto; aspect-ratio: var(--w) / var(--h); max-height: var(--h-page-max); }
 .mcard__image { display: block; min-width: 0; min-height: 0; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
 .mcard__frame[data-sized="true"] > .mcard__image { width: 100%; height: 100%; }
 .mcard__video { display: block; min-width: 0; min-height: 0; width: 100%; height: 100%; background: var(--code-bg); }

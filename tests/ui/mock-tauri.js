@@ -10,6 +10,8 @@
 //            not in the table is a 404, as an older server would answer.
 //   hold     ["GET /files?path=%2F", ...] (a path with its query, or without for any query) -- answers that wait (a slow server) until the test
 //            lets them go with `__mock.release(key)`; the table is read when they are let go.
+//            `__mock.hold(key, asked)` begins holding later; with `asked` an answer is the
+//            table's as it stood when it was asked for.
 //   streams  { "/chats/c1/messages/m1/stream": [[event, data], ...] } -- the frames a followed
 //            reply sends as soon as it is opened. More can be sent later with `__mock.frame()`.
 //   terminal [[kind, data], ...] -- what every terminal's socket sends as soon as it is opened
@@ -48,7 +50,10 @@
   function route(method, path) {
     const key = (config.hold || []).find((k) => k === `${method} ${path}` || k === `${method} ${path.split("?")[0]}`)
     if (key) {
-      return new Promise((resolve) => held.push({ key, go: resolve })).then(() => answer(method, path))
+      // (`asked`: the answer is the table's as it stood when it was asked for -- what a slow
+      // server read before the table changed -- kept until it is let go.)
+      const then = (config.asked || []).includes(key) ? answer(method, path).then((value) => ({ value }), (error) => ({ error })) : null
+      return new Promise((resolve) => held.push({ key, go: resolve })).then(() => (then ? then.then((a) => ("error" in a ? Promise.reject(a.error) : a.value)) : answer(method, path)))
     }
     return answer(method, path)
   }
@@ -230,9 +235,20 @@
 
   window.__mock = {
     calls,
+    /**
+     * Hold the answers for `key` from now on (as `hold` in the table); with `asked`, each is the
+     * table's answer as it stood when it was asked for, not when it is let go.
+     */
+    hold(key, asked = false) {
+      config.hold = [...(config.hold || []), key]
+      if (asked) config.asked = [...(config.asked || []), key]
+    },
+    /** How many answers for `key` are waiting. */
+    held: (key) => held.filter((x) => x.key === key).length,
     /** Let the held answers for `key` go, in the order they were asked; stop holding new ones. */
     release(key) {
       config.hold = (config.hold || []).filter((k) => k !== key)
+      config.asked = (config.asked || []).filter((k) => k !== key)
       const going = held.filter((x) => x.key === key)
       for (const x of going) held.splice(held.indexOf(x), 1)
       for (const x of going) x.go()

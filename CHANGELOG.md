@@ -19,11 +19,13 @@ after 2.0.0-beta.17); with an older server everything is as it was.
   the chat you stay at the end; scrolled up, what you read does not move; and what you are typing
   in elsewhere in the window (the terminal, the search line) keeps the keyboard.
 - **A reply that starts in another chat shows in the list** at once -- the chat is marked as
-  running and takes its place in the order -- and the mark goes when it has ended. The chat you
-  have open stays open.
+  running and takes its place in the order -- and the mark goes when it has ended: at once on a
+  server that says a reply's end too, else when the list is next read. The chat you have open
+  stays open.
 - **"The reply to this was not recorded."** on a reply in an agent chat that answers the
-  computer's own note and holds nothing: an older server did not write such replies down, and
-  the row stood blank.
+  computer's own note and holds nothing, where the note is one an older server kept: it did not
+  write such replies down, and the row stood blank. An empty reply to a note the server marks as
+  followed is simply the reply.
 
 ### Changed
 
@@ -32,6 +34,22 @@ after 2.0.0-beta.17); with an older server everything is as it was.
 
 ### Fixed
 
+- **A message sent at the moment the chat was being read again no longer disappears.** The chat
+  is read again by itself now and then -- a reply's stream ended, the connection came back. If
+  you pressed Enter while such a reading was on its way and its answer came after your message's,
+  the chat was drawn as it had been before the message: the message and the reply being written
+  vanished, and Stop with them, until the chat was opened again. An answer older than something
+  you have sent is never drawn now; the chat is asked again instead. The same crossing could
+  show a message twice; and a message whose answer came after you had opened another chat was
+  drawn into that chat.
+- **The chat list keeps what you loaded.** With more than fifty chats, the list went back to its
+  first fifty every time it was read again -- every half minute, and after every reply: the
+  chats loaded with More were gone, the list jumped, and the row the keyboard was on lost it.
+  The rows that changed are changed in place now; everything else stays the element it was.
+- **A chat read again by itself closes nothing you have open**: the subagents' panel, a chip's
+  menu, the composer's command menu and a line saying what went wrong stay, a page in an answer
+  is not loaded again, and the keyboard stays where it is -- also when a reply ends and one
+  queued behind it begins.
 - **What you are reading in a chat stays where it is.** Scrolled up from the end, the line at the
   top of the window no longer moves when something above or below it changes: a picture, a video
   or a player that comes into sight while you scroll up (its room is kept for it before it has

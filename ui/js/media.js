@@ -88,16 +88,21 @@ export function forgetMedia() {
 /**
  * The frame a picture or a player is drawn in, inside the card's view. Its room is known before
  * the file is, so nothing in the thread moves when the file arrives: from the size the server
- * says (`width` x `height`: never wider than the picture is, at its proportions), else one fixed
+ * says (`width` x `height`: never wider than the picture is, never taller than a page of an
+ * answer may be, always at its proportions), else one fixed
  * size for the kind (app.css, `.mcard__frame`). What is put in it -- the line that says it is
  * loading, the picture, the player, a line that says why not -- fills it or sits in its middle.
  */
 function frameOf(kind, width, height) {
-  const sized = kind !== "audio" && width > 0 && height > 0
+  const sized = kind !== "audio" && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
   const frame = h("div", { class: "mcard__frame", dataset: { kind, sized: String(sized) } })
   if (sized) {
-    frame.style.setProperty("--w", String(Math.round(width)))
-    frame.style.setProperty("--h", String(Math.round(height)))
+    // At its proportions whatever the numbers: a side of less than a pixel makes both larger
+    // by as much, never a frame of no width. (The frame's width gives way to the tallest it
+    // may be, in app.css, so a tall picture's frame is the picture's shape too.)
+    const up = Math.max(1, 1 / width, 1 / height)
+    frame.style.setProperty("--w", String(Math.round(width * up * 1000) / 1000))
+    frame.style.setProperty("--h", String(Math.round(height * up * 1000) / 1000))
   }
   return frame
 }

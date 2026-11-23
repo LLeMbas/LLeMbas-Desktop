@@ -283,38 +283,73 @@ const WHOLE = "p, pre, h1, h2, h3, h4, h5, h6, table, summary, figcaption, foote
 /** So many of a thing's first characters are what it is known by when it is drawn anew. */
 const KNOWN_BY = 64
 
+/** A thing's first words -- `n` characters -- read from its start and no further: what it is known by, at the cost of that many characters however long it is. */
+function firstWords(el, n = KNOWN_BY) {
+  let out = ""
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  for (let node = walk.nextNode(); node && out.length < n; node = walk.nextNode()) out += node.data
+  return out.slice(0, n)
+}
+
+/**
+ * The first of `kids` that reaches under `edge` (and that `counts`), with where it is: `[index,
+ * box]`, or null. Found by halving, not by going through them from the top -- they stand one
+ * under another, so a long thread costs a handful of looks, not one for every row above the
+ * window. (One that is not drawn at all says nothing of where it stands: the next drawn one is
+ * asked in its place.)
+ */
+function firstUnder(kids, edge, counts = null) {
+  let lo = 0
+  let hi = kids.length
+  let hit = null
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    let at = mid
+    let box = null
+    for (; at < hi; at++) {
+      const b = counts && !counts(kids[at]) ? null : kids[at].getBoundingClientRect()
+      if (b && b.height > 0) {
+        box = b
+        break
+      }
+    }
+    if (!box) hi = mid
+    else if (box.bottom > edge + 0.5) {
+      hit = [at, box]
+      hi = mid
+    } else lo = at + 1
+  }
+  return hit
+}
+
 /**
  * What is at the thread's top edge, nearest first: the paragraph (row, card) the edge runs
  * through or that begins just under it, the step it is in, ... and last the message. Of each,
- * where its top is from the edge, its size, and what it is known by should it be drawn anew.
+ * where its top is from the edge, its size, and what it is known by should it be drawn anew:
+ * the way down to it from its message (`path`: which child, of which child, ...), its kind, and
+ * the words it begins with.
  */
 function placeOf() {
   const th = $("thread")
   const edge = th.getBoundingClientRect().top
   const place = []
   let base = 0
+  let path = []
   for (let within = $("messages"), depth = 0; within && depth < 8; depth++) {
-    let at = null
-    let box = null
-    for (const el of within.children) {
-      // (Of the thread's own children only the messages: they are what is found again by a name.)
-      if (!depth && !el.dataset.id) continue
-      const b = el.getBoundingClientRect()
-      if (b.height > 0 && b.bottom > edge + 0.5) {
-        at = el
-        box = b
-        break
-      }
-    }
-    if (!at) break
+    // (Of the thread's own children only the messages: they are what is found again by a name.)
+    const hit = firstUnder(within.children, edge, depth ? null : (el) => !!el.dataset.id)
+    if (!hit) break
+    const [index, box] = hit
+    const at = within.children[index]
     if (!depth) base = box.top
+    else path = [...path, index]
     const whole = at.matches(WHOLE) || !at.childElementCount
     place.unshift({
       el: at,
       id: depth ? "" : at.dataset.id || "",
       tag: at.tagName,
-      // (Not of a thing with very many parts -- a long listing: reading its words costs too much to do at every move.)
-      text: depth && whole && at.childElementCount < 200 ? (at.textContent || "").slice(0, KNOWN_BY) : "",
+      path,
+      text: depth && whole ? firstWords(at) : "",
       offset: box.top - edge,
       rel: box.top - base,
       width: box.width,
@@ -327,11 +362,23 @@ function placeOf() {
   return place.length ? place : null
 }
 
+/** The way down from a message to a thing in it: which child, of which child, ... */
+function pathIn(msg, el) {
+  const path = []
+  for (; el && el !== msg; el = el.parentElement) path.unshift(Array.prototype.indexOf.call(el.parentElement.children, el))
+  return path
+}
+
 /**
  * A place's thing as the thread has it now: `[element, which of the place's entries it is]`,
- * the nearest that can be found -- itself where it is still drawn, else the same kind of thing
- * with the same first words in the same message (of several, the one nearest to where it was),
- * else what it was in, and at last the message. Null where the message is no longer drawn.
+ * the nearest that can be found -- itself where it is still drawn; else, drawn anew, what
+ * stands where it stood in its message (the same way down), if that is the same kind of thing
+ * beginning with the same words: so of several things that begin alike -- the rows of a list --
+ * it is the one that was meant, and finding it costs no more than the way down. Only where the
+ * message is built differently now (a step more above it) is it looked for by its words: of
+ * those that begin with them, the one whose way down ends most like its own, then the nearest
+ * to where it was. Else what it was in, and at last the message. Null where the message is no
+ * longer drawn.
  */
 function found(place) {
   const list = $("messages")
@@ -342,14 +389,21 @@ function found(place) {
   for (const e of place) {
     if (e === top) break
     if (e.el?.isConnected && msg.contains(e.el) && drawn(e.el)) return [e.el, e]
+    let there = msg
+    for (const i of e.path) there = there?.children[i]
+    if (there && there !== msg && there.tagName === e.tag && firstWords(there, e.text.length) === e.text && drawn(there)) return [there, e]
     if (e.text.length < 12) continue
     const from = msg.getBoundingClientRect().top
     let best = null
+    let alike = -1
     let far = Infinity
     for (const el of msg.querySelectorAll(e.tag)) {
-      if (!(el.textContent || "").startsWith(e.text) || !drawn(el)) continue
+      if (firstWords(el, e.text.length) !== e.text || !drawn(el)) continue
+      const way = pathIn(msg, el)
+      let n = 0
+      while (n < way.length && n < e.path.length && way[way.length - 1 - n] === e.path[e.path.length - 1 - n]) n++
       const d = Math.abs(el.getBoundingClientRect().top - from - e.rel)
-      if (d < far) [best, far] = [el, d]
+      if (n > alike || (n === alike && d < far)) [best, alike, far] = [el, n, d]
     }
     if (best) return [best, e]
   }
@@ -390,15 +444,41 @@ function remember(th, place = true) {
 
 /**
  * The person's hand on the thread: when they last did something that moves it up -- the wheel
- * turned up over it, a key that goes up or moves the focus, a touch -- and whether a pointer is
- * held down on it (its scrollbar dragged, a selection drawn). A move up within HAND ms of that
- * is theirs.
+ * turned up over it, a key that scrolls it, the focus brought into it by Tab, a touch, a
+ * pointer let go after dragging in it -- and whether a pointer is held down on it (its
+ * scrollbar dragged, a selection drawn). A move up within HAND ms of that is theirs. Only what
+ * is done to the thread counts: a click somewhere else, a key in a box that is typed into, Tab
+ * that moves the focus anywhere but into the thread say nothing of it.
  */
-const hand = { up: -Infinity, pressed: false }
+const hand = { up: -Infinity, pressed: false, at: -Infinity, x: 0, y: 0, dragged: false, bar: false, tab: -Infinity }
 const HAND = 1000
-/** When what is above or below the thread -- the header, the dock, the panels beside it, the window -- last changed. */
-let shaken = -Infinity
+/** A pointer held down counts for so long (ms) after it was last heard of -- pressed, moved, the thread scrolled under it: a release that never reaches the page is not a press for ever. */
+const PRESSED = 5000
+/** The focus that comes into the thread within so long (ms) of Tab was brought there by it. */
+const TABBED = 250
+
+function pressed(now) {
+  if (hand.pressed && now - hand.at > PRESSED) hand.pressed = false
+  return hand.pressed
+}
+
+/**
+ * What took another size around the thread a moment ago, and by how much (px), as measured:
+ * the thread's own room, the header, the dock -- for good, or only while the page measured
+ * something (the header unfolded to see whether it fits, the message box let go to see how
+ * tall its text is).
+ */
+const shook = []
 const SHAKEN = 250
+function shake(by) {
+  if (!(by > 0.5)) return
+  shook.push({ at: performance.now(), by })
+  if (shook.length > 12) shook.shift()
+}
+/** When the header or the dock was last drawn into: something put in or taken out, shown or hidden, folded -- not what is typed, nor a line's words. */
+let drawnInto = -Infinity
+/** How near (px) a move has to be to a size for that size to be what explains it. */
+const EXPLAINS = 2
 /** Moves up nobody was seen to make, one soon after another: how many, and when the last. */
 const unseen = { n: 0, at: -Infinity }
 /** One soon after another: no more than so long (ms) apart -- and not in the same frame, which a person's scrolling never is. */
@@ -407,25 +487,42 @@ const UNSEEN_FRAME = 8
 const UNSEEN_THEIRS = 4
 
 /**
- * A move up that no layout need have made (the thread could still stand where it stood): is it
- * the person's? Yes with their hand on the thread. Yes too while nothing around the thread has
- * just changed -- whatever moved it then (a reader's own way of scrolling this page hears
- * nothing of) was not the layout. But just after the header, the dock, a panel or the window
- * changed, and with no hand on the thread, it is the engine's: WebKit cuts a thread back in the
- * middle of laying the window out -- while the header above it is measured anew the thread is
- * for a moment as tall as if the header were not there, and a thread at its end is left that
- * much above its end with every size as it was before (seen under WebKit: 59 px, the header's
- * height, when the chat's settings were drawn into it). That is put back, and says nothing of
- * what the person wants. Even then a way of scrolling nothing is heard of is not held fast: the
- * fourth such move in a row, each a frame or a few after the one before, is taken for theirs.
+ * Whether a size the page can point at explains a move up nobody was seen to make. An engine
+ * that cuts the thread back while it lays the window out leaves it where its end would be were
+ * its room taller by what is being laid out: `amount` is how much taller that is. It is
+ * explained by a size that was measured changing just now, by as much; or -- where the header or
+ * the dock was just drawn into, which measures as no change at all once it is over -- by the
+ * header's height, the dock's, or both (seen under WebKit: the thread at its end left 59 px
+ * above it, the header's height, when the chat's settings were drawn into the header). Any
+ * other amount is not the layout's.
  */
-function theirsUp() {
+function explained(amount, now) {
+  const near = (size) => size > 0.5 && Math.abs(amount - size) <= EXPLAINS
+  if (shook.some((s) => now - s.at <= SHAKEN && near(s.by))) return true
+  if (now - drawnInto > SHAKEN) return false
+  const head = $("chat-head").getBoundingClientRect().height
+  const dock = $("dock").getBoundingClientRect().height
+  return near(head) || near(dock) || near(head + dock)
+}
+
+/**
+ * A move up by `moved` px that no layout need have made (the thread could still stand where it
+ * stood): is it the person's? Yes with their hand on the thread. Yes too unless the page can
+ * point at the size that explains it by its amount (`explained`): whatever else moved it -- a
+ * reader's own way of scrolling, the browser's search, anything this page hears nothing of --
+ * was not the layout, however much the page is changing around the thread at that moment. A
+ * move that is explained is the engine's: it is put back, and says nothing of what the person
+ * wants. Even then a way of scrolling nothing is heard of is not held fast: the fourth such
+ * move in a row, each a frame or a few after the one before, is taken for theirs.
+ */
+function theirsUp(moved) {
   const now = performance.now()
-  if (hand.pressed || now - hand.up < HAND) {
+  if (pressed(now) || now - hand.up < HAND) {
     hand.up = now // a long scroll stays theirs for as long as it goes on
+    if (hand.pressed) hand.at = now
     return true
   }
-  if (now - shaken > SHAKEN) return true
+  if (!explained(Math.max(0, seen.height - seen.client - seen.top) - moved, now)) return true
   const since = now - unseen.at
   // (Several in one frame are the page's own changes, each laid out by itself: one move between them.)
   if (since >= UNSEEN_FRAME) unseen.n = since < UNSEEN_WITHIN ? unseen.n + 1 : 1
@@ -451,9 +548,11 @@ function noticed() {
   const gap = th.scrollHeight - th.scrollTop - th.clientHeight
   const moved = th.scrollTop - seen.top
   const same = th.scrollHeight === seen.height && th.clientHeight === seen.client && th.clientWidth === seen.width
+  // (The thread's own room another height: measured, for what may be laid out after it.)
+  if (seen.client) shake(Math.abs(th.clientHeight - seen.client))
   const room = th.scrollHeight - th.clientHeight >= seen.top
   const up = moved < -0.5 && room
-  const theirs = up && theirsUp()
+  const theirs = up && theirsUp(moved)
   if (theirs) following = false
   else if (gap <= 2) {
     // At the end is followed -- but not in the moment after the wheel was turned up, while the
@@ -559,32 +658,69 @@ function initFollowing() {
     { passive: true },
   )
   // The person's hand on the thread otherwise (see `theirsUp`): a touch; a pointer held down on
-  // it, which is how its scrollbar is dragged and a selection drawn past its edge; a key that
-  // goes up, wherever it is pressed -- the thread scrolls for one pressed after a click in it.
+  // it, which is how its scrollbar is dragged and a selection drawn past its edge -- and, let
+  // go, a moment more where it was dragged or was on the thread's own edge (the scrollbar), not
+  // where it was a click on something in it; a key that scrolls up, pressed anywhere but in a
+  // box that is typed into (there it moves the caret) -- the thread scrolls for one pressed
+  // after a click in it; and Tab where it brings the focus into the thread, which scrolls to it.
   const touch = () => (hand.up = performance.now())
   for (const type of ["touchstart", "touchmove"]) th.addEventListener(type, touch, { passive: true })
-  for (const type of ["pointerdown", "mousedown"]) th.addEventListener(type, () => (hand.pressed = true), { passive: true })
-  for (const type of ["pointerup", "pointercancel", "mouseup", "blur"])
+  for (const type of ["pointerdown", "mousedown"])
+    th.addEventListener(
+      type,
+      (e) => {
+        if (!hand.pressed) Object.assign(hand, { x: e.clientX, y: e.clientY, dragged: false, bar: e.target === th })
+        hand.pressed = true
+        hand.at = performance.now()
+      },
+      { passive: true },
+    )
+  for (const type of ["pointermove", "mousemove"])
+    window.addEventListener(
+      type,
+      (e) => {
+        if (!hand.pressed) return
+        hand.at = performance.now()
+        if (Math.abs(e.clientX - hand.x) + Math.abs(e.clientY - hand.y) > 4) hand.dragged = true
+      },
+      { passive: true },
+    )
+  for (const type of ["pointerup", "pointercancel", "mouseup"])
     window.addEventListener(type, () => {
       if (!hand.pressed) return
       hand.pressed = false
-      touch()
+      if (hand.dragged || hand.bar) touch()
     })
-  // (Not in a box that is typed into, where these keys move the caret: only Tab leaves it.)
+  // A release the page never hears of (the window left with the button down; an engine that
+  // tells of no release after its scrollbar was dragged): no hand is on the thread any more.
+  const letGo = () => (hand.pressed = false)
+  window.addEventListener("blur", letGo)
+  document.addEventListener("visibilitychange", letGo)
   document.addEventListener(
     "keydown",
     (e) => {
-      const typing = e.target instanceof HTMLElement && e.target.matches("input, textarea, select, [contenteditable]")
-      if (e.key === "Tab" || (!typing && (e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home" || (e.key === " " && e.shiftKey)))) touch()
+      if (e.key === "Tab") return void (hand.tab = performance.now())
+      const typing = e.target instanceof HTMLElement && (e.target.matches("input, textarea, select") || e.target.isContentEditable)
+      if (!typing && (e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home" || (e.key === " " && e.shiftKey))) touch()
     },
     true,
   )
-  // What is around the thread, changing (see `theirsUp`).
-  const shake = () => (shaken = performance.now())
-  const around = new MutationObserver(shake)
-  for (const id of ["chat-head", "dock"]) around.observe($(id), { subtree: true, childList: true, attributes: true, characterData: true })
-  for (const id of ["shell", "main"]) around.observe($(id), { attributes: true })
-  window.addEventListener("resize", shake)
+  th.addEventListener("focusin", () => performance.now() - hand.tab < TABBED && touch())
+  // What is around the thread, changing (see `explained`): the header and the dock another
+  // size, measured; and when either was last drawn into.
+  const sizes = new Map()
+  const around = new ResizeObserver((entries) => {
+    for (const e of entries) {
+      const h = e.target.getBoundingClientRect().height
+      if (sizes.has(e.target)) shake(Math.abs(h - sizes.get(e.target)))
+      sizes.set(e.target, h)
+    }
+  })
+  const into = new MutationObserver(() => (drawnInto = performance.now()))
+  for (const id of ["chat-head", "dock"]) {
+    around.observe($(id))
+    into.observe($(id), { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "data-fold", "data-unfold", "data-open", "data-running"] })
+  }
   // What changes a size without a frame of a reply: a picture that arrived, a block opened, the
   // dock grown by a card or a longer message, the window; and the thread back on the screen
   // after another page, with what was written meanwhile.
@@ -707,7 +843,7 @@ function startEdit(el, m) {
     if (!text && !m.attachments?.length) return box.focus()
     save.disabled = cancel.disabled = true
     try {
-      await asking(post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/edit`, { text }))
+      await asking(post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/edit`, { text }), open.chat.id)
       readAgain()
     } catch (err) {
       said.textContent = why(err)
@@ -731,7 +867,7 @@ async function regenerate(m) {
   if (!open?.chat?.id) return
   alertIn("")
   try {
-    await asking(post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/regenerate`))
+    await asking(post(`/chats/${encodeURIComponent(open.chat.id)}/messages/${encodeURIComponent(m.id)}/regenerate`), open.chat.id)
     readAgain()
   } catch (err) {
     alertIn(why(err))
@@ -762,13 +898,23 @@ function endOf(m, last) {
 }
 
 /**
- * A finished reply in an agent chat that holds nothing at all and answers a turn nobody typed
- * (`before`: a job's note, a team report): the computer answered and what it said was never
- * written on the server. The row says so in one line, as the web interface does; no text is
- * made up for it.
+ * Whether the turn a reply answers (`before`) is one whose reply may have been lost: a turn
+ * nobody typed, in an agent chat, kept by a server from before it followed the linked
+ * computer's reply to such a turn -- it wrote the note and an empty reply, and what the computer
+ * said was never written. Such a row carries no `origin`. A server that follows those replies
+ * marks the turn (`origin: "harness"`): an empty reply to one of those is the reply.
+ */
+const maybeLost = (before) => !!before && before.role === "user" && !!before.machine && !before.origin
+
+/**
+ * A finished reply in an agent chat that holds nothing at all and answers a turn whose reply
+ * may have been lost (`maybeLost`): the row says in one line that the reply was not recorded,
+ * as the web interface does; no text is made up for it. Said of nothing else -- the app cannot
+ * know of a loss, only that this is where the known one left its rows -- and never of an empty
+ * reply to a turn the server has marked as followed.
  */
 function unrecorded(m, chat, before) {
-  if (chat?.kind !== "agent" || !before || before.role !== "user" || !before.machine) return false
+  if (chat?.kind !== "agent" || !maybeLost(before)) return false
   if (m.role !== "assistant" || !m.complete || m.stopped || m.error || endLine(m.end)) return false
   return !(m.steps || []).some((s) => (s.markdown || s.text || "").trim() || s.calls?.length || s.messages?.length)
 }
@@ -951,7 +1097,7 @@ function toolCall(c, chat, live, key) {
   // An edit shows its change without a click, as the web and the phone do.
   const el = h("details", { class: `call call--${kind} is-${state}`, open: kind === "edit" && !!c.diff ? true : null, dataset: { key, state, kind } }, summary, body.childElementCount ? body : null)
   if (isShow) {
-    el.append(h("button", { type: "button", class: "btn btn--sm call__open", text: t("Open in the viewer"), onclick: () => openShown(c, chat) }))
+    el.append(h("button", { type: "button", class: "btn btn--sm call__open", text: t("Open in the viewer"), onclick: () => openShown(c, nowOf(chat)) }))
   }
   return made ? [el, h("div", { class: "call__made" }, made)] : el
 }
@@ -1099,18 +1245,21 @@ class Live {
         break
       case "done":
         this.done = true
+        changedHere(this.chat.id) // (a reading on its way began while this was still being written)
         ended = { id: "", n: 0 }
         this.stopClock()
         // How it ended (stopped, failed) stays on the reply: the stream's last progress says why.
         // (What it answers is the row above it: a note of the machine's is drawn as one.)
-        this.el.replaceWith(row(data.message, this.chat, this.progress, this.el.previousElementSibling?.matches(".msg--user.is-machine") ? { role: "user", machine: true } : null))
+        // (A reply followed to its end was written as it came: nothing of it was lost.)
+        this.el.replaceWith(row(data.message, this.chat, this.progress, null))
         renderCards(this.chat, [])
         if (data.chat?.title) setTitle(data.chat.title)
         ctx.changed(this.chat)
         if (open?.live === this) open.live = null
         setRunning(false)
         // A message queued behind this reply has one of its own now: read the chat again.
-        if (data.next) readAgain()
+        // (Nobody at the window asked for that: whatever they are in keeps the focus.)
+        if (data.next) readAgain(this.chat.id, true)
         break
       default:
         break
@@ -1172,7 +1321,7 @@ class Live {
     }
     if (err) this.lost(err)
     else {
-      readAgain()
+      readAgain(this.chat.id, true)
       activityChanged()
     }
   }
@@ -1204,11 +1353,26 @@ let lastLive = null
 // the same `Live`, the same stream, Stop in Send's place. Known already -- followed now, or
 // drawn as finished -- the frame is nothing: no reply is read or followed twice.
 
-/** This window's own requests that may start a reply, on their way: their answer names it. */
-const asks = new Set()
-function asking(promise) {
-  asks.add(promise)
-  const over = () => asks.delete(promise)
+/** This window's own requests that may start a reply, on their way, each with the chat it is for ("" for a chat being made): their answer names the reply. */
+const asks = new Map()
+const asksFor = (chat) => [...asks].filter(([, c]) => c === chat).map(([promise]) => promise)
+/**
+ * How often a chat was changed from this window in a way no reading that had already begun can
+ * be trusted to know of: counted when a message is sent, edited, a reply asked for again or
+ * carried on -- and again when that is answered -- and when a reply that was followed here
+ * ends. A reading whose answer comes at another count than it began at saw the chat from before
+ * (or from the middle of) one of those: it is asked again, never drawn (`read`). So no answer
+ * of the server's is drawn over something newer the window already has.
+ */
+const own = new Map()
+const changedHere = (chat) => own.set(chat, (own.get(chat) || 0) + 1)
+function asking(promise, chat = "") {
+  changedHere(chat)
+  asks.set(promise, chat)
+  const over = () => {
+    changedHere(chat)
+    asks.delete(promise)
+  }
   promise.then(over, over)
   return promise
 }
@@ -1226,6 +1390,11 @@ function knows(messageId) {
   return !!$("messages").querySelector(`.msg--assistant[data-id="${CSS.escape(messageId)}"]:not(.is-live)`)
 }
 
+/** Whether the open chat is following this reply right now. */
+export function replyFollowed(messageId) {
+  return !!open?.live && !open.live.done && open.live.id === messageId
+}
+
 /**
  * The stream's `reply` frame. For the open chat: read again unless the reply is known -- after
  * whatever of this window's is on its way that would bring it (a message being sent, a reading).
@@ -1239,8 +1408,8 @@ export function replyStarted(frame) {
   if (open?.chat?.id !== chat) return false
   ;(async () => {
     // (A turn more after each: what ran on the answer -- `follower`, a reading begun -- has run.)
-    while (asks.size || reading) {
-      await Promise.allSettled([...asks, reading])
+    while (asksFor(chat).length || reading) {
+      await Promise.allSettled([...asksFor(chat), reading])
       await null
     }
     if (open?.chat?.id !== chat || knows(reply)) return
@@ -1255,16 +1424,17 @@ export function replyStarted(frame) {
  * it is being read or a reply is followed (whose end reads it anyway).
  */
 export function eventsOpened() {
-  if (!repliesSaid() || !open?.chat?.kind || open.live || reading || asks.size) return
+  if (!repliesSaid() || !open?.chat?.kind || open.live || reading || asksFor(open.chat.id).length) return
   readAgain(open.chat.id, true)
 }
 
-function follower(chat, messageId, from = null) {
+/** The reply being written is followed: its row at the thread's end, or before `next` (a message queued behind it). */
+function follower(chat, messageId, from = null, next = null) {
   if (open?.live) open.live.stop()
   const live = new Live(chat, messageId, from)
   open.live = live
   lastLive = live
-  $("messages").append(live.el)
+  $("messages").insertBefore(live.el, next?.parentElement === $("messages") ? next : null)
   setRunning(true)
   live.start()
 }
@@ -1653,7 +1823,11 @@ function fitHead() {
   // and that read as the person having scrolled up -- seen under WebKit, where the settings
   // fold at widths they fit in elsewhere. So it is a change like any other: the thread is put
   // back where it stood (`mark`, `settle`).
+  // (And the header is being drawn into now: the observer that says so is heard only after this.)
+  drawnInto = performance.now()
   mark()
+  const th = $("thread")
+  const before = th.clientHeight
   head.dataset.fold = "false"
   // Folded when the settings are cut at their end, or when they leave where the chat works (its
   // folder) less than its own width or 10rem, whichever is less.
@@ -1661,6 +1835,8 @@ function fitHead() {
   const room = Math.min(place.scrollWidth, 10 * parseFloat(getComputedStyle(document.documentElement).fontSize))
   const squeezed = place.childElementCount > 0 && place.clientWidth + 1 < room
   const fold = any && (box.scrollWidth > box.clientWidth + 1 || squeezed)
+  // (By how much the thread's room was another height while the header was laid out unfolded: measured.)
+  shake(Math.abs(th.clientHeight - before))
   head.dataset.fold = String(fold)
   if (!fold) head.dataset.unfold = "false"
   $("chat-fold").hidden = !fold
@@ -2307,7 +2483,7 @@ async function setChat(chat, body) {
   try {
     const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, body)
     if (open?.chat?.id === chat.id && r?.chat) open.chat = r.chat
-    ctx.changed(r?.chat)
+    ctx.changed(r?.chat, true)
   } catch (err) {
     alertIn(why(err))
   }
@@ -2322,7 +2498,7 @@ async function renameChat(chat) {
       open.chat = r.chat
       setTitle(r.chat.title)
     }
-    ctx.changed(r.chat)
+    ctx.changed(r.chat, true)
   } catch (err) {
     alertIn(why(err))
   }
@@ -2389,10 +2565,24 @@ let reads = 0
 /** A row was drawn from this: the message as the server sent it. A chat read again keeps the rows that still say the same. */
 const drawnFrom = new WeakMap()
 
+/** The chat as it is now, for a row drawn when it was another object: what a press in a kept row acts on. */
+const nowOf = (chat) => (chat?.id && open?.chat?.id === chat.id ? open.chat : chat)
+
+/**
+ * What a row is drawn from: the message as the server sent it, and what else its drawing looks
+ * at -- where the chat works (a shown file is read from this computer or from the server), and
+ * whether what it answers is a turn whose reply may have been lost (`unrecorded`). A row is
+ * kept only while all of that is the same.
+ */
+function drawnOf(m, chat, before) {
+  const where = [chat?.id || "", chat?.kind || "", chat?.device?.token_id || "", chat?.device?.directory || "", onThisComputer(chat)]
+  return `${JSON.stringify(m)}\n${JSON.stringify(where)}\n${maybeLost(before) ? "lost" : ""}`
+}
+
 /** A message's row, as the server sent the message; `before` is the message it follows (what a reply answers). */
 function row(m, chat, last = null, before = null) {
   const el = m.role === "user" ? userMessage(m) : assistantMessage(m, chat, last, before)
-  drawnFrom.set(el, JSON.stringify(m))
+  drawnFrom.set(el, drawnOf(m, chat, before))
   return el
 }
 
@@ -2405,14 +2595,24 @@ export function openChat(id, quiet = false) {
   return mine
 }
 
+/** What the header and the chips are drawn from: the chat, without what changes with every reply. */
+const headOf = (chat) => JSON.stringify({ ...chat, unread: null, running: null, updated_at: null })
+
 async function read(id, quiet) {
   const mine = ++reads
+  const began = own.get(id) || 0
   // The chat that is open, read again (a reply's stream ended, a message was edited, the summary
   // was made): what is on the screen stays there until the answer has come -- the thread, the
-  // cards waiting for an answer, the chat itself as `open` has it -- and the thread stays where
-  // the person has it. Cleared first, it shrank to one line and stood at its top. Only a chat
-  // read whole counts: while its first reading is on its way, a second is a first one too.
+  // cards waiting for an answer, the chat itself as `open` has it, the reply being followed --
+  // and the thread stays where the person has it. Cleared first, it shrank to one line and stood
+  // at its top. Only a chat read whole counts: while its first reading is on its way, a second
+  // is a first one too.
   const again = open?.chat?.id === id && !!open.chat.kind && !!$("messages").querySelector(".msg")
+  // Read again for something nobody at the window did (`quiet`: a frame of the events stream,
+  // that stream opened anew, a reply's stream ended): only what the answer says has changed is
+  // changed. What the person has open stays open -- a chip's menu or panel, the composer's
+  // menu, a line that says what went wrong, a page of an answer in its frame.
+  const calm = again && quiet
   // Another chat: where the person was reading this one is kept for when they come back to it.
   if (open?.chat?.id !== id) leavePlace()
   if (!again && open?.chat?.id !== id) lastLive = null
@@ -2420,12 +2620,16 @@ async function read(id, quiet) {
   if (open?.chat?.id !== id) discard()
   // Another chat: the cards of what this one made, their frames and their jobs' timers go.
   if (open?.chat?.id !== id) forgetMedia()
-  if (open?.live) open.live.stop()
   if (open?.chat?.id !== id) pythonFor(null)
-  open = again ? { ...open, live: null } : { chat: { id }, live: null, more: false }
+  if (!again) {
+    if (open?.live) open.live.stop()
+    open = { chat: { id }, live: null, more: false }
+  }
   draft = null
-  closePopover()
-  closeComposerMenu()
+  if (!calm) {
+    closePopover()
+    closeComposerMenu()
+  }
   invoke("set_open_chat", { chat: id })
   showComposer(true)
   $("new-chat").hidden = true
@@ -2447,12 +2651,14 @@ async function read(id, quiet) {
     if (mine !== reads || open?.chat?.id !== id) return
     // The chat read again and not had: what is drawn stays -- a card waiting for an answer
     // too -- the chat is what it was, and the error is said beside it: on the reply that was
-    // being written, where there is one.
+    // being written, where there is one. A reply still followed goes on; where nobody asked
+    // for the reading, nothing is said over it (its end reads the chat again).
     if (again) {
-      setRunning(false)
+      const follows = open.live && !open.live.done
+      if (!follows) setRunning(false)
       renderNotice()
-      if (was?.el.isConnected) was.lost(err)
-      else alertIn(why(err))
+      if (!follows && was?.el.isConnected) was.lost(err)
+      else if (!follows || !calm) alertIn(why(err))
       return
     }
     clear(list)
@@ -2460,15 +2666,31 @@ async function read(id, quiet) {
     return
   }
   if (mine !== reads || open?.chat?.id !== id) return
+  // The answer is of a chat from before something this window has done to it since (`own`), or
+  // from the middle of it: a message whose answer has come and is drawn, with its reply being
+  // followed, is not in it -- or is, and its own answer would draw it a second time. Nothing of
+  // such an answer is drawn: once what is on its way has been answered, the chat is asked again.
+  if ((own.get(id) || 0) !== began || asksFor(id).length) {
+    while (asksFor(id).length) {
+      await Promise.allSettled(asksFor(id))
+      await null
+    }
+    if (mine !== reads || open?.chat?.id !== id) return
+    return read(id, quiet)
+  }
   // What they look at, before anything of the answer is drawn (the head and the dock may take another size too).
   mark()
+  const same = calm && headOf(open.chat) === headOf(r.chat)
   open.chat = r.chat
   // This window is the chat's page for the `python` tool (a chat on the server, Python on there).
   pythonFor(r.chat)
   watchActivity(r.chat)
-  renderHead(r.chat)
-  renderChips()
-  renderNotice()
+  // (The header and the chips are drawn from the chat: the same chat, they stay the elements they are.)
+  if (!same) {
+    renderHead(r.chat)
+    renderChips()
+    renderNotice()
+  }
   const seed = seedOf(r.chat, r.messages, r.more)
   // A report's conversation opens with a line the server wrote in the person's place: not shown.
   const shown = r.messages.filter((m) => m.id !== r.live && m.id !== seed)
@@ -2478,27 +2700,39 @@ async function read(id, quiet) {
   const first = again && shown[0] ? list.querySelector(`.msg[data-id="${CSS.escape(shown[0].id)}"]`) : null
   const above = first?.previousElementSibling || null
   if (!again) clear(list)
+  // The reply followed now, where the answer says it is still the one being written: it goes
+  // on as it is -- the same row, the same stream. (A reading is never drawn from before this
+  // window's last word, so a reply the answer does not name is one the server no longer writes.)
+  const live = again && open.live && !open.live.done && open.live.el.parentElement === list ? open.live : null
+  const follows = !!live && live.id === r.live
   // A chat read again is not drawn again: a row whose message the server sends as it sent it
   // before stays as it is -- the same element, with what the person opened in it, its pictures
   // and its players -- and only what changed is drawn anew, what is gone taken away, what is new
   // put in its place. (The reply being written is the stream's: its row is made by `follower`.
-  // A row with a page of an answer in it is drawn anew all the same: what was held of the pages
-  // is let go below, and each is asked of the server afresh -- its box has one height, so
-  // nothing moves for it.)
+  // Where the person asked for the reading, a row with a page of an answer in it is drawn anew
+  // all the same: what was held of the pages is let go below, and each is asked of the server
+  // afresh -- its box has one height, so nothing moves for it.)
   const have = new Map()
   for (let el = above ? first : list.firstElementChild; el; el = el.nextElementSibling) if (el.matches(".msg[data-id]:not(.is-live)")) have.set(el.dataset.id, el)
   const rows = shown.map((m, i) => {
     const el = have.get(m.id)
-    return el && !el.querySelector(".hpage") && drawnFrom.get(el) === JSON.stringify(m) ? el : row(m, r.chat, null, shown[i - 1])
+    return el && (calm || !el.querySelector(".hpage")) && drawnFrom.get(el) === drawnOf(m, r.chat, shown[i - 1]) ? el : row(m, r.chat, null, shown[i - 1])
   })
   const stay = new Set(rows)
+  if (follows) stay.add(live.el)
+  // (The way to the earlier messages stays the button it is.)
+  let before = above
+  const button = !above && r.more ? (calm && list.firstElementChild?.matches(".thread__earlier") ? list.firstElementChild : earlier()) : null
+  if (button) stay.add(button)
   for (let el = above ? first : list.firstElementChild, next; el; el = next) {
     next = el.nextElementSibling
     if (!stay.has(el)) el.remove()
   }
-  let before = above
   if (!above) {
-    if (r.more) list.prepend((before = earlier()))
+    if (button) {
+      if (list.firstElementChild !== button) list.prepend(button)
+      before = button
+    }
     open.more = r.more
   }
   for (const el of rows) {
@@ -2506,15 +2740,28 @@ async function read(id, quiet) {
     if (at !== el) list.insertBefore(el, at)
     before = el
   }
+  // The reply being written stands where the server has it: before a message queued behind it.
+  const at = r.live ? r.messages.findIndex((m) => m.id === r.live) : -1
+  const behind = at < 0 ? null : rows[shown.indexOf(r.messages.slice(at + 1).find((m) => m.id !== seed))] || null
   if (again) {
-    invoke("pages_clear")
-    alertIn("")
+    if (!calm) {
+      invoke("pages_clear")
+      alertIn("")
+    }
     // The cards are the stream's to say (its `ask` frame); with no reply being written, none waits.
     if (!r.live) renderCards(r.chat, [])
   }
   ctx.opened(r.chat)
-  if (r.live) follower(r.chat, r.live, was)
-  else setRunning(false)
+  if (follows) {
+    live.chat = r.chat
+    if (live.el.nextElementSibling !== behind) list.insertBefore(live.el, behind)
+    setRunning(true)
+  } else {
+    if (open.live) open.live.stop()
+    open.live = null
+    if (r.live) follower(r.chat, r.live, was, behind)
+    else setRunning(false)
+  }
   // A chat opened is at its end and followed (what the reply's first frames bring included) --
   // or where the person left it; one read again is where it was: what was at the top of the
   // window is there again, and where that message is gone, the thread is at its end.
@@ -2577,7 +2824,7 @@ export function readAgain(id = open?.chat?.id, quiet = false) {
 export function mediaJobEnded(job) {
   const id = open?.chat?.id
   if (!id || (job?.chat_id && job.chat_id !== id)) return
-  const again = () => open?.chat?.id === id && !open.live && !repliesSaid() && readAgain(id)
+  const again = () => open?.chat?.id === id && !open.live && !repliesSaid() && readAgain(id, true)
   again()
   if (job?.told !== true) setTimeout(again, 4000)
 }
@@ -2745,13 +2992,19 @@ async function createChat(text, attachments) {
   renderChips()
   renderNotice()
   clear($("messages"))
-  if (r.message) $("messages").append(userMessage(r.message))
+  if (r.message) $("messages").append(row(r.message, r.chat))
   ctx.changed(r.chat)
   ctx.opened(r.chat)
   if (r.reply) follower(r.chat, r.reply.id)
 }
 
 // --- The composer ------------------------------------------------------------------------------------
+
+/** The person's message, as the server answered it: a row at the thread's end (once: not where it is already drawn). */
+function appendSent(m) {
+  if (!m || $("messages").querySelector(`:scope > .msg[data-id="${CSS.escape(m.id)}"]`)) return
+  $("messages").append(row(m, open.chat))
+}
 
 function showComposer(on) {
   $("composer").hidden = !on
@@ -2780,12 +3033,23 @@ async function submit() {
   try {
     if (draft) await createChat(text, files)
     else if (open?.chat?.id) {
+      const id = open.chat.id
       let body = { text }
       if (files.length) body.attachments = files
       if (open.chat.kind === "chat") body = takePicture(body)
-      const r = await asking(post(`/chats/${encodeURIComponent(open.chat.id)}/messages`, body))
+      const r = await asking(post(`/chats/${encodeURIComponent(id)}/messages`, body), id)
       pictureSent()
-      if (r.message) $("messages").append(userMessage(r.message))
+      // The chat was left while the message was on its way: it is that chat's, and nothing of
+      // it is drawn into this one. What was sent is not left in the box to be sent again.
+      if (open?.chat?.id !== id) {
+        if (box.value.trim() === text) {
+          box.value = ""
+          grow()
+        }
+        ctx.changed()
+        return
+      }
+      appendSent(r.message)
       if (r.reply) follower(open.chat, r.reply.id)
     } else return
     sent()
@@ -2825,7 +3089,7 @@ async function saveChat(body, done) {
       setTitle(r.chat.title)
       renderChips()
     }
-    ctx.changed(r?.chat)
+    ctx.changed(r?.chat, true)
     if (done) note(done)
   } catch (err) {
     alertIn(why(err))
@@ -2890,9 +3154,9 @@ async function continueReply() {
   const id = chatId()
   if (!id || !$("messages").querySelector(".msg--assistant")) return note(t("There is no reply to continue yet."))
   try {
-    const r = await asking(post(`/chats/${encodeURIComponent(id)}/continue`))
+    const r = await asking(post(`/chats/${encodeURIComponent(id)}/continue`), id)
     if (openChatId() !== id) return
-    if (r.message) $("messages").append(userMessage(r.message))
+    appendSent(r.message)
     if (r.reply) follower(open.chat, r.reply.id)
     toBottom()
   } catch (err) {
@@ -3034,8 +3298,13 @@ function grow() {
   // Measuring the box takes its height away for a moment, and the thread above it is laid out
   // taller meanwhile: it is put back where it stood.
   mark()
+  const th = $("thread")
+  const before = th.clientHeight
   box.style.height = "auto"
-  box.style.height = `${Math.min(box.scrollHeight, window.innerHeight * 0.4)}px`
+  const wants = box.scrollHeight
+  // (By how much the thread's room was another height while the box was measured: see `explained`.)
+  shake(Math.abs(th.clientHeight - before))
+  box.style.height = `${Math.min(wants, window.innerHeight * 0.4)}px`
   settle()
 }
 

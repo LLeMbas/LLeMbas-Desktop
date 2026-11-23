@@ -11,8 +11,8 @@ import { renderSetup, initSetup } from "./setup.js"
 import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer, closeViewerKeeping, keptEdit, dropKeptEdit, restoreEdit } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab, openServerFile, revealServerFile } from "./explorer.js"
-import { initList, refreshList, markCurrent, busyElsewhere } from "./list.js"
-import { initChat, openChat, readAgain, replyStarted, eventsOpened, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
+import { initList, refreshList, markCurrent, replySaid, noteChat, dropChat, resetList } from "./list.js"
+import { initChat, openChat, readAgain, replyStarted, replyFollowed, eventsOpened, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
 import { initPython } from "./python.js"
 import { pythonChanged } from "./chat.js"
 import { initTerminal, showTerminal, terminalOpen, terminalAvailable, toggleTerminal } from "./terminal.js"
@@ -129,6 +129,8 @@ async function startApp() {
 function stopApp() {
   started = false
   closeChat()
+  // Nothing of the account's list is kept, and nothing is looked for in it.
+  resetList()
   // The screen goes because the sign-in did -- by the server's word, not the person's (Sign out
   // asks first, and what it is told may go is gone). An edit that was not saved is kept for the
   // person it belongs to, and put back when they have signed in again.
@@ -338,7 +340,11 @@ async function boot() {
     devices: () => devices,
     models: () => models,
     me: () => me,
-    changed: () => refreshList(),
+    // The chat changed; `fresh`: and this is the server's own word of it, for its row at once.
+    changed: (chat, fresh) => {
+      if (fresh) noteChat(chat)
+      refreshList()
+    },
     opened: (chat) => {
       currentChat = chat
       localPane(chat)
@@ -361,6 +367,7 @@ async function boot() {
         newChat()
         localPane()
       }
+      dropChat(chat.id)
       refreshList()
     },
   })
@@ -485,7 +492,9 @@ async function boot() {
   listen("reply", (e) => {
     if (view !== "app") return
     const mine = replyStarted(e.payload)
-    if (typeof e.payload?.chat_id === "string") busyElsewhere(e.payload.chat_id, !mine && e.payload.live !== false)
+    // (The end of a reply the open chat follows is said by that reply's own stream, and the
+    // list is read then: the frame costs no reading of its own.)
+    replySaid(e.payload, !mine, !(mine && e.payload?.live === false && replyFollowed(e.payload.message_id)))
   })
   listen("events-open", () => {
     if (view === "app") eventsOpened()

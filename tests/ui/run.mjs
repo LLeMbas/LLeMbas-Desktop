@@ -5629,13 +5629,14 @@ test("W1: a chat read again with earlier messages loaded keeps them, and the mes
   w1End(p)
 })
 
-test("RR: two readings of the open chat at once: both had, the reply is followed once; both failed, the chat is still whole and can be read again", async () => {
+test("RR: two readings of the open chat at once: both had, the reply goes on being followed as it is, once; both failed, the chat is still whole, the reply still followed, and the chat can be read again", async () => {
   const p = await page(w1Chat())
   await openChatRow(p, "chat2")
   await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
   const opened = () => p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "stream_open").length)
+  const reads = () => p.evaluate(() => window.__mock.api("GET", "/chats/chat2").filter((c) => c.args.path === "/chats/chat2").length)
   const twice = async () => {
-    const asked = await p.evaluate(() => window.__mock.api("GET", "/chats/chat2").filter((c) => c.args.path === "/chats/chat2").length)
+    const asked = await reads()
     await p.evaluate(() => {
       window.__mockConfig.hold = ["GET /chats/chat2"]
       window.__mock.emit("open-chat", "chat2")
@@ -5643,31 +5644,43 @@ test("RR: two readings of the open chat at once: both had, the reply is followed
     })
     await p.waitForFunction((n) => window.__mock.api("GET", "/chats/chat2").filter((c) => c.args.path === "/chats/chat2").length === n + 2, asked)
     await p.evaluate(() => window.__mock.release("GET /chats/chat2"))
+    await rxDrawn(p)
+  }
+  /** The reply on the screen is the one being followed: what its stream sends next is drawn in it. */
+  const written = async (words) => {
+    await w1Send(p, "tail", { thinking: "", text: words, label: "" })
+    await p.waitForFunction((w) => document.querySelector("#messages .msg.is-live .msg__tail")?.textContent.includes(w), words)
   }
   const at = await opened()
+  const row = await p.evaluateHandle(() => document.querySelector("#messages .msg.is-live"))
   await twice()
-  await p.waitForFunction((n) => window.__mock.calls.filter((c) => c.cmd === "stream_open").length > n, at)
-  await p.waitForTimeout(200)
-  assert.equal(await opened(), at + 1, "the older answer is dropped: the reply is followed once more, not twice")
+  assert.equal(await opened(), at, "the reply goes on being followed: its stream is not opened again, by either answer")
   assert.equal(await p.locator(".msg.is-live").count(), 1)
+  assert.ok(await p.evaluate((el) => el === document.querySelector("#messages .msg.is-live"), row), "and it is the row it was")
+  await written("Still being written.")
   const count = await p.locator("#messages .msg").count()
-  // Both fail.
+  // Both fail: said once, above the composer; the reply is still followed.
   const good = await p.evaluate(() => window.__mockConfig.routes["GET /chats/chat2"])
   await p.evaluate(() => window.__mock.answer("GET /chats/chat2", { __error: { status: 502, detail: "The server did not answer." } }))
   await twice()
-  await p.waitForSelector(".msg.is-live .msg__again")
-  assert.equal(await p.locator(".msg__again").count(), 1, "said once")
+  await p.waitForFunction(() => /The server did not answer\./.test(document.getElementById("thread-note").textContent))
+  assert.equal(await p.locator(".msg__again").count(), 0, "the reply is not said to be lost: it is not")
   assert.equal(await p.locator("#messages .msg").count(), count)
+  assert.ok(await p.isVisible("#stop"), "Stop is still in Send's place")
+  await written("And still.")
   // The chat is the agent chat it was: its own commands still answer.
   await p.fill("#composer-text", "/mode")
   await p.focus("#composer-text")
   await p.keyboard.press("Enter")
   await p.waitForFunction(() => /Modes: manual, edit, auto, plan/.test(document.getElementById("thread-note").textContent))
   await p.evaluate((was) => window.__mock.answer("GET /chats/chat2", was), good)
-  await p.click(".msg__again")
-  await p.waitForFunction((n) => window.__mock.calls.filter((c) => c.cmd === "stream_open").length === n + 2, at)
-  await p.waitForSelector(".msg.is-live:not(:has(.msg__again))")
+  const asked = await reads()
+  await p.evaluate(() => window.__mock.emit("open-chat", "chat2"))
+  await p.waitForFunction((n) => window.__mock.api("GET", "/chats/chat2").filter((c) => c.args.path === "/chats/chat2").length === n + 1, asked)
+  await rxDrawn(p)
+  assert.equal(await opened(), at)
   assert.equal(await p.locator(".msg.is-live").count(), 1)
+  await written("To the end.")
   assert.deepEqual(p.errors, [])
 })
 
@@ -7531,7 +7544,12 @@ const posOpen = async (p, id = "chat2", last = "a4") => {
   await p.waitForSelector(`#messages .msg[data-id="${last}"]`)
 }
 const posToEnd = async (p) => {
-  await w1Wheel(p, 200000)
+  // (One turn of the wheel does not always reach an end that has just moved further away --
+  // rows added below the window while nothing in the window changed: turned until it is there.)
+  for (let i = 0; i < 4; i++) {
+    await w1Wheel(p, 200000)
+    if ((await w1At(p)).gap <= 1) break
+  }
   await p.evaluate(() => (window.__pos.anchor = null))
 }
 const posReads = (p, id = "chat2") => p.evaluate((c) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length, id)
@@ -7722,15 +7740,18 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
     // A move up nobody made -- no wheel, key, touch or pointer was heard of: WebKit cuts a
     // thread back while the window is laid out anew, by the height of what is above or below
     // it -- is put back before it is seen, and the end is still followed.
-    // (Just after the dock changed -- a note in it -- as the engine's cut comes with a layout of what is around the thread.)
+    // (Just after the header was drawn into -- a chip put in and taken out -- and by the
+    // header's height, "head": the engine's cut comes with a layout of what is around the
+    // thread, and is that tall.)
     const nobody = (by) =>
       p.evaluate(async (n) => {
-        const note = document.getElementById("thread-note")
-        note.dataset.seen = String(Date.now())
+        const chip = document.createElement("span")
+        document.getElementById("chat-settings").append(chip)
+        chip.remove()
         await Promise.resolve()
-        document.getElementById("thread").scrollTop -= n
+        document.getElementById("thread").scrollTop -= n === "head" ? document.getElementById("chat-head").getBoundingClientRect().height : n
       }, by)
-    await step("at the end: a move up nobody made is put back", "end", () => nobody(59))
+    await step("at the end: a move up nobody made is put back", "end", () => nobody("head"))
     await step("at the end: and what comes after is still followed", "end", () => p.fill("#composer-text", "one\ntwo\nthree\nfour"))
     await p.fill("#composer-text", "")
     // Where the header's settings fold behind their button: opened, they are a row of their
@@ -7761,21 +7782,31 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
       await step("scrolled up: the side panel closed (or opened)", "held", side)
       await step("scrolled up: the side panel as it was", "held", side)
     }
-    await step("scrolled up: a move up nobody made is put back", "held", () => nobody(40))
-    // A way of scrolling this page hears nothing of is not held fast: a move up a frame, and
-    // by the fourth they are the person's -- from the end too, which is then no longer followed.
+    // Scrolled up, far from the end, no cut of the engine's leaves the thread where it then
+    // stands: a move nothing was heard of is the person's, whatever is drawn around the thread.
+    const far = await p.evaluate(() => document.getElementById("thread").scrollTop)
+    await nobody(40)
+    await posRest(p)
+    const went = far - (await p.evaluate(() => document.getElementById("thread").scrollTop))
+    assert.ok(Math.abs(went - 40) <= 1, `scrolled up, a move up nothing was heard of is the person's although the header was just drawn into (${went} px up)`)
+    // A way of scrolling this page hears nothing of is not held fast even where it looks like
+    // the engine's cut -- by the header's height, as the header is drawn into: a move a frame,
+    // and by the fourth they are the person's -- from the end, which is then no longer followed.
     await posToEnd(p)
-    const crept = await p.evaluate(async () => {
+    const [crept, tall] = await p.evaluate(async () => {
       const th = document.getElementById("thread")
+      const tall = document.getElementById("chat-head").getBoundingClientRect().height
       for (let i = 0; i < 7; i++) {
-        document.getElementById("thread-note").dataset.seen = String(i)
+        const chip = document.createElement("span")
+        document.getElementById("chat-settings").append(chip)
+        chip.remove()
         await Promise.resolve()
-        th.scrollTop -= 30
+        th.scrollTop -= tall
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
       }
-      return th.scrollHeight - th.scrollTop - th.clientHeight
+      return [th.scrollHeight - th.scrollTop - th.clientHeight, tall]
     })
-    assert.ok(crept >= 90 && crept <= 150, `moves up nothing was heard of, one a frame while the dock changes, are put back three times and the person's from the fourth (${crept} px from the end after seven)`)
+    assert.ok(Math.abs(crept - 4 * tall) <= 6, `moves up nothing was heard of, one a frame, each as tall as the header while it is drawn into, are put back three times and the person's from the fourth (${crept} px from the end after seven of ${tall})`)
     // With nothing around the thread changing, a move up nothing was heard of is the person's at once.
     await posToEnd(p)
     await p.waitForTimeout(400)
@@ -7978,7 +8009,8 @@ test("RP3: a reply that starts in another chat shows in the list -- running, in 
   await p.waitForFunction((n) => window.__mock.api("GET", "/chats?limit=50").length === n + 1, lists)
   assert.ok(await p.$('.chatrow[data-id="chat1"] .chatrow__state.is-busy'))
   await p.evaluate(([one, two]) => window.__mock.answer("GET /chats", { chats: [one, two], more: false }), [chatRow({ unread: true }), agentChat({ running: false })])
-  await p.clock.fastForward(5000)
+  // (Each look is later than the one before: this server has not been seen to say a reply's end.)
+  await p.clock.fastForward(10000)
   await p.waitForSelector('.chatrow[data-id="chat1"] .chatrow__state.is-new')
   const after = await rpLists(p)
   await p.clock.fastForward(11000)
@@ -7986,25 +8018,38 @@ test("RP3: a reply that starts in another chat shows in the list -- running, in 
   assert.deepEqual(p.errors, [])
 })
 
-test("RP4: an empty, finished reply after the machine's note in an agent chat says it was not recorded -- one line, in the person's language -- and nowhere else", async () => {
+test("RP4: an empty, finished reply in an agent chat says it was not recorded only after a note from before the server followed such replies (no `origin`) -- one line, in the person's language; after a turn the server marks as followed, and anywhere else, an empty reply is the reply; and the line goes when the turn before it is no longer such a note", async () => {
   const empty = (id) => posReply(id, [])
+  // A note as a server kept it before it followed the computer's reply to one: no origin.
+  const old = (id, text) => ({ ...rpNote(id, text), origin: "" })
+  const messages = [userMessage("m1", "Tidy the build"), empty("e0"), old("n1", "Background job helper-1 finished."), empty("e1"), old("n2", "Background job helper-2 finished."), posWords("m2", 1), old("n3", "Background job helper-3 finished."), { ...empty("e3"), stopped: true }, rpNote("n4", "Background job helper-4 finished."), empty("e4")]
   const cfg = rpChat({
-    "GET /chats/chat2": { chat: agentChat({ running: false }), messages: [userMessage("m1", "Tidy the build"), empty("e0"), rpNote("n1", "Background job helper-1 finished."), empty("e1"), rpNote("n2", "Background job helper-2 finished."), posWords("m2", 1), rpNote("n3", "Background job helper-3 finished."), { ...empty("e3"), stopped: true }], more: false, live: null },
+    "GET /chats/chat2": { chat: agentChat({ running: false }), messages, more: false, live: null },
     "GET /chats/chat1": { chat: chatRow(), messages: [{ ...userMessage("n5", "A scheduled task ran."), machine: true }, empty("e5")], more: false, live: null },
   })
   const p = await page(cfg)
   await openChatRow(p, "chat2")
-  await p.waitForSelector('#messages .msg[data-id="e3"]')
-  assert.deepEqual(await p.$$eval("#messages .msg__unrecorded", (l) => l.map((x) => [x.closest(".msg").dataset.id, x.textContent])), [["e1", "The reply to this was not recorded."]])
+  await p.waitForSelector('#messages .msg[data-id="e4"]')
+  const lines = () => p.$$eval("#messages .msg__unrecorded", (l) => l.map((x) => [x.closest(".msg").dataset.id, x.textContent]))
+  assert.deepEqual(await lines(), [["e1", "The reply to this was not recorded."]], "not after a turn the server followed (e4), a reply with words after it (n2), a stopped one (e3), or a turn the person typed (e0)")
   // The notes are the machine's rows, each of them; none can be edited.
-  assert.deepEqual(await p.$$eval("#messages .msg--user.is-machine", (l) => l.map((m) => [m.dataset.id, !!m.querySelector(".msg__actions")])), [["n1", false], ["n2", false], ["n3", false]])
+  assert.deepEqual(await p.$$eval("#messages .msg--user.is-machine", (l) => l.map((m) => [m.dataset.id, !!m.querySelector(".msg__actions")])), [["n1", false], ["n2", false], ["n3", false], ["n4", false]])
+  // The chat read again with the turn before the empty reply marked as followed: the reply's own
+  // message is as it was, and its row is looked at again all the same.
+  await rpFrame(p, "chat1", "x1", false)
+  const before = await rpReads(p, "chat2")
+  await p.evaluate((list) => window.__mock.answer("GET /chats/chat2", { ...window.__mockConfig.routes["GET /chats/chat2"], messages: list }), messages.map((m) => (m.id === "n1" ? { ...m, origin: "harness" } : m)))
+  await p.evaluate(() => window.__mock.emit("events-open", null))
+  await p.waitForFunction(([c, n]) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length === n, ["chat2", before + 1])
+  await rxDrawn(p)
+  assert.deepEqual(await lines(), [], "the line goes with the note it was said of")
   await openChatRow(p, "chat1")
   await p.waitForSelector('#messages .msg[data-id="e5"]')
   assert.equal(await p.$("#messages .msg__unrecorded"), null)
   assert.deepEqual(p.errors, [])
   const q = await page(cfg, { lang: "sk" })
   await openChatRow(q, "chat2")
-  await q.waitForSelector('#messages .msg[data-id="e3"]')
+  await q.waitForSelector('#messages .msg[data-id="e4"]')
   assert.equal(await q.textContent("#messages .msg__unrecorded"), "Odpoveď na toto nebola zaznamenaná.")
   assert.deepEqual(q.errors, [])
 })
@@ -8080,6 +8125,542 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
     posEnd(p)
   })
 }
+
+// --- RX: readings, answers and frames in every order ----------------------------------------------
+//
+// The chat is read again for many reasons nobody at the window caused -- a frame of the events
+// stream, that stream opened anew, a reply's stream ended -- and the person goes on typing,
+// sending and reading meanwhile. Each test here puts the server's answers in an order of its own
+// (an answer held back until another has come: `__mock.hold`, `__mock.release`).
+
+/** Every answer that has come is drawn: the page's own turns after them have run. */
+const rxDrawn = (p) => p.evaluate(() => new Promise((r) => setTimeout(r, 0)))
+const rxIds = (p) => p.$$eval("#messages .msg", (l) => l.map((m) => `${m.dataset.id}${m.classList.contains("is-live") ? "*" : ""}`))
+const rxType = async (p, text) => {
+  await p.fill("#composer-text", text)
+  await p.focus("#composer-text")
+  await p.keyboard.press("Enter")
+}
+
+test("RX1: a message sent while the chat is being read again stays, with its reply: a reading that began before the message is asked again, never drawn over it", async () => {
+  const sent = userMessage("m3", "And the tests?")
+  const p = await page(rpChat({ "POST /chats/chat2/messages": { message: sent, reply: { id: "r9" } } }))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="m2"]')
+  // (The server says its replies: its stream opened anew reads the open chat.)
+  await rpFrame(p, "chat1", "x1", false)
+  const before = await rpReads(p, "chat2")
+  await p.evaluate(() => window.__mock.hold("GET /chats/chat2", true))
+  await p.evaluate(() => window.__mock.emit("events-open", null))
+  await p.waitForFunction(() => window.__mock.held("GET /chats/chat2") === 1)
+  // The person sends; the answer to that comes first, and its reply is followed.
+  await rxType(p, "And the tests?")
+  await p.waitForSelector('#messages .msg.is-live[data-id="r9"]')
+  await p.waitForFunction((path) => window.__mock.started(path), rpStream("chat2", "r9"))
+  // Then the reading from before it: the chat as it was.
+  await rpServer(p, "chat2", [sent], "r9")
+  await p.evaluate(() => window.__mock.release("GET /chats/chat2"))
+  await rxDrawn(p)
+  assert.deepEqual(await rxIds(p), ["m1", "m2", "m3", "r9*"], "the message and its reply are still there")
+  assert.equal(await rpReads(p, "chat2"), before + 2, "the reading from before the message was asked again")
+  assert.ok(await p.isVisible("#stop"), "Stop is still in Send's place")
+  assert.equal(await rpOpens(p, "chat2", "r9"), 1, "the reply is followed once")
+  // The reply goes on being written into the row that is on the screen, and ends in it.
+  await rpSend(p, "chat2", "r9", "tail", { thinking: "", text: "They pass.", label: "" })
+  await p.waitForFunction(() => document.querySelector("#messages .msg.is-live .msg__tail")?.textContent.includes("They pass."))
+  const done = posReply("r9", [{ index: 0, kind: "text", open: true, markdown: "They pass." }])
+  await rpServer(p, "chat2", [done])
+  await rpSend(p, "chat2", "r9", "done", { message: done, chat: { id: "chat2", title: "Tidy the build" } })
+  await p.waitForSelector('#messages .msg--assistant[data-id="r9"]:not(.is-live)')
+  assert.deepEqual(await rxIds(p), ["m1", "m2", "m3", "r9"])
+  assert.ok(await p.isHidden("#stop"))
+  assert.deepEqual(p.errors, [])
+})
+
+test("RX2: a reading answered while a message is on its way is not drawn under it: the message is there once, its reply followed once -- and a chat opened and written to before its first reading has come keeps the message too", async () => {
+  const sent = userMessage("m3", "And the tests?")
+  const p = await page(rpChat({ "POST /chats/chat2/messages": { message: sent, reply: { id: "r9" } } }, { hold: ["POST /chats/chat2/messages"] }))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="m2"]')
+  await rxType(p, "And the tests?")
+  await p.waitForFunction(() => window.__mock.held("POST /chats/chat2/messages") === 1)
+  // The server has the message and writes its reply; the chat is read (a notification clicked)
+  // and answered with both before the message's own answer has come.
+  await rpServer(p, "chat2", [sent], "r9")
+  const before = await rpReads(p, "chat2")
+  await p.evaluate(() => window.__mock.emit("open-chat", "chat2"))
+  await p.waitForFunction(([c, n]) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length === n, ["chat2", before + 1])
+  await rxDrawn(p)
+  await p.evaluate(() => window.__mock.release("POST /chats/chat2/messages"))
+  await p.waitForSelector('#messages .msg.is-live[data-id="r9"]')
+  await p.waitForFunction((path) => window.__mock.started(path), rpStream("chat2", "r9"))
+  await rxDrawn(p)
+  assert.deepEqual(await rxIds(p), ["m1", "m2", "m3", "r9*"])
+  assert.equal(await rpOpens(p, "chat2", "r9"), 1, "the reply is followed once")
+  assert.deepEqual(p.errors, [])
+  // A chat just clicked, its first reading slow, and the person already sends.
+  const q = await page(rpChat({ "POST /chats/chat2/messages": { message: sent, reply: { id: "r9" } } }, { hold: ["GET /chats/chat2"] }))
+  await q.click('.chatrow[data-id="chat2"]')
+  await q.waitForFunction(() => window.__mock.held("GET /chats/chat2") === 1)
+  await rxType(q, "And the tests?")
+  await q.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/messages").length === 1)
+  await rxDrawn(q)
+  await rpServer(q, "chat2", [sent], "r9")
+  await q.evaluate(() => window.__mock.release("GET /chats/chat2"))
+  await q.waitForSelector('#messages .msg[data-id="m2"]')
+  await q.waitForFunction((path) => window.__mock.started(path), rpStream("chat2", "r9"))
+  await rxDrawn(q)
+  assert.deepEqual(await rxIds(q), ["m1", "m2", "m3", "r9*"])
+  assert.ok(await q.isVisible("#stop"))
+  assert.deepEqual(q.errors, [])
+  // A message on its way, and the person opens another chat: its answer is not drawn into that one.
+  const r = await page(rpChat({ "POST /chats/chat2/messages": { message: sent, reply: { id: "r9" } } }, { hold: ["POST /chats/chat2/messages"] }))
+  await openChatRow(r, "chat2")
+  await r.waitForSelector('#messages .msg[data-id="m2"]')
+  await rxType(r, "And the tests?")
+  await r.waitForFunction(() => window.__mock.held("POST /chats/chat2/messages") === 1)
+  await r.click('.chatrow[data-id="chat1"]')
+  await r.waitForSelector('#messages .msg[data-id="m6"]')
+  await r.evaluate(() => window.__mock.release("POST /chats/chat2/messages"))
+  await rxDrawn(r)
+  assert.deepEqual(await rxIds(r), ["m5", "m6"], "the other chat has nothing of it")
+  assert.equal(await r.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "stream_open" && c.args.path.endsWith("/stream")).length), 0, "and follows no reply of the chat that was left")
+  assert.equal(await r.inputValue("#composer-text"), "", "what was sent is not left in the box")
+  assert.deepEqual(r.errors, [])
+})
+
+test("RX3: a chat read again for something nobody at the window did changes only what changed: a chip's panel, the composer's menu, the line that says what went wrong, the chips and a page of an answer in its frame stay as they are", async () => {
+  const step = fixture("step_text_page")
+  const p = await page(rpChat({ "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m5", "How many?"), reply({ id: "m6", steps: [step] })], more: false, live: null } }))
+  await openChatRow(p, "chat1")
+  await p.waitForSelector('.msg[data-id="m6"] .hpage__frame')
+  // The panel of the subagents' chip, then a line that says what went wrong, and the composer's menu.
+  await p.waitForSelector("#chat-settings .cchip--subagents")
+  await p.click("#chat-settings .cchip--subagents")
+  await p.waitForSelector(".pop .range2")
+  await p.evaluate(async () => (await import("./js/chat.js")).alertIn("The server refused that."))
+  await p.fill("#composer-text", "/")
+  await p.waitForSelector("#composer-menu:not([hidden]) .cmenu__option")
+  await p.evaluate(() => (window.__kept = { frame: document.querySelector('.msg[data-id="m6"] .hpage__frame'), chip: document.querySelector("#chat-settings .cchip--model"), pop: document.querySelector(".pop") }))
+  const count = () => p.evaluate(() => ["page_open", "pages_clear"].map((cmd) => window.__mock.calls.filter((c) => c.cmd === cmd).length))
+  const was = await count()
+  const kept = async (when) => {
+    assert.deepEqual(
+      await p.evaluate(() => {
+        const k = window.__kept
+        return {
+          panel: k.pop.isConnected && !!document.querySelector(".pop .range2"),
+          menu: !document.getElementById("composer-menu").hidden && !!document.querySelector("#composer-menu .cmenu__option"),
+          line: document.getElementById("thread-note").hidden ? "" : document.getElementById("thread-note").textContent,
+          frame: k.frame.isConnected && document.querySelector('.msg[data-id="m6"] .hpage__frame') === k.frame,
+          chip: document.querySelector("#chat-settings .cchip--model") === k.chip,
+        }
+      }),
+      { panel: true, menu: true, line: "The server refused that.", frame: true, chip: true },
+      when,
+    )
+    assert.deepEqual(await count(), was, `${when}: no page of an answer is let go or asked for again`)
+  }
+  await kept("before anything")
+  // A reply that started and ended somewhere else, said by the events stream.
+  await rpServer(p, "chat1", [rpNote("n1", "A scheduled task ran."), posWords("r10", 1)])
+  await rpFrame(p, "chat1", "r10", false)
+  await p.waitForSelector('#messages .msg--assistant[data-id="r10"]')
+  await kept("after a reply said by the events stream")
+  // The events stream opened anew.
+  const before = await rpReads(p, "chat1")
+  await p.evaluate(() => window.__mock.emit("events-open", null))
+  await p.waitForFunction(([c, n]) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length === n, ["chat1", before + 1])
+  await rxDrawn(p)
+  await kept("after the events stream opened anew")
+  assert.deepEqual(await rxIds(p), ["m5", "m6", "n1", "r10"])
+  // The person asks for the chat again (a notification clicked): then it is theirs to have afresh.
+  await p.evaluate(() => window.__mock.emit("open-chat", "chat1"))
+  await p.waitForFunction((n) => window.__mock.calls.filter((c) => c.cmd === "pages_clear").length > n, was[1])
+  assert.deepEqual(p.errors, [])
+})
+
+test("RX9: a reply that goes on or ends by itself while the person is somewhere else leaves the focus there: its stream closed and followed again, and a message queued behind it getting a reply of its own", async () => {
+  const cfg = rpChat({ "GET /chats/chat2": { chat: agentChat(), messages: [userMessage("m1", "Tidy the build with two helpers"), posWords("m2", 1), userMessage("m3", "And the tests?")], more: false, live: "r9" } })
+  const p = await page(cfg)
+  await p.click('.chatrow[data-id="chat2"]')
+  await p.waitForSelector('#messages .msg.is-live[data-id="r9"]')
+  await p.waitForFunction((path) => window.__mock.started(path), rpStream("chat2", "r9"))
+  await p.focus("#side-search")
+  const before = await rpReads(p, "chat2")
+  // The stream is closed without `done` (a proxy's time limit): the chat is read, the reply followed again.
+  await rpSend(p, "chat2", "r9", "end", null)
+  await p.waitForFunction((path) => window.__mock.calls.filter((c) => c.cmd === "stream_open" && c.args.path === path).length === 2 && window.__mock.started(path), rpStream("chat2", "r9"))
+  assert.equal(await rpReads(p, "chat2"), before + 1)
+  assert.equal(await p.evaluate(() => document.activeElement.id), "side-search", "the focus stays where the person has it when a stream is followed again")
+  // It ends, and a message queued behind it has a reply of its own now.
+  const done = posReply("r9", [{ index: 0, kind: "text", open: true, markdown: "Both helpers are done." }])
+  const queued = userMessage("m4", "Also the docs")
+  await rpServer(p, "chat2", [done, queued], "r10")
+  await rpSend(p, "chat2", "r9", "done", { message: done, chat: { id: "chat2", title: "Tidy the build" }, next: { id: "r10" } })
+  await p.waitForSelector('#messages .msg.is-live[data-id="r10"]')
+  assert.deepEqual(await rxIds(p), ["m1", "m2", "m3", "r9", "m4", "r10*"])
+  assert.equal(await p.evaluate(() => document.activeElement.id), "side-search", "and when the next reply begins by itself")
+  assert.deepEqual(p.errors, [])
+})
+
+/** A long list: eighty chats, the newest first, fifty to a page. `first` puts chats (by number) at the top, as the server would after a reply in them. */
+const rxStamp = (n) => `2025-06-${String(28 - Math.floor(n / 4)).padStart(2, "0")}T0${3 - (n % 4)}:00:00+00:00`
+const rxChat = (n, over = {}) => chatRow({ id: `c${String(n).padStart(2, "0")}`, title: `Chat ${n}`, updated_at: rxStamp(n), ...over })
+function rxList(tops = []) {
+  const all = [...tops, ...Array.from({ length: 80 }, (_, n) => rxChat(n)).filter((c) => !tops.some((x) => x.id === c.id))]
+  return { "GET /chats?limit=50": { chats: all.slice(0, 50), more: true }, [`GET /chats?limit=50&before=${all[49].id}`]: { chats: all.slice(50), more: false } }
+}
+const rxListIds = (p) => p.$$eval("#chat-list .chatrow", (l) => l.map((b) => b.dataset.id))
+const rxListReads = (p) => p.evaluate(() => window.__mock.api("GET", "/chats?limit=50").filter((c) => c.args.path === "/chats?limit=50").length)
+
+test("RX4: a reply that starts and ends in a chat further down a long list changes its row in place -- the mark at once, the order when the list is read -- and the list keeps the pages loaded, where it stands and the row the keyboard is on; once the server has said an end, nothing is looked for", async () => {
+  const p = await page({ status: status(), routes: baseRoutes({ ...rxList(), "GET /folders": { folders: [] } }) }, { clock: true })
+  await p.waitForSelector('.chatrow[data-id="c49"]')
+  await p.click("#chat-list .list__more")
+  await p.waitForSelector('.chatrow[data-id="c79"]')
+  const all = Array.from({ length: 80 }, (_, n) => `c${String(n).padStart(2, "0")}`)
+  assert.deepEqual(await rxListIds(p), all)
+  // The person is far down the list, the keyboard on a row there.
+  const at = await p.evaluate(() => {
+    const list = document.getElementById("chat-list")
+    const on = list.querySelector('.chatrow[data-id="c70"]')
+    on.focus()
+    list.scrollTop = list.scrollHeight
+    window.__kept = { on, other: list.querySelector('.chatrow[data-id="c10"]'), deep: list.querySelector('.chatrow[data-id="c75"]') }
+    return list.scrollTop
+  })
+  assert.ok(at > 500, `the list is scrolled (${at})`)
+  const state = () =>
+    p.evaluate(() => {
+      const list = document.getElementById("chat-list")
+      const k = window.__kept
+      const same = (id, el) => list.querySelector(`.chatrow[data-id="${id}"]`) === el
+      return { top: list.scrollTop, focus: document.activeElement?.dataset?.id || document.activeElement?.tagName, rows: [same("c70", k.on), same("c10", k.other), same("c75", k.deep)] }
+    })
+  const reads = await rxListReads(p)
+  // A reply starts in a chat on the second page: its row says so at once, before anything is read.
+  await rpFrame(p, "c60", "x1")
+  assert.ok(await p.$('.chatrow[data-id="c60"] .chatrow__state.is-busy'), "the running mark, at once")
+  assert.equal(await rxListReads(p), reads)
+  assert.deepEqual(await state(), { top: at, focus: "c70", rows: [true, true, true] })
+  // The list is read: the chat is the newest now, and everything else is as it was.
+  await p.evaluate((routes) => Object.entries(routes).forEach(([k, v]) => window.__mock.answer(k, v)), rxList([rxChat(60, { running: true, updated_at: "2025-07-01T00:00:00+00:00" })]))
+  await p.clock.fastForward(200)
+  await p.waitForFunction((n) => window.__mock.api("GET", "/chats?limit=50").filter((c) => c.args.path === "/chats?limit=50").length === n + 1, reads)
+  await rxDrawn(p)
+  assert.deepEqual(await rxListIds(p), ["c60", ...all.filter((id) => id !== "c60")], "every loaded page is still there, the chat at the top")
+  assert.ok(await p.$('.chatrow[data-id="c60"] .chatrow__state.is-busy'))
+  assert.deepEqual(await state(), { top: at, focus: "c70", rows: [true, true, true] })
+  // It ends: the same frame again, `live` false. The mark goes at once; the list is read once more.
+  await rpFrame(p, "c60", "x1", false)
+  assert.equal(await p.$('.chatrow[data-id="c60"] .chatrow__state.is-busy'), null, "the mark is cleared by the frame")
+  await p.evaluate((routes) => Object.entries(routes).forEach(([k, v]) => window.__mock.answer(k, v)), rxList([rxChat(60, { unread: true, updated_at: "2025-07-01T00:01:00+00:00" })]))
+  await p.clock.fastForward(200)
+  await p.waitForSelector('.chatrow[data-id="c60"] .chatrow__state.is-new')
+  assert.equal(await rxListReads(p), reads + 2)
+  assert.deepEqual(await state(), { top: at, focus: "c70", rows: [true, true, true] })
+  // The server says ends: a reply that starts elsewhere now is not looked for in the list at all.
+  await rpFrame(p, "c61", "x2")
+  await p.clock.fastForward(200)
+  await p.waitForFunction((n) => window.__mock.api("GET", "/chats?limit=50").filter((c) => c.args.path === "/chats?limit=50").length === n + 3, reads)
+  await p.clock.runFor(20000)
+  await rxDrawn(p)
+  assert.equal(await rxListReads(p), reads + 3, "nothing is read while the reply runs")
+  assert.deepEqual(await rxListIds(p), ["c60", ...all.filter((id) => id !== "c60")])
+  assert.deepEqual(p.errors, [])
+})
+
+test("RX5: on a server that does not say a reply's end, a chat that runs elsewhere is looked for a few times, each later than the last, and then no more -- however long the list says it runs; the reply of the chat that is open is not looked for; signed out, nothing is", async () => {
+  const p = await page(rpChat({ "GET /chats": { chats: [chatRow({ running: true }), agentChat({ running: false })], more: false } }), { clock: true })
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="m2"]')
+  const reads = await rxListReads(p)
+  const readsBy = async (ms) => {
+    await p.clock.runFor(ms)
+    await rxDrawn(p)
+    return (await rxListReads(p)) - reads
+  }
+  // The list says the chat runs, for ever. (The list's own reading every half minute goes on beside this: at 30 s, 60 s, ...)
+  await rpFrame(p, "chat1", "x1")
+  assert.equal(await readsBy(1000), 1, "read once for the frame")
+  assert.equal(await readsBy(5000), 2, "looked for after five seconds")
+  assert.equal(await readsBy(10000), 3, "then after ten more")
+  assert.equal(await readsBy(12000), 3)
+  const late = await readsBy(72000)
+  assert.equal(late, 3 + 1 + 3, "once more after twenty, and from then on only the list's own reading")
+  assert.equal(await readsBy(120000), late + 4, "and no more, however long it runs")
+  // The open chat's own reply, said by the stream before anything else knows of it: followed, not looked for.
+  const q = await page(rpChat({ "GET /chats": { chats: [agentChat({ running: true }), chatRow()], more: false } }), { clock: true })
+  await openChatRow(q, "chat2")
+  await q.waitForSelector('#messages .msg[data-id="m2"]')
+  await rpServer(q, "chat2", [rpNote("n1", "Background job helper-1 finished.")], "r9")
+  await rpFrame(q, "chat2", "r9")
+  await q.waitForSelector('#messages .msg.is-live[data-id="r9"]')
+  await q.clock.fastForward(1000)
+  await rxDrawn(q)
+  const mine = await rxListReads(q)
+  await q.clock.runFor(27000)
+  await rxDrawn(q)
+  assert.equal(await rxListReads(q), mine, "the list is not looked at for a reply the open chat follows")
+  // Signed out while a chat was being looked for: nothing is read any more, and the list is empty.
+  const r = await page(rpChat({ "GET /chats": { chats: [chatRow({ running: true }), agentChat({ running: false })], more: false } }), { clock: true })
+  await r.waitForSelector('.chatrow[data-id="chat1"]')
+  await rpFrame(r, "chat1", "x1")
+  await r.clock.fastForward(1000)
+  await rxDrawn(r)
+  const before = await r.evaluate(() => window.__mock.api("GET", "/chats").length)
+  await r.evaluate((st) => { window.__mockConfig.status = st; window.__mock.emit("status", st) }, status({ account: null, linked: false }))
+  await r.waitForSelector("#setup:not([hidden])")
+  await r.clock.runFor(40000)
+  await rxDrawn(r)
+  assert.equal(await r.evaluate(() => window.__mock.api("GET", "/chats").length), before, "nothing is asked of the server after the sign-out")
+  assert.equal(await r.$$eval("#chat-list .chatrow", (l) => l.length), 0)
+  assert.deepEqual(r.errors, [])
+  assert.deepEqual(q.errors, [])
+  assert.deepEqual(p.errors, [])
+})
+
+// --- RX6..: whose a move of the thread is ----------------------------------------------------------
+
+/** A long chat, its reply being written, the thread at its end and followed. */
+async function rxLive(opts = {}) {
+  const p = await page(w1Chat(), opts)
+  await p.click('.chatrow[data-id="chat2"]')
+  await p.waitForSelector(".msg.is-live")
+  await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(6), label: "" })
+  await p.waitForFunction(() => document.querySelector(".msg.is-live .msg__tail").textContent.includes("Paragraph 5"))
+  assert.ok((await w1At(p)).gap <= 1, "a chat opened stands at its end")
+  return p
+}
+/**
+ * The thread moved up with no input at all, as an engine does that cuts it back while laying the
+ * window out: the header is drawn into (a chip put in and taken out again: no size is other
+ * afterwards), and the thread stands `by` px higher -- "head": by the header's height.
+ */
+const rxCut = async (p, by, draw = true) => {
+  // (Not straight after the cut before it: several such moves a frame or a few apart are a way
+  // of scrolling the page hears nothing of, and the fourth of them is taken for the person's.)
+  await p.waitForTimeout(200)
+  return p.evaluate(
+    ([how, into]) => {
+      const th = document.getElementById("thread")
+      const head = document.getElementById("chat-head")
+      if (into) {
+        const chip = document.createElement("span")
+        document.getElementById("chat-settings").append(chip)
+        chip.remove()
+      }
+      const px = how === "head" ? head.getBoundingClientRect().height : how
+      th.scrollTop -= px
+      return px
+    },
+    [by, draw],
+  )
+}
+const rxBack = async (p) => {
+  if ((await w1At(p)).gap > 1) await w1Wheel(p, 200000)
+  assert.ok((await w1At(p)).gap <= 1, "back at the end")
+}
+
+test("RX6: a move of the thread nobody was seen to make is the person's unless a size explains it by its amount: while the composer is typed into, or the header drawn into, a scroll from a reader or the browser's search stays where it went; the engine's cut by the header's height is put back", async () => {
+  const p = await rxLive()
+  // Typing, and in the same moment the thread is scrolled by something the page hears nothing of.
+  await p.evaluate(() => {
+    const box = document.getElementById("composer-text")
+    box.value += "a"
+    box.dispatchEvent(new Event("input", { bubbles: true }))
+    document.getElementById("thread").scrollTop -= 240
+  })
+  let at = await w1At(p)
+  w1Ok(Math.abs(at.gap - 240) <= 1, `a move with no input, while typing, stays (${at.gap} px from the end)`)
+  // And it was the person leaving the end: what is written next does not take them back.
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(9), label: "" })
+  await p.waitForFunction(() => document.querySelector(".msg.is-live .msg__tail").textContent.includes("Paragraph 8"))
+  at = await w1At(p)
+  w1Ok(at.gap > 300, `the end is not followed any more (${at.gap} px from it)`)
+  // The header drawn into, and a move that is no size of anything: theirs too.
+  await rxBack(p)
+  const head = await p.evaluate(() => document.getElementById("chat-head").getBoundingClientRect().height)
+  await rxCut(p, head + 37)
+  at = await w1At(p)
+  w1Ok(Math.abs(at.gap - head - 37) <= 1, `a move by no size of anything, as the header is drawn into, stays (${at.gap} px from the end)`)
+  // The engine's cut: by the header's height, as the header is drawn into. Put back, and the end still followed.
+  await rxBack(p)
+  await rxCut(p, "head")
+  at = await w1At(p)
+  w1Ok(at.gap <= 1, `a cut by the header's height is put back (${at.gap} px from the end)`)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(12), label: "" })
+  await p.waitForFunction(() => document.querySelector(".msg.is-live .msg__tail").textContent.includes("Paragraph 11"))
+  at = await w1At(p)
+  w1Ok(at.gap <= 1, `and the end is still followed (${at.gap} px from it)`)
+  // The same move with nothing drawn into the header or the dock (and the last time something
+  // was is a while ago: that is the rule): nothing explains it.
+  await p.waitForTimeout(600)
+  await rxCut(p, "head", false)
+  at = await w1At(p)
+  w1Ok(Math.abs(at.gap - head) <= 1, `the same move with nothing around the thread changed stays (${at.gap} px from the end)`)
+  w1End(p)
+})
+
+test("RX7: only what is done to the thread is the person's hand on it: Tab in the composer, a click on something in the thread and a press that was never let go do not make the engine's next cut theirs; a scroll key does, pressed anywhere but in the box that is typed into", async () => {
+  const p = await rxLive()
+  // Tab in the composer (it completes a command there): the focus does not come into the thread.
+  await p.focus("#composer-text")
+  await p.keyboard.press("Tab")
+  await rxCut(p, "head")
+  let at = await w1At(p)
+  w1Ok(at.gap <= 1, `after Tab in the composer the engine's cut is put back (${at.gap} px from the end)`)
+  // A click on something in the thread: no drag, nothing scrolled.
+  const box = await p.locator("#messages .msg--user .msg__text").last().boundingBox()
+  await p.mouse.click(box.x + 10, box.y + box.height / 2)
+  await rxCut(p, "head")
+  at = await w1At(p)
+  w1Ok(at.gap <= 1, `after a click in the thread the engine's cut is put back (${at.gap} px from the end)`)
+  // A press on the thread whose release never reaches the page; the window is left.
+  await p.evaluate(() => {
+    const th = document.getElementById("thread")
+    th.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 600, clientY: 300 }))
+    document.dispatchEvent(new Event("visibilitychange"))
+  })
+  await rxCut(p, "head")
+  at = await w1At(p)
+  w1Ok(at.gap <= 1, `a press never let go ends when the window is left (${at.gap} px from the end)`)
+  // Page Up in the box that is typed into moves nothing in the thread and says nothing of it.
+  await p.focus("#composer-text")
+  await p.keyboard.press("PageUp")
+  at = await w1At(p)
+  w1Ok(at.gap <= 1, `Page Up in the composer does not scroll the thread (${at.gap} px from the end)`)
+  await rxCut(p, "head")
+  at = await w1At(p)
+  w1Ok(at.gap <= 1, `and does not make the engine's cut theirs (${at.gap} px from the end)`)
+  // Page Up with nothing typed into focused, as after a click in the thread: the person's, with whatever it moves.
+  await p.evaluate(() => document.activeElement.blur())
+  await p.keyboard.press("PageUp")
+  await rxCut(p, "head")
+  at = await w1At(p)
+  w1Ok(at.gap >= 20, `after a key that scrolls up the move is theirs (${at.gap} px from the end)`)
+  await w1Send(p, "tail", { thinking: "", text: W1_PARAS(9), label: "" })
+  await p.waitForFunction(() => document.querySelector(".msg.is-live .msg__tail").textContent.includes("Paragraph 8"))
+  w1Ok((await w1At(p)).gap > at.gap + 100, "and the end is not followed any more")
+  w1End(p)
+})
+
+test("RX8: finding what is at the thread's top edge costs a handful of looks however long the chat is, not one for every row above the window", async () => {
+  const history = Array.from({ length: 400 }, (_, i) => userMessage(`h${i}`, `Question ${i}: ${"word ".repeat(30)}`))
+  const p = await page(agentChatOpen([], { "GET /chats/chat2": { chat: agentChat({ running: false }), messages: history, more: false, live: null } }))
+  await p.click('.chatrow[data-id="chat2"]')
+  await p.waitForSelector('#messages .msg[data-id="h399"]')
+  await w1Wheel(p, -600)
+  const looks = await p.evaluate(async () => {
+    const own = Element.prototype.getBoundingClientRect
+    let n = 0
+    Element.prototype.getBoundingClientRect = function () {
+      n++
+      return own.call(this)
+    }
+    const th = document.getElementById("thread")
+    th.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }))
+    const seen = new Promise((r) => th.addEventListener("scroll", () => setTimeout(r, 0), { once: true }))
+    th.scrollTop -= 40
+    await seen
+    Element.prototype.getBoundingClientRect = own
+    return n
+  })
+  assert.ok(looks > 0 && looks < 80, `one move of a thread of 400 messages: ${looks} boxes measured`)
+  assert.deepEqual(p.errors, [])
+})
+
+for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
+  test(`POS: ${win} 6 -- rows that begin alike: the row under the eyes stays through the reply written on, a line going above it, its words becoming a step under a new row, its end and the chat read again -- found by where it is in the reply, not by looking through the reply for its words`, async () => {
+    const p = await page(posChat(), { width, height })
+    await posOpen(p)
+    const step = (name, rule, act) => posStep(p, win, name, rule, act)
+    const rows = (n) => `Rows:\n\n${Array.from({ length: n }, (_, i) => `- the same words begin every row of this list, and go on for a good while: row ${i}`).join("\n")}`
+    await p.fill("#composer-text", "What is in build?")
+    await p.focus("#composer-text")
+    await p.keyboard.press("Enter")
+    await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
+    await w1Send(p, "tail", { thinking: "Let me think. ".repeat(60), text: rows(60), label: "1s" })
+    await p.waitForSelector("#messages > .msg:last-child li:nth-child(60)")
+    await posLook(p, "#messages > .msg:last-child li:nth-child(31)", 30)
+    // From here on, how often a message is looked through for a thing by its words: every
+    // thing of one kind in it asked for (by the kind's name alone, which nothing else here does).
+    await p.evaluate(() => {
+      const own = Element.prototype.querySelectorAll
+      window.__searched = 0
+      Element.prototype.querySelectorAll = function (...a) {
+        if (this.classList?.contains("msg") && /^[A-Z][A-Z0-9]*$/.test(String(a[0]))) window.__searched++
+        return own.apply(this, a)
+      }
+    })
+    await step("rows alike: the line that says it thinks goes, above the row read", "held", () => w1Send(p, "tail", { thinking: "", text: rows(62), label: "" }))
+    await step("rows alike: the reply is written on", "held", async () => {
+      for (const n of [66, 72, 80]) await w1Send(p, "tail", { thinking: "", text: rows(n), label: "" })
+    })
+    assert.equal(await p.evaluate(() => window.__searched), 0, "the row is found where it stands in the reply: nothing is looked through for it")
+    const steps = [W1_THOUGHT, { index: 1, kind: "text", open: false, markdown: rows(80) }]
+    await step("rows alike: the words become a step, the reasoning a row above it", "held", () => w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: "", label: "", calls: [] } }))
+    const done = { ...fixture("event_done").message, id: "m2", steps }
+    await p.evaluate(([key, m, d]) => window.__mock.answer(key, { ...window.__mockConfig.routes[key], messages: [...window.__mockConfig.routes[key].messages, m, d] }), ["GET /chats/chat2", userMessage("m1", "What is in build?"), done])
+    await step("rows alike: the reply ends", "held", async () => {
+      await w1Send(p, "done", { message: done, chat: { id: "chat2", title: "Tidy the build" } })
+      await p.waitForSelector(".msg.is-live", { state: "detached" })
+    })
+    await step("rows alike: the chat is read again", "held", () => posReadAgain(p))
+    posEnd(p)
+  })
+}
+
+test("RX10: a picture's frame is the picture's shape whatever size the server says: a tall one is no wider than its height allows, and a side of less than a pixel is not a frame of no width", async () => {
+  const made = posReply("a9", [{ index: 0, kind: "tools", open: false, calls: [posMedia("c1", { name: "tall.png", width: 400, height: 2400 }), posMedia("c2", { name: "sliver.png", width: 0.4, height: 300 }), posMedia("c3", { name: "wide.png", width: 1600, height: 900 })] }])
+  const p = await page(posChat({ "GET /chats/chat2": { chat: agentChat({ running: false }), messages: [userMessage("q9", "Three pictures"), made], more: false, live: null } }), { width: 1280, height: 860 })
+  await p.click('.chatrow[data-id="chat2"]')
+  await p.waitForFunction(() => document.querySelectorAll('#messages .msg[data-id="a9"] .mcard__frame[data-sized="true"]').length === 3)
+  const [tall, sliver, wide, most] = await p.evaluate(() => {
+    const frames = [...document.querySelectorAll('#messages .msg[data-id="a9"] .mcard__frame')].map((f) => {
+      const b = f.getBoundingClientRect()
+      return { w: b.width, h: b.height, room: f.parentElement.getBoundingClientRect().width }
+    })
+    const probe = document.createElement("div")
+    probe.style.height = "var(--h-page-max)"
+    document.body.append(probe)
+    const most = probe.getBoundingClientRect().height
+    probe.remove()
+    return [...frames, most]
+  })
+  assert.ok(tall.h <= most + 0.5 && tall.h > most - 2, `a tall picture's frame is as tall as it may be (${tall.h} of ${most})`)
+  assert.ok(Math.abs(tall.w / tall.h - 400 / 2400) < 0.005, `and as wide as its shape makes that: ${tall.w} x ${tall.h}`)
+  assert.ok(sliver.w >= 1 && sliver.h > 0, `a side of less than a pixel is still a frame: ${sliver.w} x ${sliver.h}`)
+  assert.ok(Math.abs(wide.w / wide.h - 1600 / 900) < 0.01 && wide.w <= wide.room + 0.5, `a wide picture's frame is its shape, within the card: ${wide.w} x ${wide.h}`)
+  assert.deepEqual(p.errors, [])
+})
+
+test("RX11: a row kept when the chat is read again acts on the chat as it is now: where the chat works changed, a file the agent showed is opened from there, not from where the chat worked when the row was drawn", async () => {
+  const shown = call({ id: "t9", name: "show", args: { path: "/home/dev/project/README.md" }, text: "", show: { path: "/home/dev/project/README.md", name: "README.md" }, block: { kind: "read", title: "README.md", chips: [], added: 0, removed: 0 } })
+  const messages = [userMessage("m1", "Show me the readme"), posReply("m2", [{ index: 0, kind: "tools", open: false, calls: [shown] }, { index: 1, kind: "text", open: true, markdown: "There." }])]
+  const p = await page(
+    rpChat({ "GET /chats/chat2": { chat: agentChat({ running: false }), messages, more: false, live: null } }, { commands: { local_read: { root: "/home/dev/project", path: "README.md", name: "README.md", size: 10, text: "# Project\n", withheld: null } } }),
+  )
+  await openChatRow(p, "chat2")
+  // (The button is in the call's row, which is closed: pressed from the page.)
+  await p.waitForSelector('#messages .msg[data-id="m2"] .call__open', { state: "attached" })
+  await p.evaluate(() => document.querySelector('#messages .msg[data-id="m2"] .call__open').click())
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "local_read").length === 1)
+  assert.equal((await callsOf(p, "local_read")).at(-1).root, "/home/dev/project")
+  // The chat works somewhere else now (changed from another of the person's windows); the chat is read again by itself.
+  await rpFrame(p, "chat1", "x1", false)
+  const before = await rpReads(p, "chat2")
+  await p.evaluate((chat) => window.__mock.answer("GET /chats/chat2", { ...window.__mockConfig.routes["GET /chats/chat2"], chat }), agentChat({ running: false, device: { token_id: "token1", directory: "/home/dev/other" } }))
+  await p.evaluate(() => window.__mock.emit("events-open", null))
+  await p.waitForFunction(([c, n]) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length === n, ["chat2", before + 1])
+  await rxDrawn(p)
+  await p.evaluate(() => document.querySelector('#messages .msg[data-id="m2"] .call__open').click())
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "local_read").length === 2)
+  assert.equal((await callsOf(p, "local_read")).at(-1).root, "/home/dev/other", "read from where the chat works now")
+  assert.deepEqual(p.errors, [])
+})
 
 // --- Run ----------------------------------------------------------------------------------------
 
