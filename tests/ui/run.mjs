@@ -7325,7 +7325,7 @@ const posMissed = []
 async function posWatch(p) {
   await p.evaluate(() => {
     const th = document.getElementById("thread")
-    const pos = (window.__pos = { log: [], anchor: null })
+    const pos = (window.__pos = { log: [], anchor: null, seen: [] })
     pos.find = () => {
       const a = pos.anchor
       if (!a) return null
@@ -7339,6 +7339,12 @@ async function posWatch(p) {
       pos.log.push(s)
       return s
     }
+    // For a step that went wrong, what the thread was told between the frames: its scroll events
+    // and the changes of size, each with where it stood then.
+    const told = (what) => pos.seen.push({ at: pos.log.length, what, top: th.scrollTop, height: th.scrollHeight, client: th.clientHeight })
+    th.addEventListener("scroll", () => told("scroll"), { passive: true })
+    new ResizeObserver(() => told("size")).observe(document.getElementById("messages"))
+    new ResizeObserver(() => told("room")).observe(th)
     // A task of its own after each frame's callbacks, layout and observers: what was painted.
     const after = new MessageChannel()
     after.port1.onmessage = () => {
@@ -7379,10 +7385,22 @@ async function posStep(p, win, name, rule, act = async () => {}) {
     ([from, how]) => {
       const log = window.__pos.log.slice(from)
       const gap = (s) => s.height - s.top - s.client
-      if (how === "end") return { first: gap(log[0]), worst: Math.max(...log.map(gap)), final: gap(log.at(-1)) }
+      // How it went, should it have gone wrong: each frame that differs from the one before
+      // it (top/height/room, and where the thing looked at is), with what the thread was told
+      // meanwhile -- the first forty of them.
+      const went = []
+      const told = window.__pos.seen.filter((e) => e.at >= from)
+      for (let i = 0, last = ""; i < log.length; i++) {
+        for (const e of told) if (e.at === from + i) went.push(`(${e.what} ${Math.round(e.top)}/${e.height}/${e.client})`)
+        const s = log[i]
+        const key = `${Math.round(s.top * 10) / 10}/${s.height}/${s.client}${s.a === null ? "" : `@${Math.round(s.a * 10) / 10}`}`
+        if (key !== last) went.push((last = key))
+      }
+      const how_ = went.slice(0, 40).join(" ")
+      if (how === "end") return { first: gap(log[0]), worst: Math.max(...log.map(gap)), final: gap(log.at(-1)), went: how_ }
       const was = log[0].a
       const moved = (how === "back" ? [log.at(-1)] : log).map((s) => (s.a === null || was === null ? NaN : s.a - was))
-      return { first: was, worst: moved.reduce((m, x) => (Number.isNaN(m) || Number.isNaN(x) ? NaN : Math.abs(x) > Math.abs(m) ? x : m), 0), final: moved.at(-1) }
+      return { first: was, worst: moved.reduce((m, x) => (Number.isNaN(m) || Number.isNaN(x) ? NaN : Math.abs(x) > Math.abs(m) ? x : m), 0), final: moved.at(-1), went: how_ }
     },
     [typeof own === "number" ? own : mark, rule],
   )
@@ -7391,7 +7409,7 @@ async function posStep(p, win, name, rule, act = async () => {}) {
   posRows.push(row)
   const ok = rule === "end" ? r.first <= 1 && r.worst <= 1 : Math.abs(r.worst) <= 1
   if (process.env.POS_TRACE) console.log(`POS|${name}|${win}|${rule}|${row.worst}|${row.final}${rule === "end" && r.first > 1 ? `|not at the end to begin with (${round(r.first)})` : ""}`)
-  if (!ok) posMissed.push(rule === "end" ? `${name} (${win}): ${row.worst} px from the end at worst, ${row.final} at rest` : `${name} (${win}): moved ${row.worst} px at worst, ${row.final} at rest`)
+  if (!ok) posMissed.push(`${name} (${win}): ${rule === "end" ? `${row.worst} px from the end at worst, ${row.final} at rest` : `moved ${row.worst} px at worst, ${row.final} at rest`} -- ${r.went}`)
   return r
 }
 function posEnd(p) {
@@ -7408,24 +7426,27 @@ async function posLook(p, anchor, offset) {
     return th.scrollHeight - th.scrollTop - th.clientHeight
   })
   if (gap < 100) await w1Wheel(p, -300)
-  return p.evaluate(
+  const at = await p.evaluate(
     ([a, off]) => {
       const pos = window.__pos
       pos.anchor = a
       const th = document.getElementById("thread")
       th.scrollTop += pos.find().getBoundingClientRect().top - th.getBoundingClientRect().top - off
       pos.sample()
-      return pos.log.length - 1
+      return { from: pos.log.length - 1, gap: th.scrollHeight - th.scrollTop - th.clientHeight }
     },
     [spec, offset],
   )
+  // (Nearer the end than this, moving down to the place would be the person coming back to the end.)
+  assert.ok(at.gap > 120, `the place looked at is well above the thread's end (${at.gap} px from it)`)
+  return at.from
 }
 
 const posOpen = async (p, id = "chat2", last = "a4") => {
   // (Clicked from the page: at a narrow window the list is off the screen until asked for.)
+  await posWatch(p)
   await p.evaluate((c) => document.querySelector(`.chatrow[data-id="${c}"]`).click(), id)
   await p.waitForSelector(`#messages .msg[data-id="${last}"]`)
-  await posWatch(p)
 }
 const posToEnd = async (p) => {
   await w1Wheel(p, 200000)
@@ -7444,7 +7465,7 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
     const p = await page(posChat(), { width, height })
     await posOpen(p)
     const step = (name, rule, act) => posStep(p, win, name, rule, act)
-    await step("a chat opened stands at its end", "end")
+    await step("a chat opened stands at its end", "end", async () => 0)
     await step("the composer grows while typing (at the end)", "end", () => p.fill("#composer-text", "one\ntwo\nthree\nfour\nfive\nsix"))
     await step("a message sent from the end, the composer shrinking", "end", async () => {
       await p.focus("#composer-text")
@@ -7493,12 +7514,12 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
     await p.keyboard.press("Enter")
     await p.waitForFunction((path) => window.__mock.started(path), STREAM2)
     await w1Send(p, "tail", { thinking: "Let me think. ".repeat(60), text: "", label: "1s" })
-    await step("the reasoning gives way to the reply's first words (at the end)", "end", () => w1Send(p, "tail", { thinking: "", text: posText(8), label: "" }))
+    await step("the reasoning gives way to the reply's first words (at the end)", "end", () => w1Send(p, "tail", { thinking: "", text: posText(16), label: "" }))
     await posLook(p, { sel: "#messages > .msg:last-child p", text: "Paragraph 3:" }, 30)
     await step("reading the reply: it is written on", "held", async () => {
-      for (let i = 9; i <= 11; i++) await w1Send(p, "tail", { thinking: "", text: posText(i), label: "" })
+      for (let i = 17; i <= 19; i++) await w1Send(p, "tail", { thinking: "", text: posText(i), label: "" })
     })
-    const steps = [W1_THOUGHT, { index: 1, kind: "text", open: false, markdown: posText(11) }]
+    const steps = [W1_THOUGHT, { index: 1, kind: "text", open: false, markdown: posText(19) }]
     await step("reading the reply: the reasoning becomes a row above, a call runs", "held", () => w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: "", label: "", calls: [fixture("event_tail").calls[0]] } }))
     steps.push({ index: 2, kind: "tools", open: false, calls: [W1_CALL(), { ...W1_CALL(), id: "c2" }] })
     await step("reading the reply: the calls finish, more is written", "held", () => w1Send(p, "steps", { steps: [...steps], tail: { thinking: "", text: `Then:\n\n${posText(3)}`, label: "", calls: [] } }))
@@ -7524,7 +7545,7 @@ for (const [win, [width, height]] of Object.entries(POS_WINDOWS)) {
     const p = await page(posChat(), { width, height })
     await posOpen(p)
     const step = (name, rule, act) => posStep(p, win, name, rule, act)
-    await step("a chat opened stands at its end", "end")
+    await step("a chat opened stands at its end", "end", async () => 0)
     // Each card of the reply above, from the last up: its lower edge brought 30 px into sight.
     const cards = [
       ["a sound file's player on a prompt", '.msg[data-id="q4"] .ptile', "audio", "a4"],

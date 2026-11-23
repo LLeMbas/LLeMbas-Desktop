@@ -2302,12 +2302,15 @@ export async function openChat(id) {
   // A chat read again is not drawn again: a row whose message the server sends as it sent it
   // before stays as it is -- the same element, with what the person opened in it, its pictures
   // and its players -- and only what changed is drawn anew, what is gone taken away, what is new
-  // put in its place. (The reply being written is the stream's: its row is made by `follower`.)
+  // put in its place. (The reply being written is the stream's: its row is made by `follower`.
+  // A row with a page of an answer in it is drawn anew all the same: what was held of the pages
+  // is let go below, and each is asked of the server afresh -- its box has one height, so
+  // nothing moves for it.)
   const have = new Map()
   for (let el = above ? first : list.firstElementChild; el; el = el.nextElementSibling) if (el.matches(".msg[data-id]:not(.is-live)")) have.set(el.dataset.id, el)
   const rows = shown.map((m) => {
     const el = have.get(m.id)
-    return el && drawnFrom.get(el) === JSON.stringify(m) ? el : row(m, r.chat)
+    return el && !el.querySelector(".hpage") && drawnFrom.get(el) === JSON.stringify(m) ? el : row(m, r.chat)
   })
   const stay = new Set(rows)
   for (let el = above ? first : list.firstElementChild, next; el; el = next) {
