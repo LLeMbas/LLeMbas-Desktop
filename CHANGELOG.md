@@ -4,7 +4,7 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## [1.0.0-beta.14] — 2026-11-24
 
 For a LLeMbas server that says its replies as they start (the `reply` frame of its events stream,
 after 2.0.0-beta.17); with an older server everything is as it was.
