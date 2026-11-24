@@ -771,8 +771,37 @@ pub fn upload_to_device(
     name: &str,
     bytes: &[u8],
 ) -> Result<Value, ApiError> {
+    upload_to_device_until(app, token, device, dir, name, bytes, None)
+}
+
+/// The same, given up when `stop` is set before the whole of it has gone (`send_file_until`).
+pub fn upload_to_device_until(
+    app: &str,
+    token: &str,
+    device: &str,
+    dir: &str,
+    name: &str,
+    bytes: &[u8],
+    stop: Option<&std::sync::Arc<AtomicBool>>,
+) -> Result<Value, ApiError> {
     let path = device_upload_path(device, dir)?;
-    send_file(app, token, &path, "files", name, bytes)
+    send_file_until(app, token, &path, "files", name, bytes, stop)
+}
+
+/// A file into the person's library, given up when `stop` is set before the whole of it has gone.
+pub fn upload_to_library_until(
+    app: &str,
+    token: &str,
+    dir: &str,
+    name: &str,
+    bytes: &[u8],
+    stop: Option<&std::sync::Arc<AtomicBool>>,
+) -> Result<Value, ApiError> {
+    if !dir.starts_with('/') || dir.chars().any(|c| c.is_control()) {
+        return Err(ApiError::new(400, format!("Not a folder: {dir}")));
+    }
+    let path = format!("/files/upload?path={}", crate::terminal::encode(dir));
+    send_file_until(app, token, &path, "files", name, bytes, stop)
 }
 
 /// A linked computer's file as bytes, from `/api/v2` on (`GET /devices/{id}/fs/raw`): the
@@ -997,7 +1026,13 @@ fn save_stream(
             ));
         }
     }
-    let mut fresh = crate::files::Fresh::beside(dest.at).map_err(failed)?;
+    // (A folder of the agent's -- one that was checked -- is opened as that very folder.)
+    let mut fresh = if dest.check.is_some() {
+        crate::files::Fresh::within(dest.at)
+    } else {
+        crate::files::Fresh::beside(dest.at)
+    }
+    .map_err(failed)?;
     if let Some(check) = dest.check {
         check(fresh.path()).map_err(|e| ApiError::new(400, e))?;
     }
@@ -1452,21 +1487,42 @@ fn send_file(
     name: &str,
     bytes: &[u8],
 ) -> Result<Value, ApiError> {
+    send_file_until(app, token, path, field, name, bytes, None)
+}
+
+/// The same, given up when `stop` is set while the body is still being sent: the request is
+/// broken off before its end, so the other side has no whole file to keep. Once the whole body
+/// has gone, the answer is waited for as always -- a stop that comes then changes nothing.
+fn send_file_until(
+    app: &str,
+    token: &str,
+    path: &str,
+    field: &str,
+    name: &str,
+    bytes: &[u8],
+    stop: Option<&std::sync::Arc<AtomicBool>>,
+) -> Result<Value, ApiError> {
     let path = checked_path(path)?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let boundary = format!("llembas-desktop-{nanos:x}");
-    let res = agent(Duration::from_secs(300))
+    let body = multipart(&boundary, field, name, bytes);
+    let req = agent(Duration::from_secs(300))
         .post(&format!("{app}{path}"))
         .set("authorization", &format!("Bearer {token}"))
         .set("accept", "application/json")
         .set(
             "content-type",
             &format!("multipart/form-data; boundary={boundary}"),
-        )
-        .send_bytes(&multipart(&boundary, field, name, bytes))?;
+        );
+    let res = match stop {
+        None => req.send_bytes(&body)?,
+        Some(stop) => req
+            .set("content-length", &body.len().to_string())
+            .send(crate::carry::Watched::new(&body[..], stop.clone(), |_| {}))?,
+    };
     res.into_json()
         .map_err(|_| ApiError::new(0, "The server's answer was not JSON.".to_string()))
 }

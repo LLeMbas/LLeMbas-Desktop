@@ -447,11 +447,86 @@ pub struct Fresh {
     at: PathBuf,
     file: fs::File,
     settled: bool,
+    /// The folder it is in, held open, and the name it is written under there (Unix): what
+    /// follows -- its real name, or its going -- is done by name inside that open folder, never
+    /// by walking the path again. A part of the path swapped meanwhile redirects nothing.
+    #[cfg(unix)]
+    held: Option<(fs::File, std::ffi::CString)>,
+}
+
+#[cfg(unix)]
+fn c_name(name: Option<&std::ffi::OsStr>) -> std::io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    let name = name.ok_or_else(|| std::io::Error::other("no name to write under"))?;
+    std::ffi::CString::new(name.as_bytes()).map_err(|_| std::io::Error::other("not a name"))
 }
 
 impl Fresh {
     /// A new, empty file in the folder `dest` is in.
     pub fn beside(dest: &Path) -> std::io::Result<Fresh> {
+        Self::make(dest, false)
+    }
+
+    /// The same, where the folder is one that was checked (resolved, inside the agent's
+    /// folders): the folder opened here must be that very folder, where the system can say
+    /// which folder an open one is (Linux) -- one whose path leads somewhere else by now is
+    /// refused before anything is made.
+    pub fn within(dest: &Path) -> std::io::Result<Fresh> {
+        Self::make(dest, true)
+    }
+
+    #[cfg(unix)]
+    fn make(dest: &Path, checked: bool) -> std::io::Result<Fresh> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = dest
+            .parent()
+            .ok_or_else(|| std::io::Error::other("no folder to write in"))?;
+        let folder = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY)
+            .open(dir)?;
+        if checked {
+            if let Some(real) = really_at(&folder) {
+                if real != dir {
+                    return Err(std::io::Error::other("the folder is not where it was"));
+                }
+            }
+        }
+        for _ in 0..8 {
+            let name = format!(".llembas-{}.part", crate::random::hex(8));
+            let c = c_name(Some(std::ffi::OsStr::new(&name)))?;
+            // Made new, in the open folder, never through a link and never over anything.
+            let fd = unsafe {
+                libc::openat(
+                    folder.as_raw_fd(),
+                    c.as_ptr(),
+                    libc::O_WRONLY
+                        | libc::O_CREAT
+                        | libc::O_EXCL
+                        | libc::O_NOFOLLOW
+                        | libc::O_CLOEXEC,
+                    0o666 as libc::c_uint,
+                )
+            };
+            if fd >= 0 {
+                return Ok(Fresh {
+                    at: dir.join(name),
+                    file: unsafe { fs::File::from_raw_fd(fd) },
+                    settled: false,
+                    held: Some((folder, c)),
+                });
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(e);
+            }
+        }
+        Err(std::io::Error::other("no free name to write under"))
+    }
+
+    #[cfg(not(unix))]
+    fn make(dest: &Path, _checked: bool) -> std::io::Result<Fresh> {
         let dir = dest
             .parent()
             .ok_or_else(|| std::io::Error::other("no folder to write in"))?;
@@ -488,6 +563,17 @@ impl Fresh {
     /// (a link there is replaced, not followed; another name of the same file is left as it was).
     pub fn replace(mut self, dest: &Path) -> std::io::Result<()> {
         self.file.sync_all()?;
+        #[cfg(unix)]
+        if let Some((folder, part)) = &self.held {
+            use std::os::fd::AsRawFd;
+            let to = c_name(dest.file_name())?;
+            let fd = folder.as_raw_fd();
+            if unsafe { libc::renameat(fd, part.as_ptr(), fd, to.as_ptr()) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            self.settled = true;
+            return Ok(());
+        }
         fs::rename(&self.at, dest)?;
         self.settled = true;
         Ok(())
@@ -497,6 +583,37 @@ impl Fresh {
     /// took the name meanwhile is left alone, and this is the error.
     pub fn settle_new(mut self, dest: &Path) -> std::io::Result<()> {
         self.file.sync_all()?;
+        #[cfg(unix)]
+        if let Some((folder, part)) = &self.held {
+            use std::os::fd::AsRawFd;
+            let to = c_name(dest.file_name())?;
+            let fd = folder.as_raw_fd();
+            // A second name for it, which fails where the name is taken; the name it was
+            // written under goes when this is dropped.
+            if unsafe { libc::linkat(fd, part.as_ptr(), fd, to.as_ptr(), 0) } == 0 {
+                return Ok(());
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(e);
+            }
+            // A disk that has no second names: looked at, then renamed, inside the open folder.
+            let mut seen: libc::stat = unsafe { std::mem::zeroed() };
+            let there =
+                unsafe { libc::fstatat(fd, to.as_ptr(), &mut seen, libc::AT_SYMLINK_NOFOLLOW) }
+                    == 0;
+            if there {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "there is already something called that",
+                ));
+            }
+            if unsafe { libc::renameat(fd, part.as_ptr(), fd, to.as_ptr()) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            self.settled = true;
+            return Ok(());
+        }
         match fs::hard_link(&self.at, dest) {
             // The name it was written under goes when this is dropped.
             Ok(()) => Ok(()),
@@ -517,10 +634,64 @@ impl Fresh {
 
 impl Drop for Fresh {
     fn drop(&mut self) {
-        if !self.settled {
-            let _ = fs::remove_file(&self.at);
+        if self.settled {
+            return;
+        }
+        #[cfg(unix)]
+        if let Some((folder, part)) = &self.held {
+            use std::os::fd::AsRawFd;
+            unsafe { libc::unlinkat(folder.as_raw_fd(), part.as_ptr(), 0) };
+            return;
+        }
+        let _ = fs::remove_file(&self.at);
+    }
+}
+
+/// Whether a name is one this app writes a file under before it is whole (`Fresh`).
+pub fn is_part(name: &str) -> bool {
+    name.strip_prefix(".llembas-")
+        .and_then(|rest| rest.strip_suffix(".part"))
+        .is_some_and(|hex| hex.len() == 16 && hex.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// Remove what a transfer left half-written in the agent's folders when the app went away
+/// under it (it was killed; the power went): ordinary files with exactly the name this app
+/// writes under, and nothing else -- and only ones nothing has written to for `idle` (one that
+/// is being written right now is somebody's transfer). Run once after the app has started.
+/// Links are not followed; at most `most` entries are looked at. How many were removed.
+pub fn sweep_parts(roots: &[String], most: usize, idle: std::time::Duration) -> usize {
+    let mut removed = 0;
+    let mut seen = 0;
+    let mut stack: Vec<PathBuf> = roots.iter().map(PathBuf::from).collect();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > most {
+                return removed;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                stack.push(entry.path());
+            } else if kind.is_file()
+                && entry.file_name().to_str().is_some_and(is_part)
+                && entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|at| at.elapsed().ok())
+                    .is_some_and(|age| age >= idle)
+                && fs::remove_file(entry.path()).is_ok()
+            {
+                removed += 1;
+            }
         }
     }
+    removed
 }
 
 /// A name for one thing in a folder: one part of a path, and nothing that could leave it.
@@ -972,7 +1143,7 @@ pub fn write(
         }
     }
     let failed = |e: std::io::Error| refused(format!("{path}: {e}"));
-    let mut fresh = Fresh::beside(&file).map_err(failed)?;
+    let mut fresh = Fresh::within(&file).map_err(failed)?;
     may_write(kept, fresh.path()).map_err(refused)?;
     fresh.file().write_all(text.as_bytes()).map_err(failed)?;
     // It stays as readable, writable and runnable as it was.
@@ -1016,7 +1187,7 @@ pub fn bring_in(
         }
         _ => format!("{name}: {e}"),
     };
-    let mut fresh = Fresh::beside(&at).map_err(failed)?;
+    let mut fresh = Fresh::within(&at).map_err(failed)?;
     fresh.file().write_all(bytes).map_err(failed)?;
     fresh.settle_new(&at).map_err(failed)?;
     Ok(relative(&base, &at))
@@ -1859,6 +2030,87 @@ mod tests {
             "{:?}",
             names(&p)
         );
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_is_written_lands_in_the_folder_that_was_opened_whatever_becomes_of_its_path() {
+        let d = scratch("swap");
+        let p = fs::canonicalize(d.join("project")).unwrap();
+        let out = fs::canonicalize(d.join("outside")).unwrap();
+        fs::create_dir(p.join("in")).unwrap();
+        let dest = p.join("in/loaf.bin");
+        let mut fresh = Fresh::within(&dest).unwrap();
+        fresh.file().write_all(b"whole").unwrap();
+        // The folder is moved away and a link to somewhere else put under its name.
+        fs::rename(p.join("in"), p.join("was-in")).unwrap();
+        std::os::unix::fs::symlink(&out, p.join("in")).unwrap();
+        fresh.settle_new(&dest).unwrap();
+        assert_eq!(fs::read(p.join("was-in/loaf.bin")).unwrap(), b"whole");
+        assert_eq!(
+            names(&out),
+            vec!["secret.txt"],
+            "nothing was written where the link leads"
+        );
+        assert_eq!(
+            names(&p.join("was-in")),
+            vec!["loaf.bin"],
+            "and nothing is left of the name it was written under"
+        );
+        // Let go before it is whole: its own name goes from the folder it was made in.
+        let fresh = Fresh::within(&p.join("was-in/other.bin")).unwrap();
+        drop(fresh);
+        assert_eq!(names(&p.join("was-in")), vec!["loaf.bin"]);
+        // A folder reached through a link is not the folder that was checked (where the system can say).
+        if cfg!(target_os = "linux") {
+            assert!(Fresh::within(&p.join("in/x.bin")).is_err());
+            assert_eq!(names(&out), vec!["secret.txt"]);
+        }
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn only_this_apps_own_half_written_files_are_swept() {
+        let d = scratch("sweep");
+        let p = d.join("project");
+        let part = ".llembas-0123456789abcdef.part";
+        fs::write(p.join(part), "half").unwrap();
+        fs::write(p.join("src").join(".llembas-fedcba9876543210.part"), "half").unwrap();
+        // What only looks like one stays: another length, other letters, a folder of that name, a file outside the roots.
+        for keep in [
+            ".llembas-0123.part",
+            ".llembas-0123456789abcdeg.part",
+            "x.llembas-0123456789abcdef.part",
+            ".llembas-0123456789abcdef.part.txt",
+        ] {
+            fs::write(p.join(keep), "mine").unwrap();
+            assert!(!is_part(keep), "{keep}");
+        }
+        fs::create_dir(p.join(".llembas-00000000000000aa.part")).unwrap();
+        fs::write(d.join("outside").join(part), "theirs").unwrap();
+        assert!(is_part(part));
+        // One written to a moment ago is a transfer under way: left alone.
+        let hour = std::time::Duration::from_secs(3600);
+        assert_eq!(sweep_parts(&roots(&d), 10_000, hour), 0);
+        assert!(p.join(part).exists());
+        assert_eq!(
+            sweep_parts(&roots(&d), 10_000, std::time::Duration::ZERO),
+            2
+        );
+        assert!(!p.join(part).exists() && !p.join("src/.llembas-fedcba9876543210.part").exists());
+        assert!(
+            p.join(".llembas-0123.part").exists()
+                && p.join(".llembas-00000000000000aa.part").is_dir()
+        );
+        assert!(d.join("outside").join(part).exists());
+        assert_eq!(
+            fs::read_to_string(p.join("README.md")).unwrap(),
+            "# Waybread\n"
+        );
+        // Bounded: no more is looked at than asked.
+        fs::write(p.join(part), "half").unwrap();
+        assert_eq!(sweep_parts(&roots(&d), 0, std::time::Duration::ZERO), 0);
         fs::remove_dir_all(&d).unwrap();
     }
 

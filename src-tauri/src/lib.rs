@@ -305,6 +305,7 @@ async fn set_server(handle: AppHandle, address: String) -> Result<Status, String
     app.update(|s| s.server = Some(d.base.clone()))?;
     if before.as_deref() != Some(d.base.as_str()) {
         app.editor.stop();
+        app.carries.cancel_all();
         app.agent.stop();
         app.watch.reset();
         app.terminals.close_all();
@@ -440,6 +441,8 @@ fn token_refused(handle: &AppHandle) {
     if app.account.lock().unwrap().take().is_some() {
         server::forget_account(&app.config_dir);
         app.editor.stop();
+        // (What is being carried under the sign-in that ended: stopped, its half-written file gone.)
+        app.carries.cancel_all();
         app.terminals.close_all();
         app.python.clear();
         app.sealed.clear_pages();
@@ -1213,17 +1216,6 @@ async fn local_write(
     .await
 }
 
-/// One end of a transfer: a place (`local`, with the agent's folder `root`; `server`; `device`,
-/// with the computer's id) and a path there -- the file itself where it comes from, the folder
-/// it goes into where it lands.
-#[derive(Clone, serde::Deserialize)]
-struct Place {
-    place: String,
-    root: Option<String>,
-    device: Option<String>,
-    path: String,
-}
-
 /// What the page hears of a transfer (`carry` events): `reading` with how far it is, `sending`
 /// once it is read and goes to the server or a linked computer, and one last word -- `done`
 /// (with the name it has there), `failed` (with why), or `cancelled`.
@@ -1240,17 +1232,30 @@ fn carry_said(handle: &AppHandle, id: u64, state: &str, more: Value) {
 /// Carry one file from one place to another (`carry.rs`). Answers at once with the transfer's
 /// id; how it goes comes as `carry` events, and `carry_cancel` stops it. Any file, of any kind:
 /// its bytes are never looked at. On this computer it lands under a free name in one of the
-/// agent's folders, never over anything and never among the CLI's own files.
+/// agent's folders, never over anything and never among the CLI's own files. Only so many run
+/// at once (`carry::AT_ONCE`): one more is refused in words.
 #[tauri::command]
-fn carry_start(handle: AppHandle, from: Place, to: Place) -> Result<u64, ApiError> {
+fn carry_start(handle: AppHandle, from: carry::Place, to: carry::Place) -> Result<u64, ApiError> {
     let app = handle.state::<App>();
-    let door = app.door();
-    let (roots, kept) = (app.roots(), app.kept());
-    let (id, stop) = app.carries.begin();
+    let ctx = carry::Ctx {
+        door: app.door(),
+        roots: app.roots(),
+        kept: app.kept(),
+    };
+    let Some((id, stop)) = app.carries.begin() else {
+        return Err(ApiError::new(
+            429,
+            "Too many transfers at once: wait for one to end.",
+        ));
+    };
     let h = handle.clone();
     std::thread::spawn(move || {
         let name = suggested(&from.path);
-        let outcome = carry_one(&h, id, &stop, &from, &to, &name, door, &roots, &kept);
+        let told = h.clone();
+        let outcome = carry::carry_one(&ctx, &stop, &from, &to, &name, &move |state, more| {
+            carry_said(&told, id, state, more)
+        });
+        // (Ended before the last word: whoever waits for every transfer to end -- Quit -- may go.)
         h.state::<App>().carries.end(id);
         match outcome {
             Ok(named) => carry_said(&h, id, "done", serde_json::json!({ "name": named })),
@@ -1264,109 +1269,6 @@ fn carry_start(handle: AppHandle, from: Place, to: Place) -> Result<u64, ApiErro
         }
     });
     Ok(id)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn carry_one(
-    handle: &AppHandle,
-    id: u64,
-    stop: &Arc<AtomicBool>,
-    from: &Place,
-    to: &Place,
-    name: &str,
-    door: Option<(String, String)>,
-    roots: &[String],
-    kept: &[PathBuf],
-) -> Result<String, ApiError> {
-    let signed = || {
-        door.clone()
-            .ok_or_else(|| ApiError::new(401, "Not signed in."))
-    };
-    let device_of = |p: &Place| p.device.clone().unwrap_or_default();
-    // Where it comes from: opened to be read as it comes, with its length where that is known.
-    let (body, total): (Box<dyn std::io::Read + Send>, Option<u64>) = match from.place.as_str() {
-        "local" => {
-            let root = from.root.as_deref().unwrap_or("");
-            let (_, at) =
-                files::resolve(roots, root, &from.path).map_err(|e| ApiError::new(400, e))?;
-            let (file, meta) = files::open_regular(&at, true)
-                .map_err(|e| ApiError::new(400, format!("{}: {e}", from.path)))?;
-            (
-                Box::new(file) as Box<dyn std::io::Read + Send>,
-                Some(meta.len()),
-            )
-        }
-        "server" => {
-            let (app_url, token) = signed()?;
-            let (body, length) = server::open_raw(
-                &app_url,
-                &token,
-                &server::raw_path(&from.path, None, false)?,
-            )?;
-            (Box::new(body) as Box<dyn std::io::Read + Send>, length)
-        }
-        "device" => {
-            let (app_url, token) = signed()?;
-            let raw = server::device_raw_path(&device_of(from), &from.path, false)?;
-            let (body, length) = server::open_raw(&app_url, &token, &raw)?;
-            (Box::new(body) as Box<dyn std::io::Read + Send>, length)
-        }
-        _ => return Err(ApiError::new(400, "No such place.")),
-    };
-    carry_said(
-        handle,
-        id,
-        "reading",
-        serde_json::json!({ "done": 0, "total": total }),
-    );
-    let told = handle.clone();
-    let mut watched = carry::Watched::new(body, stop.clone(), move |done| {
-        carry_said(
-            &told,
-            id,
-            "reading",
-            serde_json::json!({ "done": done, "total": total }),
-        );
-    });
-    match to.place.as_str() {
-        // Onto this computer: written beside its place as it comes, named once it is whole.
-        "local" => {
-            let root = to.root.as_deref().unwrap_or("");
-            let (base, dest) = files::incoming(roots, kept, root, &to.path, name)
-                .map_err(|e| ApiError::new(400, e))?;
-            let check: server::Check = &|at| files::may_write(kept, at);
-            let landing = server::Dest {
-                at: &dest,
-                new: true,
-                check: Some(check),
-            };
-            server::save_from(&mut watched, total, &landing)?;
-            Ok(files::relative_to(&base, &dest))
-        }
-        // To the server or a linked computer: read whole, then sent as one upload.
-        "server" | "device" => {
-            let bytes = carry::read_whole(&mut watched, server::UPLOAD_LIMIT)
-                .map_err(|e| ApiError::new(0, format!("{name}: {e}")))?
-                .ok_or_else(|| ApiError::new(413, "This file is too large to send."))?;
-            if stop.load(Ordering::SeqCst) {
-                return Err(ApiError::new(0, "cancelled"));
-            }
-            carry_said(
-                handle,
-                id,
-                "sending",
-                serde_json::json!({ "done": bytes.len(), "total": bytes.len() }),
-            );
-            let (app_url, token) = signed()?;
-            if to.place == "server" {
-                server::upload_to_library(&app_url, &token, &to.path, name, &bytes)?;
-            } else {
-                server::upload_to_device(&app_url, &token, &device_of(to), &to.path, name, &bytes)?;
-            }
-            Ok(name.to_string())
-        }
-        _ => Err(ApiError::new(400, "No such place.")),
-    }
 }
 
 /// Stop a transfer (the person's Cancel): what was being written here goes, unnamed.
@@ -1516,11 +1418,22 @@ fn quit_question(unsaved: u32) -> Option<String> {
     }
 }
 
+/// How long Quit waits for the transfers under way to stop and let go of what they were writing.
+const WIND_DOWN: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What stops before the app goes: every transfer under way (told to stop, and waited for a
+/// moment, so that none leaves a half-written file behind), the editor's helper, the agent.
+fn leaving(h: &AppHandle) {
+    let app = h.state::<App>();
+    app.carries.wind_down(WIND_DOWN);
+    app.editor.stop();
+    app.agent.stop();
+}
+
 /// Quit: the helper and the agent stop, the app goes -- after a yes, where edits were not saved.
 fn quit(h: &AppHandle) {
     let leave = |h: &AppHandle| {
-        h.state::<App>().editor.stop();
-        h.state::<App>().agent.stop();
+        leaving(h);
         h.exit(0);
     };
     let Some(question) = quit_question(h.state::<App>().unsaved.load(Ordering::SeqCst)) else {
@@ -1540,8 +1453,7 @@ fn quit(h: &AppHandle) {
             if yes {
                 let h = again.clone();
                 let _ = again.run_on_main_thread(move || {
-                    h.state::<App>().editor.stop();
-                    h.state::<App>().agent.stop();
+                    leaving(&h);
                     h.exit(0);
                 });
             }
@@ -2534,8 +2446,7 @@ async fn install_update(handle: AppHandle) -> Result<(), String> {
         .download_and_install(|_, _| {}, || {})
         .await
         .map_err(|e| format!("The update could not be installed: {e}"))?;
-    handle.state::<App>().editor.stop();
-    handle.state::<App>().agent.stop();
+    leaving(&handle);
     handle.restart()
 }
 
@@ -3192,6 +3103,29 @@ pub fn run() {
             if let Ok(dir) = app.path().resource_dir() {
                 cli::set_bundled(&dir);
             }
+            // What a transfer left half-written when the app last went away under it (killed, the
+            // power gone): swept once, when the agent's folders are known -- only this app's own
+            // part files, and only ones nothing has written to for a while.
+            let sweeper = handle.clone();
+            std::thread::spawn(move || {
+                for _ in 0..60 {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let roots = sweeper.state::<App>().roots();
+                    if !roots.is_empty() {
+                        let gone = files::sweep_parts(
+                            &roots,
+                            200_000,
+                            std::time::Duration::from_secs(600),
+                        );
+                        if gone > 0 {
+                            log::write(&format!(
+                                "removed {gone} half-written file(s) left by a transfer"
+                            ));
+                        }
+                        return;
+                    }
+                }
+            });
             let agent_log = app.path().app_log_dir()?.join("agent.log");
             let notify_handle = handle.clone();
             let agent = Agent::new(agent_log, move |s| {
@@ -3311,8 +3245,7 @@ pub fn run() {
     };
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
-            handle.state::<App>().editor.stop();
-            handle.state::<App>().agent.stop();
+            leaving(handle);
         }
     });
 }
