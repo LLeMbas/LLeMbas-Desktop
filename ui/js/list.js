@@ -29,6 +29,8 @@ function fold(text) {
 
 /** Which reading of the list is the latest: an older one's answer is dropped. */
 let listRead = 0
+/** Which account's list this is: counted on when the list is let go (`resetList`). */
+let listEra = 0
 
 const stamp = (c) => Date.parse(c?.updated_at || "") || 0
 
@@ -72,7 +74,10 @@ export async function refreshList() {
 async function loadMore() {
   const last = rows[rows.length - 1]
   if (!last) return
+  const era = listEra
   const r = await get(`/chats?limit=50&before=${encodeURIComponent(last.id)}`)
+  // Asked for one account's list, answered after it was let go (signed out): nobody's to see.
+  if (era !== listEra) return
   const have = new Set(rows.map((c) => c.id))
   rows = rows.concat((r.chats || []).filter((c) => !have.has(c.id)))
   more = !!r.more
@@ -176,6 +181,7 @@ export function dropChat(id) {
 /** Signed out, or another server: nothing of the list is kept, and nothing is looked for. */
 export function resetList() {
   listRead++
+  listEra++
   clearTimeout(soon)
   clearTimeout(busyTimer)
   soon = busyTimer = 0

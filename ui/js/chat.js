@@ -683,6 +683,9 @@ function initFollowing() {
       type,
       (e) => {
         if (!hand.pressed) return
+        // No button is down any more: the release never reached the page (a selection or a
+        // picture dragged out of the thread, an engine silent after its scrollbar was let go).
+        if (e.buttons === 0) return void (hand.pressed = false)
         hand.at = performance.now()
         if (Math.abs(e.clientX - hand.x) + Math.abs(e.clientY - hand.y) > 4) hand.dragged = true
       },
@@ -828,24 +831,36 @@ function waitingActions(el, m) {
       const r = await asking(post(`/chats/${encodeURIComponent(id)}/messages/${encodeURIComponent(m.id)}/${what}`), id)
       if (open?.chat?.id !== id) return
       mark()
-      if (what === "discard") el.remove()
+      // The message's row as it is drawn now: a reading may have drawn it anew meanwhile (behind
+      // the question, or while the request was on its way), and `el` is then no longer on the page.
+      const now = drawnRow()
+      if (what === "discard") now?.remove()
       else {
         // As a message just sent: the message as it now is, and its reply followed.
-        if (r?.message) el.replaceWith(row(r.message, open.chat))
+        if (r?.message && now) now.replaceWith(row(r.message, open.chat))
         if (r?.reply?.id) follower(open.chat, r.reply.id)
       }
       if (what === "send") toBottom()
       else settle()
       ctx.changed(open.chat)
     } catch (err) {
-      if (!el.isConnected) return
-      mark()
-      said.textContent = why(err)
-      said.hidden = false
-      send.disabled = discard.disabled = false
-      settle()
+      if (open?.chat?.id !== id) return
+      // Said on the message where its row is still the one drawn; else above the composer.
+      if (el.isConnected) {
+        mark()
+        said.textContent = why(err)
+        said.hidden = false
+        send.disabled = discard.disabled = false
+        settle()
+      } else alertIn(why(err))
+      // The server does not have it as a message that waits any more (taken into a reply, sent
+      // or discarded from somewhere else: 409), or not at all (404): the row may be wrong, not
+      // only the request. The chat is read again: a message that still waits keeps its row and
+      // what was said on it; one that does not is drawn as it now is, or goes.
+      if (err?.status === 404 || err?.status === 409) readAgain(id, true)
     }
   }
+  const drawnRow = () => (el.isConnected ? el : $("messages").querySelector(`.msg[data-id="${CSS.escape(String(m.id))}"]:not(.is-live)`))
   send.addEventListener("click", () => act("send"))
   discard.addEventListener("click", () => act("discard"))
   return [h("div", { class: "msg__editbar msg__waitbar" }, discard, send), said]
@@ -2807,7 +2822,10 @@ async function read(id, quiet) {
     open.more = r.more
   }
   for (const el of rows) {
-    const at = before ? before.nextSibling : list.firstChild
+    // (The reply being written is not one of the rows: a row that stands behind it stands where
+    // it should, and is not moved -- moved, it lost the focus and anything playing in it.)
+    let at = before ? before.nextSibling : list.firstChild
+    if (follows && at === live.el) at = at.nextSibling
     if (at !== el) list.insertBefore(el, at)
     before = el
   }

@@ -4,6 +4,24 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **A message that no longer waits is no longer drawn as waiting.** When Send now or Discard is
+  answered with "this message is no longer waiting" (the computer took it meanwhile, or it was
+  sent or discarded from another window) or the message is gone, the chat is read again: the
+  message is shown as it now is, or goes. A Discard confirmed while the chat was drawn anew
+  behind the question takes the message off the screen (it used to stay, with live buttons).
+- A chat read again by itself while a reply is written no longer takes the keyboard off Send now
+  or Discard of a message that waits behind that reply, and no longer reloads a page or a player
+  in the reply being written.
+- A press on the chat whose release the window never hears of (a selection or a picture dragged
+  out of it) no longer counts as a hand on the chat for as long as the mouse moves: following a
+  reply to its end is not switched off by it.
+- More in the list of chats, answered after signing out, no longer draws the chats of the account
+  that left.
+
 ## [1.0.0-beta.14] — 2026-11-24
 
 For a LLeMbas server that says its replies as they start (the `reply` frame of its events stream,

@@ -7414,12 +7414,32 @@ async function posWatch(p) {
     // and the changes of size, each with where it stood then.
     const told = (what) => pos.seen.push({ at: pos.log.length, what, top: th.scrollTop, height: th.scrollHeight, client: th.clientHeight })
     th.addEventListener("scroll", () => told("scroll"), { passive: true })
-    new ResizeObserver(() => told("size")).observe(document.getElementById("messages"))
-    new ResizeObserver(() => told("room")).observe(th)
+    // The sizes the engine has told of (a ResizeObserver is told after a frame's layout and
+    // before its paint): a size it has not told of yet is one no frame has been painted with.
+    const list = document.getElementById("messages")
+    const sizeOf = () => `${list.getBoundingClientRect().height}/${th.getBoundingClientRect().height}/${th.getBoundingClientRect().width}`
+    let toldOf = ""
+    new ResizeObserver(() => (told("size"), (toldOf = sizeOf()))).observe(list)
+    new ResizeObserver(() => (told("room"), (toldOf = sizeOf()))).observe(th)
     // A task of its own after each frame's callbacks, layout and observers: what was painted.
+    // The task is queued behind whatever else waits, though -- and where that is the test's own
+    // change to the page (it comes in a task of its own, between two frames), this look would be
+    // at a page changed since the frame and not laid out, observed or painted again: the sizes
+    // are other than the engine last told of. That is not a frame. It is kept apart (`early`),
+    // and the frame that follows is looked at as every other -- once only: sizes still untold
+    // after a whole frame are what was painted.
+    pos.early = []
+    let skipped = false
     const after = new MessageChannel()
     after.port1.onmessage = () => {
-      pos.sample()
+      if (toldOf && sizeOf() !== toldOf && !skipped) {
+        skipped = true
+        const el = pos.find()
+        pos.early.push({ at: pos.log.length, top: th.scrollTop, height: th.scrollHeight, client: th.clientHeight, a: el ? el.getBoundingClientRect().top - th.getBoundingClientRect().top : null })
+      } else {
+        skipped = false
+        pos.sample()
+      }
       requestAnimationFrame(() => after.port2.postMessage(0))
     }
     requestAnimationFrame(() => after.port2.postMessage(0))
@@ -7490,10 +7510,12 @@ async function posStep(p, win, name, rule, act = async () => {}) {
       }
       const looks = window.__pos.looks.filter((e) => e.at >= since).slice(0, 12).map((e) => `«looked: ${e.state}; ${e.grew}; from ${e.from}»`)
       const how_ = `${went.slice(0, 40).join(" ")} ${put.join(" ")} ${grew.slice(0, 30).join(" ")} ${changed.slice(0, 40).join(" ")} ${looks.join(" ")}`
-      if (how === "end") return { first: gap(log[0]), worst: Math.max(...log.map(gap)), final: gap(log.at(-1)), went: how_ }
+      // What was seen between two frames and never painted (`early`), for the trace: how far off it was.
+      const early = window.__pos.early.filter((e) => e.at >= from).map((e) => (how === "end" ? gap(e) : e.a === null || log[0].a === null ? NaN : e.a - log[0].a))
+      if (how === "end") return { first: gap(log[0]), worst: Math.max(...log.map(gap)), final: gap(log.at(-1)), went: how_, early }
       const was = log[0].a
       const moved = (how === "back" ? [log.at(-1)] : log).map((s) => (s.a === null || was === null ? NaN : s.a - was))
-      return { first: was, worst: moved.reduce((m, x) => (Number.isNaN(m) || Number.isNaN(x) ? NaN : Math.abs(x) > Math.abs(m) ? x : m), 0), final: moved.at(-1), went: how_ }
+      return { first: was, worst: moved.reduce((m, x) => (Number.isNaN(m) || Number.isNaN(x) ? NaN : Math.abs(x) > Math.abs(m) ? x : m), 0), final: moved.at(-1), went: how_, early }
     },
     [typeof own === "number" ? own : mark, rule],
   )
@@ -7501,7 +7523,7 @@ async function posStep(p, win, name, rule, act = async () => {}) {
   const row = { name, win, rule, worst: round(r.worst), final: round(r.final) }
   posRows.push(row)
   const ok = rule === "end" ? r.first <= 1 && r.worst <= 1 : Math.abs(r.worst) <= 1
-  if (process.env.POS_TRACE) console.log(`POS|${name}|${win}|${rule}|${row.worst}|${row.final}${rule === "end" && r.first > 1 ? `|not at the end to begin with (${round(r.first)})` : ""}`)
+  if (process.env.POS_TRACE) console.log(`POS|${name}|${win}|${rule}|${row.worst}|${row.final}${rule === "end" && r.first > 1 ? `|not at the end to begin with (${round(r.first)})` : ""}${r.early.length ? `|between frames, not painted: ${r.early.map(round).join(" ")}` : ""}`)
   if (!ok) posMissed.push(`${name} (${win}): ${rule === "end" ? `${row.worst} px from the end at worst, ${row.final} at rest` : `moved ${row.worst} px at worst, ${row.final} at rest`} -- ${r.went}`)
   return r
 }
@@ -8733,6 +8755,206 @@ test("UN1: a message that waits says why -- not known to have reached the comput
   assert.deepEqual(await q.$$eval(`${rowOf("w1")} .msg__waitbar .btn`, (l) => l.map((b) => b.textContent).sort()), ["Poslať teraz", "Zahodiť"])
   assert.match(await q.textContent(`${rowOf("w1")} .msg__waits`), /Nie je známe/)
   assert.deepEqual(q.errors, [])
+})
+
+test("UN2: a message the server says no longer waits is drawn as it now is: after its refusal the chat is read again -- sent, the row is a sent one; gone, the row goes -- and a Discard confirmed over a row drawn anew meanwhile takes the row that is on the page", async () => {
+  const waits = (id, name, text) => ({ ...fixture(name), id, text })
+  const base = [userMessage("m1", "Tidy the build with two helpers"), posWords("m2", 1)]
+  const gone = "This message is no longer waiting."
+  const p = await page(
+    rpChat({
+      "GET /chats/chat2": { chat: agentChat({ running: false }), messages: [...base, waits("w1", "message_unsure", "And the leaves?"), waits("w2", "message_carried", "And the roots?"), waits("w3", "message_unsure", "And the bark?")], more: false, live: null },
+      "POST /chats/chat2/messages/w1/send": { __error: { status: 409, detail: gone } },
+      "POST /chats/chat2/messages/w2/discard": { __error: { status: 404, detail: "Not found" } },
+      "POST /chats/chat2/messages/w3/discard": { ...fixture("message_discarded"), id: "w3" },
+    }),
+  )
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="w3"]')
+  const rowOf = (id) => `#messages .msg--user[data-id="${id}"]`
+  const waiting = (id) => p.$eval(rowOf(id), (el) => el.classList.contains("is-queued") && !!el.querySelector(".msg__waitbar"))
+  // 409: the computer took it meanwhile. The server now has it as a sent message.
+  await rpServer(p, "chat2", [userMessage("w1", "And the leaves?"), waits("w2", "message_carried", "And the roots?"), waits("w3", "message_unsure", "And the bark?")])
+  let reads = await rpReads(p, "chat2")
+  await p.click(`${rowOf("w1")} .msg__send`)
+  await p.waitForFunction((sel) => !document.querySelector(sel)?.classList.contains("is-queued"), rowOf("w1"))
+  assert.equal(await rpReads(p, "chat2"), reads + 1, "the chat was read again once")
+  assert.equal(await p.$$eval(`${rowOf("w1")} .msg__waitbar`, (l) => l.length), 0, "no Send now on a message that does not wait")
+  assert.ok(await waiting("w2"))
+  // 404: it is not there at all any more. The row goes.
+  await rpServer(p, "chat2", [])
+  await p.evaluate(() => {
+    const key = "GET /chats/chat2"
+    const was = window.__mockConfig.routes[key]
+    window.__mock.answer(key, { ...was, messages: was.messages.filter((m) => m.id !== "w2") })
+  })
+  reads = await rpReads(p, "chat2")
+  await p.click(`${rowOf("w2")} .msg__discard`)
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForSelector(rowOf("w2"), { state: "detached" })
+  assert.equal(await rpReads(p, "chat2"), reads + 1)
+  // Discard asked, and the row drawn anew behind the question (a reading that changed why it waits).
+  await p.click(`${rowOf("w3")} .msg__discard`)
+  await p.waitForSelector("dialog[open]")
+  await p.evaluate(() => (window.__old = document.querySelector('#messages .msg--user[data-id="w3"]')))
+  await p.evaluate(() => {
+    const key = "GET /chats/chat2"
+    const was = window.__mockConfig.routes[key]
+    window.__mock.answer(key, { ...was, messages: was.messages.map((m) => (m.id === "w3" ? { ...m, origin: "carried" } : m)) })
+  })
+  await rpFrame(p, "chat2", "nobody")
+  await p.waitForFunction(() => document.querySelector('#messages .msg--user[data-id="w3"]') !== window.__old)
+  assert.ok(await waiting("w3"), "drawn anew, it still waits")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForSelector(rowOf("w3"), { state: "detached" })
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((el) => el.dataset.id)), ["m1", "m2", "w1"])
+  assert.deepEqual(p.errors, [])
+})
+
+test("UN3: Send now on a message the computer still knows -- its reply's stream closes with no end said, and the chat is read again; a request that never reached the server leaves the row as it was, with why; two messages sent now one after the other are each answered once; and an answer that comes after another chat was opened draws nothing there", async () => {
+  const waits = (id, name, text) => ({ ...fixture(name), id, text })
+  const sentNow = fixture("message_sent_now")
+  const base = [userMessage("m1", "Tidy the build with two helpers"), posWords("m2", 1)]
+  const all = [...base, waits("w1", "message_unsure", "And the leaves?"), waits("w2", "message_unsure", "And the roots?"), waits("w3", "message_unsure", "And the bark?"), waits("w4", "message_unsure", "And the sap?")]
+  const answerOf = (id, text, reply) => ({ message: { ...sentNow.message, id, text }, reply: { ...sentNow.reply, id: reply } })
+  const cfg = rpChat({
+    "GET /chats/chat2": { chat: agentChat({ running: false }), messages: all, more: false, live: null },
+    "POST /chats/chat2/messages/w1/send": answerOf("w1", "And the leaves?", "r9"),
+    "POST /chats/chat2/messages/w2/send": { __error: "error sending request: connection refused" },
+    "POST /chats/chat2/messages/w3/send": answerOf("w3", "And the bark?", "r10"),
+    "POST /chats/chat2/messages/r11/stop": {},
+    "POST /chats/chat2/messages/w4/send": answerOf("w4", "And the sap?", "r11"),
+  })
+  cfg.streams[rpStream("chat2", "r11")] = rpWriting
+  const p = await page(cfg)
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg[data-id="w4"]')
+  const rowOf = (id) => `#messages .msg--user[data-id="${id}"]`
+  const posts = (id) => p.evaluate((at) => window.__mock.api("POST", at).length, `/chats/chat2/messages/${id}/send`)
+  // The request never reached the server: said on the message, which still waits and can be sent again.
+  await p.click(`${rowOf("w2")} .msg__send`)
+  await p.waitForFunction((sel) => /connection refused/.test(document.querySelector(`${sel} .msg__note.is-error:not([hidden])`)?.textContent || ""), rowOf("w2"))
+  assert.ok(await p.isEnabled(`${rowOf("w2")} .msg__send`))
+  assert.ok(await p.$eval(rowOf("w2"), (el) => el.classList.contains("is-queued")))
+  // Sent now; the computer still knew it: the stream of the reply closes with no `done`.
+  await p.click(`${rowOf("w1")} .msg__send`)
+  await p.waitForSelector('#messages .msg.is-live[data-id="r9"]')
+  await p.waitForFunction((path) => window.__mock.started(path), rpStream("chat2", "r9"))
+  // (What the server has by then: the message taken in by the turn the computer was in, no reply of its own.)
+  await rpServer(p, "chat2", [userMessage("w1", "And the leaves?"), ...all.slice(3)])
+  const reads = await rpReads(p, "chat2")
+  await rpSend(p, "chat2", "r9", "close", {})
+  await p.evaluate((path) => window.__mock.frame(path, "end", null), rpStream("chat2", "r9"))
+  await p.waitForSelector("#messages .msg.is-live", { state: "detached" })
+  await p.waitForFunction(([c, n]) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length > n, ["chat2", reads])
+  await p.waitForFunction((sel) => !document.querySelector(sel).classList.contains("is-queued"), rowOf("w1"))
+  assert.equal(await p.$$eval('#messages .msg[data-id="r9"]', (l) => l.length), 0, "the reply that never was is not left drawn")
+  assert.ok(await p.isHidden("#stop"))
+  // Two messages sent now, the second pressed before the first is answered. The server takes
+  // one (whichever reaches it first -- here the second) and refuses the other while that one's
+  // reply is written: each is asked once, one reply is followed, and the refused message still
+  // waits, with the server's words on it.
+  const busy = "A reply is being written in this chat. Stop it first."
+  await p.evaluate(() => window.__mock.hold("POST /chats/chat2/messages/w3/send"))
+  await p.click(`${rowOf("w3")} .msg__send`)
+  await p.click(`${rowOf("w4")} .msg__send`)
+  await p.waitForSelector('#messages .msg.is-live[data-id="r11"]')
+  await rpServer(p, "chat2", [userMessage("w1", "And the leaves?"), all[3], all[4], userMessage("w4", "And the sap?"), { ...posReply("r11", []), complete: false }], "r11")
+  await p.evaluate((words) => {
+    window.__mock.answer("POST /chats/chat2/messages/w3/send", { __error: { status: 409, detail: words } })
+    window.__mock.release("POST /chats/chat2/messages/w3/send")
+  }, busy)
+  await p.waitForFunction(([sel, words]) => document.querySelector(`${sel} .msg__note.is-error:not([hidden])`)?.textContent === words, [rowOf("w3"), busy])
+  await p.waitForTimeout(150)
+  assert.ok(await p.$eval(rowOf("w3"), (el) => el.classList.contains("is-queued")), "the refused message still waits")
+  assert.ok(await p.isEnabled(`${rowOf("w3")} .msg__send`))
+  assert.equal(await posts("w3"), 1)
+  assert.equal(await posts("w4"), 1)
+  assert.deepEqual(await p.$$eval("#messages .msg.is-live", (l) => l.map((el) => el.dataset.id)), ["r11"], "one reply is followed")
+  assert.equal(await rpOpens(p, "chat2", "r11"), 1, "and followed once, through the reading the refusal asked for")
+  assert.deepEqual(p.errors, [])
+  // Another chat opened while the request is on its way: its answer draws nothing into that chat.
+  const q = await page(
+    rpChat({
+      "GET /chats/chat2": { chat: agentChat({ running: false }), messages: [...base, waits("w1", "message_unsure", "And the leaves?")], more: false, live: null },
+      "POST /chats/chat2/messages/w1/send": answerOf("w1", "And the leaves?", "r9"),
+    }),
+  )
+  await openChatRow(q, "chat2")
+  await q.waitForSelector(rowOf("w1"))
+  await q.evaluate(() => window.__mock.hold("POST /chats/chat2/messages/w1/send"))
+  await q.click(`${rowOf("w1")} .msg__send`)
+  await q.click('.chatrow[data-id="chat1"]')
+  await q.waitForSelector('#messages .msg[data-id="m6"]')
+  await q.evaluate(() => window.__mock.release("POST /chats/chat2/messages/w1/send"))
+  await q.waitForTimeout(150)
+  assert.deepEqual(await q.$$eval("#messages .msg", (l) => l.map((el) => el.dataset.id)), ["m5", "m6"])
+  assert.equal(await rpOpens(q, "chat2", "r9"), 0, "and its reply is not followed from another chat")
+  assert.deepEqual(q.errors, [])
+})
+
+test("RX12: a press on the thread whose release never reaches the page ends with the first move of a mouse that holds no button: the engine's next cut is not taken for the person's, however long the mouse goes on moving", async () => {
+  const p = await rxLive()
+  await p.evaluate(() => {
+    const th = document.getElementById("thread")
+    th.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 600, clientY: 300, buttons: 1 }))
+    // A drag with the button down is the person's hand still.
+    window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 620, clientY: 330, buttons: 1 }))
+  })
+  // The release is never told. The mouse moves on over the window, no button held.
+  for (let i = 0; i < 4; i++) {
+    await p.evaluate((n) => window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 300 + n * 20, clientY: 200, buttons: 0 })), i)
+    await p.waitForTimeout(40)
+  }
+  await rxCut(p, "head")
+  // (And goes on moving while the cut is put back.)
+  await p.evaluate(() => window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 500, clientY: 220, buttons: 0 })))
+  const at = await w1At(p)
+  w1Ok(at.gap <= 1, `with no button held the engine's cut is put back (${at.gap} px from the end)`)
+  w1End(p)
+})
+
+test("RX13: a chat read again by itself while a reply is written and a message waits behind it moves neither row: the waiting message keeps the keyboard on its button, and nothing is taken out of the thread and put back", async () => {
+  const queued = { ...userMessage("q3", "And the docs?"), queued: true, complete: false }
+  const writing = { ...posReply("r9", []), complete: false }
+  const p = await page(rpChat({ "GET /chats/chat2": { chat: agentChat(), messages: [userMessage("m1", "Tidy the build with two helpers"), posWords("m2", 1), userMessage("m3", "And the tests?"), writing, queued], more: false, live: "r9" } }))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector('#messages .msg.is-live[data-id="r9"]')
+  await p.waitForSelector('#messages .msg--user[data-id="q3"] .msg__send')
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((el) => el.dataset.id)), ["m1", "m2", "m3", "r9", "q3"])
+  await p.focus('#messages .msg--user[data-id="q3"] .msg__send')
+  await p.evaluate(() => {
+    window.__moved = []
+    new MutationObserver((changes) => {
+      for (const c of changes) for (const n of [...c.removedNodes, ...c.addedNodes]) if (n.nodeType === 1 && n.dataset.id) window.__moved.push(n.dataset.id)
+    }).observe(document.getElementById("messages"), { childList: true })
+  })
+  const reads = await rpReads(p, "chat2")
+  // A reply said for this chat that the window does not know: the chat is read again, quietly.
+  await rpFrame(p, "chat2", "nobody")
+  await p.waitForFunction(([c, n]) => window.__mock.api("GET", `/chats/${c}`).filter((x) => x.args.path === `/chats/${c}`).length > n, ["chat2", reads])
+  await p.waitForTimeout(100)
+  assert.deepEqual(await p.evaluate(() => window.__moved), [], "no row was taken out or put in")
+  assert.ok(await p.evaluate(() => document.activeElement?.classList.contains("msg__send") && document.activeElement.closest(".msg").dataset.id === "q3"), "the keyboard is still on Send now")
+  assert.deepEqual(await p.$$eval("#messages .msg", (l) => l.map((el) => el.dataset.id)), ["m1", "m2", "m3", "r9", "q3"])
+  assert.deepEqual(p.errors, [])
+})
+
+test("RX14: More asked of the list, and the account signed out before the answer: the chats of the account that left are not drawn into the list", async () => {
+  const p = await page({ status: status(), routes: baseRoutes({ ...rxList(), "GET /folders": { folders: [] } }), hold: ["GET /chats?limit=50&before=c49"] })
+  await p.waitForSelector('.chatrow[data-id="c49"]')
+  await p.click("#chat-list .list__more")
+  await p.waitForFunction(() => window.__mock.held("GET /chats?limit=50&before=c49") === 1)
+  await p.evaluate((st) => {
+    window.__mockConfig.status = st
+    window.__mock.emit("status", st)
+  }, status({ account: null, linked: false }))
+  await p.waitForSelector("#shell", { state: "hidden" })
+  assert.equal(await p.$$eval("#chat-list .chatrow", (l) => l.length), 0)
+  await p.evaluate(() => window.__mock.release("GET /chats?limit=50&before=c49"))
+  await p.waitForTimeout(100)
+  assert.equal(await p.$$eval("#chat-list .chatrow", (l) => l.length), 0, "nothing of the account that left")
+  assert.deepEqual(p.errors, [])
 })
 
 // --- Run ----------------------------------------------------------------------------------------
