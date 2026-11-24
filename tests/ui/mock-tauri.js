@@ -213,13 +213,13 @@
         // A file carried between places (src-tauri/src/carry.rs): the id at once, then its
         // words as `carry` events. By the file's name (the last part of `from.path`), `carry: {
         // name: { error } }` fails it; any other is done a moment later. `carryManual: true`
-        // says nothing after `reading`: the test says the rest (`__mock.emit("carry", …)`).
+        // says nothing by itself: the test says every word (`__mock.emit("carry", …)`).
         const id = ++nextCarry
         const name = String(args.from?.path || "").split("/").pop()
         const own = (config.carry || {})[name]
+        if (config.carryManual) return id
         setTimeout(() => {
           dispatch("carry", { id, state: "reading", done: 0, total: own?.total ?? 10 })
-          if (config.carryManual) return
           if (own?.error) dispatch("carry", { id, state: "failed", error: own.error })
           else dispatch("carry", { id, state: "done", name })
         }, 0)

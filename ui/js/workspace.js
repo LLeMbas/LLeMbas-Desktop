@@ -363,7 +363,8 @@ function drawTree(force = true) {
     treeFiles: true,
     open: (e) => openFile(here, made, e),
     // The same as a drag onto another place's button, from the keyboard: the line's menu.
-    acrossItems: (e) => others().map((p) => ({ label: `${acrossWords(here, p.key)}…`, run: () => across([e], p.key) })),
+    // (Not what only leads out of the folder, nor what is neither a file nor a folder.)
+    acrossItems: (e) => (e.outside || e.kind === "other" ? [] : others().map((p) => ({ label: `${acrossWords(here, p.key)}…`, run: () => across([e], p.key) }))),
     dirItems: () => [],
     fileItems: () => [],
     across: { words: (to) => t("%(what)s: the folder is asked for next", { what: acrossWords(here, to) }), drop: (entries, to) => across(entries, to) },

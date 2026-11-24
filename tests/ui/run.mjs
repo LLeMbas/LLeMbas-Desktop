@@ -6716,11 +6716,15 @@ test("MD0: a file an agent showed that is not text is drawn in the chat by its k
   const reply = { id: "m2", role: "assistant", created_at: STAMP, complete: true, stopped: false, error: null, model: "qwen", metrics: null, steps: [{ index: 0, kind: "tools", open: false, calls }, { index: 1, kind: "text", open: true, markdown: "There they are." }] }
   const p = await page(md({ "GET /chats/chat1": { chat: chatRow(), messages: [userMessage("m1", "Show me"), reply], more: false, live: null }, [`GET /files/content${q(`${HOME}/Generated/notes.md`)}`]: { ...F4_CONTENT, path: `${HOME}/Generated/notes.md`, name: "notes.md" } }), { width: 1280, height: 900 })
   await openChatRow(p, "chat1")
+  // (A card is drawn when it comes into sight; the chat opens at its end, six cards down.)
+  await p.waitForSelector("#messages .mcard[data-media=image]", { state: "attached" })
+  await p.evaluate(() => document.querySelector("#messages .mcard[data-media=image]").scrollIntoView())
   await p.waitForSelector("#messages .mcard[data-media=image] img.mcard__image")
   assert.deepEqual(await p.$$eval("#messages .mcard", (l) => l.map((c) => c.dataset.media)), ["image", "pdf", "archive", "audio", "text", "binary"])
-  assert.deepEqual((await callsOf(p, "media_open"))[0], { source: "server", kind: "image", node: "node8" })
+  assert.ok((await callsOf(p, "media_open")).some((c) => c.source === "server" && c.kind === "image" && c.node === "node8"))
   assert.equal(await p.$$eval("#messages .tile", (l) => l.length), 0, "a shown picture is not an attachment")
   // The PDF: asked for, then the sealed viewer with the file's bytes by its id.
+  await p.evaluate(() => document.querySelector("#messages .mcard[data-media=pdf]").scrollIntoView())
   await p.click("#messages .mcard[data-media=pdf] .mcard__show")
   await p.waitForSelector("#messages .mcard[data-media=pdf] iframe")
   await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "viewer_bytes"))
@@ -6735,6 +6739,7 @@ test("MD0: a file an agent showed that is not text is drawn in the chat by its k
   }
   assert.match(await p.textContent("#messages .mcard[data-media=archive] .mcard__facts"), /1\.1 MB|1\.2 MB/)
   // Text: in the viewer beside the chat.
+  await p.evaluate(() => document.querySelector("#messages .mcard[data-media=text]").scrollIntoView())
   await p.click("#messages .mcard[data-media=text] .mcard__read")
   await p.waitForSelector("#viewer:not([hidden])")
   assert.equal(await p.textContent("#viewer-name"), "notes.md")
@@ -6890,7 +6895,7 @@ test("MD3: a PDF and a 3D model are drawn by the server's viewers in a sealed fr
   assert.equal(await p.getAttribute("#viewer-body iframe.sview__frame", "sandbox"), "allow-scripts")
   assert.equal(await p.evaluate(() => typeof window.pdfjsLib + typeof globalThis.pdfjsWorker), "undefinedundefined")
   assert.deepEqual(await callsOf(p, "viewer_open"), [{ kind: "pdf" }])
-  assert.deepEqual(await callsOf(p, "viewer_bytes"), [{ source: "server", path: `${HOME}/plan.pdf`, root: null, node: null }])
+  assert.deepEqual(await callsOf(p, "viewer_bytes"), [{ source: "server", path: `${HOME}/plan.pdf`, root: null, node: null, device: null }])
   // The frame fills the viewer; Download stays beside it.
   assert.ok(await p.$eval("#viewer-body iframe.sview__frame", (f) => { const [a, b] = [f.getBoundingClientRect(), document.getElementById("viewer-body").getBoundingClientRect()]; return Math.abs(a.width - b.width) < 2 && Math.abs(a.height - b.height) < 2 && a.height > 200 }))
   assert.deepEqual(await p.$$eval("#viewer-bar .btn", (l) => l.map((b) => b.textContent)), ["Download"])
@@ -6901,7 +6906,7 @@ test("MD3: a PDF and a 3D model are drawn by the server's viewers in a sealed fr
   await stl.waitForFunction(() => document.documentElement.hasAttribute("data-triangles") || document.documentElement.hasAttribute("data-failed") || !!document.querySelector(".note"), null, { timeout: 30000 })
   const drawn = await stl.evaluate(() => ({ triangles: document.documentElement.getAttribute("data-triangles"), note: document.querySelector(".note")?.textContent || "" }))
   assert.ok(drawn.triangles === "1" || drawn.note === "3D cannot be drawn here.", JSON.stringify(drawn))
-  assert.deepEqual((await callsOf(p, "viewer_bytes")).at(-1), { source: "server", path: `${HOME}/wedge.stl`, root: null, node: null })
+  assert.deepEqual((await callsOf(p, "viewer_bytes")).at(-1), { source: "server", path: `${HOME}/wedge.stl`, root: null, node: null, device: null })
   // The PDF's document was let go when the viewer moved on.
   assert.ok((await callsOf(p, "sealed_close")).length >= 1)
   // On a chat's card a model is drawn when asked for, by the file's id.
@@ -6912,7 +6917,7 @@ test("MD3: a PDF and a 3D model are drawn by the server's viewers in a sealed fr
   await p.click("#messages .mcard__show")
   await p.waitForSelector("#messages .mcard iframe.sview__frame[data-view=model3d]")
   await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "viewer_bytes" && c.args.node === "node9"))
-  assert.deepEqual((await callsOf(p, "viewer_bytes")).at(-1), { source: "server", path: null, root: null, node: "node9" })
+  assert.deepEqual((await callsOf(p, "viewer_bytes")).at(-1), { source: "server", path: null, root: null, node: "node9", device: null })
   assert.ok(await p.$eval("#messages .mcard iframe.sview__frame", (f) => f.getBoundingClientRect().height > 200 && f.getAttribute("sandbox") === "allow-scripts"))
   await shot(p, "md-model-card-1600")
   // A file that is gone says so, in the app's page, with no frame left behind.
@@ -9302,7 +9307,8 @@ test("WS2: the same hands on the files in all three places -- a new file and fol
   assert.deepEqual(await menuOf(`${DEV}/oven.py`), ["Open in the viewer", "Move", "Copy to…", "Transfer to This computer…", "Transfer to Server…", "Rename", "Delete"])
   // What the computer will not let be changed -- a file it protects, the files that run code -- is offered no change.
   assert.deepEqual(await menuOf(`${DEV}/.env`), ["Open in the viewer", "Transfer to This computer…", "Transfer to Server…"])
-  assert.equal(await p.$$eval(`${wsLine(`${DEV}/.git`)} .ftree__more, ${wsLine(`${DEV}/shared`)} .ftree__more`, (l) => l.length), 0, "a folder nothing may be done to has no menu")
+  assert.deepEqual(await menuOf(`${DEV}/.git`), ["Transfer to This computer…", "Transfer to Server…"])
+  assert.equal(await p.$$eval(`${wsLine(`${DEV}/shared`)} .ftree__more`, (l) => l.length), 0, "a link that leads out of the folder has no menu: nothing may be done to it")
   await hands(`${DEV}/oven.py`)
   assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/mkdir"), [{ path: DEV, name: "drafts" }])
   assert.deepEqual(await bodies(p, "PUT", "/devices/token2/fs/content"), [{ path: `${DEV}/todo.md`, text: "", create: true }])
