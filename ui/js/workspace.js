@@ -352,6 +352,8 @@ function filterTree() {
   const found = $("work-found")
   const mine = ++filterAsked
   if (!q || !pane) {
+    // (Nothing of the last search stays behind an emptied filter.)
+    found.replaceChildren()
     found.hidden = true
     $("work-tree").hidden = false
     return
