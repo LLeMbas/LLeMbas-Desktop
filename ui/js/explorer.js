@@ -219,7 +219,8 @@ export function explorer(el, source) {
       load: () => fetchDir(path),
       draw: (answer) => {
         const all = answer.entries || []
-        if (ul.parentElement === treeBox || path === source.top()) known.clear()
+        // (Never forgotten when a folder is read again: a line still on the screen is always
+        // one the tree knows, whichever folder was read last.)
         for (const e of all) known.set(e.path, e)
         for (const e of all.filter(isDir)) ul.append(twig(e, depth))
         if (source.treeFiles) {
@@ -232,7 +233,7 @@ export function explorer(el, source) {
   }
   /** What a line of a tree that lists files has at its end: the list's own menu for the entry. */
   const more = (e) =>
-    source.treeFiles
+    source.treeFiles && itemsFor(e).length
       ? h("button", { type: "button", class: "tool ftree__more", "aria-label": t("More for %(name)s", { name: e.name }), title: t("More for %(name)s", { name: e.name }), onclick: (ev) => menu(ev.currentTarget, itemsFor(e)) }, icon(ICONS.more))
       : null
   /** A file's line in the tree (only where the tree lists files): opens it. */
@@ -476,11 +477,13 @@ export function explorer(el, source) {
     const items = []
     if (isDir(e)) {
       items.push(...(source.dirItems?.(e) || []))
-      if (ops?.mkdir) items.push({ label: t("New folder"), run: () => newIn(e.path, true) })
-      if (ops?.mkfile) items.push({ label: t("New file"), run: () => newIn(e.path, false) })
+      if (ops?.mkdir && !e.fixed) items.push({ label: t("New folder"), run: () => newIn(e.path, true) })
+      if (ops?.mkfile && !e.fixed) items.push({ label: t("New file"), run: () => newIn(e.path, false) })
     } else items.push({ label: t("Open in the viewer"), run: () => source.open(e) }, ...(source.fileItems?.(e) || []))
     if (e.kind === "mount" || !ops) return items
     const across = source.acrossItems?.(e) || []
+    // What may not be changed where it is can still be taken to another place.
+    if (e.fixed) return across.length ? [...items, ...(items.length ? [null] : []), ...across] : items
     items.push(null, { label: t("Move"), run: () => sendThese([e], false) }, { label: t("Copy to…"), run: () => sendThese([e], true) }, ...across)
     items.push(null, { label: t("Rename"), run: () => renameOne(e) }, { label: t("Delete"), danger: true, run: () => removeThese([e]) })
     return items
@@ -850,24 +853,24 @@ export async function readLocal(root, path) {
 // there (the CLI's `_lembas/fs/*`, harness spec 3.11.0 *Device files*; inside that computer's own
 // folders and under its limits).
 //
-// 🚧 ASSUMED. The editor round's contract asks the server for "`/api/v2` routes for the apps to
-// browse and edit a linked computer's files (list, read, write with a base check, mkdir, move,
-// copy, delete, upload, download)" and names none. Until the server's routes and fixtures exist,
-// the addresses and shapes below are this app's reading of it, written as the server's own
-// `/files` routes are and as the spec's `_lembas/fs/*` results read. DEVICE_FILES and
-// `deviceSource` are the whole seam: nothing else in the app spells a device's file route
-// (Rust's `upload_to_device` spells the upload). The fixtures the tests answer with are in
-// tests/ui/fixtures/assumed/, apart from the ones pinned from the server.
+// The server's routes for the apps (its `api/v2/device_files.py`; fixtures device_fs_*.json),
+// shaped as its own `/files` routes are, so a computer's file is read with the code that reads
+// the server's. DEVICE_FILES and `deviceSource` are the one place the app spells them (Rust's
+// `upload_to_device` spells the upload):
 //
-//   GET  /devices/{id}/fs?path=           -> { device, path, parent, entries: [{ name, path, kind: "dir"|"file", size, file_kind?, updated_at }] }
-//   GET  /devices/{id}/fs/content?path=   -> { path, name, size, mime, file_kind, sha, text, writable, withheld?: { reason, message } }
-//   PUT  /devices/{id}/fs/content         { path, text, base? | force?, create? } -> { sha, text? }; 409 { detail } when it changed
-//   POST /devices/{id}/fs/mkdir           { path, name }
-//   POST /devices/{id}/fs/rename          { path, name }
-//   POST /devices/{id}/fs/move | /copy    { paths, to } -> { results: [{ path, ok, error }], done, failed }
-//   POST /devices/{id}/fs/delete          { paths }     -> the same (to that computer's trash, or refused in words)
+//   GET  /devices/{id}/fs?path=           -> { device, path, parent, writable, entries: [{ name, path, kind: "dir"|"file"|"other",
+//                                              size, updated_at, file_kind, link, outside, protected, runs_code, writable }], truncated }
+//   GET  /devices/{id}/fs/content?path=   -> { path, name, size, mime, kind, file_kind, writable, language, sha, text, withheld? }
+//   PUT  /devices/{id}/fs/content         { path, text, base | create | force } -> { path, size, mtime, sha };
+//                                         409 { detail, reason: "changed", conflict, sha } when it changed
+//   POST /devices/{id}/fs/mkdir           { path, name } -> { path }
+//   POST /devices/{id}/fs/rename          { path, name } -> { path }
+//   POST /devices/{id}/fs/move | /copy    { paths, to } -> { results: [{ path, ok, error?, reason? }], done, failed }
+//   POST /devices/{id}/fs/delete          { paths }     -> the same (to that computer's trash; one it has no trash for fails, in words)
 //   POST /devices/{id}/fs/upload?path=    multipart `files` (by Rust: `device_upload_dropped`)
-// Paths are absolute on that computer, as its directories are listed (`/devices/{id}/directories`).
+// Paths are absolute on that computer. What the computer will not let be changed says so
+// (`writable: false` on an entry, on a file's content): no change is offered there. Not used
+// yet: `/fs/raw` (a file's bytes), `/fs/stat`, `/fs/search`, a delete for good (`permanent`).
 export const DEVICE_FILES = {
   list: (device, path) => `/devices/${enc(device)}/fs?path=${enc(path)}`,
   read: (device, path) => `/devices/${enc(device)}/fs/content?path=${enc(path)}`,
@@ -896,7 +899,7 @@ export function deviceSource(device, root, name) {
         withheld: f.withheld,
         size: f.size,
         sha: f.sha,
-        // (No bytes of a linked computer's file are served to the viewer yet: what is not text says so.)
+        // (A linked computer's bytes -- `/fs/raw` -- are not drawn by the viewer yet: what is not text says so.)
         save: f.writable !== false && typeof f.text === "string" && !f.withheld ? (text, { base, force }) => api("PUT", DEVICE_FILES.write(device), force ? { path: at, text, force: true } : { path: at, text, base }) : undefined,
         reload,
       }
@@ -928,7 +931,8 @@ export function deviceSource(device, root, name) {
     list: async (path) => {
       const r = await get(DEVICE_FILES.list(device, path || top))
       if (!r || !Array.isArray(r.entries)) throw { detail: r?.error || t("The server's answer could not be read.") }
-      return { path: r.path ?? path, entries: r.entries }
+      // (An entry the computer lets nobody change from here is offered no change: `fixed`.)
+      return { path: r.path ?? path, entries: r.entries.map((e) => (e.writable === false ? { ...e, fixed: true } : e)) }
     },
     preview: read,
     open,

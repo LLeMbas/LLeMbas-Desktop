@@ -9,6 +9,7 @@ import { agentBlock, onAgentChange, link } from "./agent.js"
 import { localTheme, chooseTheme, accountTheme, accountThemes, chosenLanguage, chooseLanguage, accountLanguage } from "./look.js"
 import { why } from "./bridge.js"
 import { mayLeave } from "./viewer.js"
+import { workspaceMayLeave } from "./workspace.js"
 
 let folderError = ""
 let current = () => null
@@ -72,7 +73,7 @@ export function renderSettings(s) {
         t("Signing out gives the app's sign-in up on the server; the agent's link stays. Sign out to use another server."),
         // Signing out closes what is open (and is how another server is chosen): an edit in the
         // viewer that was not saved is asked about first, never dropped without a word.
-        h("button", { type: "button", class: "btn btn--sm", id: "sign-out", text: t("Sign out"), onclick: async () => (await mayLeave()) && invoke("sign_out") }),
+        h("button", { type: "button", class: "btn btn--sm", id: "sign-out", text: t("Sign out"), onclick: async () => (await mayLeave()) && (await workspaceMayLeave()) && invoke("sign_out") }),
       ),
     ),
   )

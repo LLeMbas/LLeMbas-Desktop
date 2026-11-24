@@ -759,11 +759,10 @@ pub fn upload_to_library(
 }
 
 /// Send one file to a linked computer, into the directory `dir` there, through the server's
-/// relay. ASSUMED: the route (`POST /devices/{id}/fs/upload?path=`, multipart `files`, as the
-/// library's upload) is the app's reading of the editor round's contract -- "`/api/v2` routes
-/// for the apps to browse and edit a linked computer's files (... upload, download)" -- and no
-/// such route was in the server when this was written. A server without it answers 404, which
-/// the page says. The one place this address is spelled on this side.
+/// relay: `POST /devices/{id}/fs/upload?path=`, multipart `files`, as the library's upload (the
+/// server's `api/v2/device_files.py`; a name that is taken there is its 409, in words). A
+/// server from before the route answers 404, which the page says. The one place this address
+/// is spelled on this side.
 pub fn upload_to_device(
     app: &str,
     token: &str,

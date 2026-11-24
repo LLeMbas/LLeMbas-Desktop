@@ -8971,12 +8971,16 @@ const WS_ROOT = "/home/dev/project"
 const WS_OVEN = "def bake(loaf):\n    return loaf.heat(220)\n"
 const wsEntry = (name, path, kind, file_kind = null) => ({ name, path, kind, size: kind === "dir" ? 0 : 44, modified: 1767323045, file_kind })
 const wsRead = (path, text, kind, over = {}) => ({ root: WS_ROOT, path, name: path.split("/").pop(), size: text.length, text, withheld: null, kind, mime: "text/plain", sha: SHA, writable: true, ...over })
-const WS_DEVICE = assumed("device_fs_listing")
-const WS_DEVICE_FILE = assumed("device_fs_content")
+// A linked computer's folder, as the server lists it (its fixture, where nothing may be
+// changed: `writable` false throughout) -- and the same folder where the computer lets its
+// files be changed, all but the ones it names as protected or as leading outside.
+const WS_DEVICE_RO = fixture("device_fs_listing")
+const WS_DEVICE = { ...WS_DEVICE_RO, device: "token2", writable: true, entries: WS_DEVICE_RO.entries.map((e) => ({ ...e, writable: !e.protected && !e.outside && !e.runs_code })) }
+const WS_DEVICE_FILE = fixture("device_fs_content")
 // (The editor's two models, and the models they name by `ref`: the server's own fixtures.)
 const WS_SETTINGS = fixture("editor")
 const WS_MODELS = fixture("models")
-const DEV = "/home/user/project"
+const DEV = WS_DEVICE_RO.path
 
 function ws(over = {}, commands = {}, extra = {}) {
   return {
@@ -8992,7 +8996,7 @@ function ws(over = {}, commands = {}, extra = {}) {
       "GET /models": WS_MODELS,
       "GET /devices/token2/directories": { ...fixture("device_directories"), device: "token2", path: DEV, parent: "/home/user", entries: [] },
       "GET /devices/token2/fs": WS_DEVICE,
-      [`GET /devices/token2/fs${q(`${DEV}/src`)}`]: { device: "token2", path: `${DEV}/src`, parent: DEV, entries: [] },
+      [`GET /devices/token2/fs${q(`${DEV}/src`)}`]: { device: "token2", path: `${DEV}/src`, parent: DEV, writable: true, entries: [], truncated: false },
       "GET /devices/token2/fs/content": WS_DEVICE_FILE,
       ...over,
     }),
@@ -9138,8 +9142,8 @@ test("WS1: the workspace on this computer: the three places at its top, a tree o
 })
 
 test("WS2: the same hands on the files in all three places -- a new file and folder, rename, move and copy through the dialog, delete -- each done by that place's own means, and the same file kinds drawn; the server's and a linked computer's files are edited and saved from what was read, with the same warning when one changed meanwhile", async () => {
-  const batch = assumed("device_fs_batch")
-  const conflict = assumed("device_fs_conflict")
+  const batch = { ...fixture("device_fs_batch"), failed: 0, results: [{ path: `${DEV}/oven.py`, ok: true, trash: true }] }
+  const conflict = fixture("device_fs_conflict")
   const p = await page(
     ws(
       {
@@ -9149,9 +9153,9 @@ test("WS2: the same hands on the files in all three places -- a new file and fol
         "POST /files/move": F4_HOME,
         "POST /files/copy": fixture("files_copied"),
         "DELETE /files": F4_HOME,
-        "POST /devices/token2/fs/mkdir": WS_DEVICE,
-        "PUT /devices/token2/fs/content": { sha: "sha256:" + "56".repeat(32) },
-        "POST /devices/token2/fs/rename": WS_DEVICE,
+        "POST /devices/token2/fs/mkdir": { path: `${DEV}/drafts` },
+        "PUT /devices/token2/fs/content": fixture("device_fs_written"),
+        "POST /devices/token2/fs/rename": { path: `${DEV}/renamed.md` },
         "POST /devices/token2/fs/move": batch,
         "POST /devices/token2/fs/copy": batch,
         "POST /devices/token2/fs/delete": batch,
@@ -9249,33 +9253,52 @@ test("WS2: the same hands on the files in all three places -- a new file and fol
   await p.click("dialog[open] #dirs-use")
   await p.waitForSelector(wsLine(`${DEV}/oven.py`))
   assert.equal(await p.textContent("#work-folder"), "project")
-  assert.deepEqual(await p.$$eval("#work-tree .ftree > li", (l) => l.map((x) => x.dataset.path)), [`${DEV}/src`, `${DEV}/notes.md`, `${DEV}/oven.py`])
-  assert.deepEqual(await menuOf(`${DEV}/notes.md`), ["Open in the viewer", "Move", "Copy to…", "Transfer to This computer…", "Transfer to Server…", "Rename", "Delete"])
-  await hands(`${DEV}/notes.md`)
+  assert.deepEqual(await p.$$eval("#work-tree .ftree > li", (l) => l.map((x) => x.dataset.path)), [`${DEV}/src`, `${DEV}/shared`, `${DEV}/.git`, `${DEV}/.env`, `${DEV}/oven.py`, `${DEV}/loaf.png`])
+  assert.deepEqual(await menuOf(`${DEV}/oven.py`), ["Open in the viewer", "Move", "Copy to…", "Transfer to This computer…", "Transfer to Server…", "Rename", "Delete"])
+  // What the computer will not let be changed -- a file it protects, the files that run code -- is offered no change.
+  assert.deepEqual(await menuOf(`${DEV}/.env`), ["Open in the viewer", "Transfer to This computer…", "Transfer to Server…"])
+  assert.equal(await p.$$eval(`${wsLine(`${DEV}/.git`)} .ftree__more, ${wsLine(`${DEV}/shared`)} .ftree__more`, (l) => l.length), 0, "a folder nothing may be done to has no menu")
+  await hands(`${DEV}/oven.py`)
   assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/mkdir"), [{ path: DEV, name: "drafts" }])
   assert.deepEqual(await bodies(p, "PUT", "/devices/token2/fs/content"), [{ path: `${DEV}/todo.md`, text: "", create: true }])
-  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/rename"), [{ path: `${DEV}/notes.md`, name: "renamed.md" }])
-  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/move"), [{ paths: [`${DEV}/notes.md`], to: `${DEV}/src` }])
-  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/copy"), [{ paths: [`${DEV}/notes.md`], to: `${DEV}/src` }])
-  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/delete"), [{ paths: [`${DEV}/notes.md`] }])
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/rename"), [{ path: `${DEV}/oven.py`, name: "renamed.md" }])
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/move"), [{ paths: [`${DEV}/oven.py`], to: `${DEV}/src` }])
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/copy"), [{ paths: [`${DEV}/oven.py`], to: `${DEV}/src` }])
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/delete"), [{ paths: [`${DEV}/oven.py`] }])
   await wsFile(p, `${DEV}/oven.py`, "oven.py")
-  assert.equal(await wsDoc(p), WS_OVEN)
-  assert.match(await p.textContent(`${wsPanel} .wpanel__path`), /laptop · \/home\/user\/project\/oven\.py/)
+  assert.equal(await wsDoc(p), WS_DEVICE_FILE.text)
+  assert.match(await p.textContent(`${wsPanel} .wpanel__path`), /laptop · \/home\/dev\/project\/oven\.py/)
   await p.click(`${wsPanel} .cm-content`)
   await p.keyboard.press("Control+End")
   await p.keyboard.type("# hot")
   await p.keyboard.press("Control+s")
   await p.waitForFunction(() => window.__mock.api("PUT", "/devices/token2/fs/content").length === 2)
-  assert.deepEqual((await bodies(p, "PUT", "/devices/token2/fs/content")).at(-1), { path: `${DEV}/oven.py`, text: `${WS_OVEN}# hot`, base: WS_DEVICE_FILE.sha })
-  await p.evaluate((detail) => window.__mock.answer("PUT /devices/token2/fs/content", { __error: { status: 409, detail } }), conflict.detail)
+  assert.deepEqual((await bodies(p, "PUT", "/devices/token2/fs/content")).at(-1), { path: `${DEV}/oven.py`, text: `${WS_DEVICE_FILE.text}# hot`, base: WS_DEVICE_FILE.sha })
+  await p.evaluate((c) => window.__mock.answer("PUT /devices/token2/fs/content", { __error: { status: 409, ...c } }), conflict)
   await p.keyboard.type("!")
   await p.keyboard.press("Control+s")
   await p.waitForSelector(`${wsPanel} .viewer__bar.is-conflict`)
   assert.equal(await p.textContent(`${wsPanel} .viewer__said`), conflict.detail)
-  await p.evaluate(() => window.__mock.answer("PUT /devices/token2/fs/content", { sha: "sha256:" + "78".repeat(32) }))
+  await p.evaluate((w) => window.__mock.answer("PUT /devices/token2/fs/content", w), fixture("device_fs_written"))
   await p.click(`${wsPanel} .viewer__force`)
   await p.waitForFunction(() => window.__mock.api("PUT", "/devices/token2/fs/content").length === 4)
-  assert.deepEqual((await bodies(p, "PUT", "/devices/token2/fs/content")).at(-1), { path: `${DEV}/oven.py`, text: `${WS_OVEN}# hot!`, force: true })
+  assert.deepEqual((await bodies(p, "PUT", "/devices/token2/fs/content")).at(-1), { path: `${DEV}/oven.py`, text: `${WS_DEVICE_FILE.text}# hot!`, force: true })
+  // A computer that lets nothing be changed (the server's own listing, as its fixture has it):
+  // every line opens, none offers a change, and a file's text is read and not written.
+  const ro = await page(ws({ "GET /devices/token2/fs": WS_DEVICE_RO, "GET /devices/token2/fs/content": { ...WS_DEVICE_FILE, writable: false } }))
+  await wsOpen(ro)
+  await ro.click('#work-places [data-place="device:token2"]')
+  await ro.click("#work-tree .fx__empty .btn")
+  await ro.fill("dialog[open] .dirs__typed", DEV)
+  await ro.click("dialog[open] #dirs-use")
+  await ro.waitForSelector(wsLine(`${DEV}/oven.py`))
+  await ro.click(`${wsLine(`${DEV}/oven.py`)} .ftree__more`)
+  assert.deepEqual(await ro.$$eval(".menu .menu__item", (l) => l.map((x) => x.textContent)), ["Open in the viewer", "Transfer to This computer…", "Transfer to Server…"])
+  await ro.keyboard.press("Escape")
+  await ro.click(`${wsLine(`${DEV}/oven.py`)} .ftree__row`)
+  await ro.waitForSelector(`${wsPanel} .cm-content[contenteditable="false"]`)
+  assert.equal(await ro.$$eval(`${wsPanel} .viewer__save`, (l) => l.length), 0)
+  assert.deepEqual(ro.errors, [])
   // A server without the routes: said in its place, with Try again -- never an empty box.
   const old = await page(ws({ "GET /devices/token2/fs": { __error: { status: 404, detail: "Not Found" } } }))
   await wsOpen(old)
@@ -9379,7 +9402,7 @@ test("WS3: the chat beside the files is the agent's chat for that folder on that
 test("WS4: a drop says in words what it does before it is let go: a line of the tree onto a folder is moved there; onto another place's button it is uploaded, downloaded or transferred into a folder chosen next; files from outside the window are copied into this computer's folder, uploaded to the server's, transferred to a linked computer's -- and on the chat they are the chat's", async () => {
   const p = await page(
     ws(
-      { "PUT /devices/token2/fs/content": { sha: "sha256:" + "56".repeat(32) }, "PUT /files/content": { sha: "34".repeat(32) } },
+      { "PUT /devices/token2/fs/content": fixture("device_fs_written"), "PUT /files/content": { sha: "34".repeat(32) } },
       {
         local_transfer: [{ path: "README.md", ok: true, to: "src/README.md" }],
         local_upload: { listing: null, sent: 1, failed: [] },
@@ -9876,6 +9899,265 @@ test("WS9: the workspace at every width: wide, the files, the tabs and the chat 
     assert.deepEqual(p.errors, [])
     await p.context().close()
   }
+})
+
+const WS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg>\n'
+/** The workspace's folder with a picture that is text as well in it. */
+const wsWithSvg = (over = {}, commands = {}, extra = {}) => {
+  const c = ws(over, commands, extra)
+  c.commands.local_list[""].entries.push(wsEntry("logo.svg", "logo.svg", "file", "svg"))
+  c.commands.local_read["logo.svg"] = wsRead("logo.svg", WS_SVG, "svg", { mime: "image/svg+xml" })
+  return c
+}
+const wsSay = (p, st) => p.evaluate((x) => ((window.__mockConfig.status = x), window.__mock.emit("status", x)), st)
+const wsUnsaved = (p) => p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "set_unsaved").map((c) => c.args.count))
+
+test("WS10: an edit in a tab that was not saved is never thrown away without a word: an SVG's source shown as its picture again asks first; signing out names the files and waits for the answer; the app is told how many there are (it asks before Quit); a sign-in refused under the edit puts the tabs by -- nobody else sees them -- and they are back, as they were, for the person they belong to; Ctrl+W closes a tab only from the workspace's own part", async () => {
+  const p = await page(wsWithSvg())
+  await wsOpen(p)
+  await p.waitForSelector(wsLine("logo.svg"))
+  // The picture; its source, in the editor; an edit.
+  await p.click(`${wsLine("logo.svg")} .ftree__row`)
+  await p.waitForSelector(`${wsPanel} img.viewer__image`)
+  await p.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Source$/ }).click()
+  await p.waitForSelector(`${wsPanel} .cm-content`)
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+End")
+  await p.keyboard.type("<!-- mine -->")
+  await p.waitForFunction(() => document.querySelector('.wtab[data-dirty="true"]'))
+  // Preview: asked first. Cancel keeps the edit; Discard shows the picture.
+  await p.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Preview$/ }).click()
+  await p.waitForSelector("dialog[open]")
+  assert.match(await p.textContent("dialog[open]"), /Not saved yet.*logo\.svg/s)
+  await p.click("dialog[open] .btn:not(.btn--danger)")
+  assert.equal(await wsDoc(p), `${WS_SVG}<!-- mine -->`)
+  assert.equal(await p.$$eval(`${wsPanel} img.viewer__image`, (l) => l.length), 0)
+  // The app knows of one edit not saved.
+  assert.equal((await wsUnsaved(p)).at(-1), 1)
+  // Ctrl+W from the chat's message box closes nothing; from the editor it asks (the edit), and Cancel keeps the tab.
+  await p.focus("#composer-text")
+  await p.keyboard.press("Control+w")
+  await p.waitForTimeout(80)
+  assert.equal(await p.$$eval(".wtab", (l) => l.length), 1)
+  assert.equal(await p.$$eval("dialog[open]", (l) => l.length), 0, "nothing was asked: the key was the message box's")
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+w")
+  await p.waitForSelector("dialog[open]")
+  await p.click("dialog[open] .btn:not(.btn--danger)")
+  assert.equal(await p.$$eval(".wtab", (l) => l.length), 1)
+  // Sign out, from Settings: the file is named; Cancel signs nobody out.
+  await p.evaluate(() => document.getElementById("settings-btn").click())
+  await p.waitForSelector("#sign-out")
+  await p.click("#sign-out")
+  await p.waitForSelector("dialog[open]")
+  assert.match(await p.textContent("dialog[open]"), /In the workspace: logo\.svg/)
+  await p.click("dialog[open] .btn:not(.btn--danger)")
+  await p.waitForTimeout(50)
+  assert.equal((await callsOf(p, "sign_out")).length, 0)
+  // The sign-in is refused under the edit (the server's word, nobody asked): another person
+  // signs in and sees no tab of it -- and the app still counts the edit.
+  await wsSay(p, status({ account: null, linked: false }))
+  await p.waitForSelector("#shell", { state: "hidden" })
+  await wsSay(p, status({ account: { name: "Bo Example", email: "bo@example.org" } }))
+  await p.waitForSelector("#shell:not([hidden])")
+  await wsOpen(p)
+  await p.waitForSelector(wsLine("README.md"))
+  assert.equal(await p.$$eval(".wtab", (l) => l.length), 0)
+  assert.equal(await p.$$eval("#work-panels .wpanel", (l) => l.length), 0, "nothing of it is in the page")
+  assert.equal((await wsUnsaved(p)).at(-1), 1, "the edit put by is still an edit not saved")
+  // The first person again: the tab is back, with the edit, not saved.
+  await wsSay(p, status({ account: null, linked: false }))
+  await p.waitForSelector("#shell", { state: "hidden" })
+  await wsSay(p, status())
+  await p.waitForSelector("#shell:not([hidden])")
+  await wsOpen(p)
+  await p.waitForSelector('.wtab[data-dirty="true"]')
+  assert.equal(await p.textContent('.wtab__open[aria-selected="true"] .wtab__name'), "logo.svg")
+  assert.equal(await wsDoc(p), `${WS_SVG}<!-- mine -->`)
+  // Sign out and Discard: the tab goes, the app counts nothing, and the sign-out is asked for.
+  await p.evaluate(() => document.getElementById("settings-btn").click())
+  await p.click("#sign-out")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "sign_out"))
+  assert.equal((await wsUnsaved(p)).at(-1), 0)
+  assert.deepEqual(p.errors, [])
+  // Preview and Discard: the picture, the edit gone by the person's own word.
+  const d = await page(wsWithSvg())
+  await wsOpen(d)
+  await d.click(`${wsLine("logo.svg")} .ftree__row`)
+  await d.waitForSelector(`${wsPanel} img.viewer__image`)
+  await d.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Source$/ }).click()
+  await d.click(`${wsPanel} .cm-content`)
+  await d.keyboard.type("x")
+  await d.waitForFunction(() => document.querySelector('.wtab[data-dirty="true"]'))
+  await d.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Preview$/ }).click()
+  await d.click("dialog[open] .btn--danger")
+  await d.waitForSelector(`${wsPanel} img.viewer__image`)
+  await d.waitForFunction(() => document.querySelector('.wtab[data-dirty="false"]'))
+  assert.equal((await wsUnsaved(d)).at(-1), 0)
+  assert.deepEqual(d.errors, [])
+})
+
+const wsWatchers = (p) => p.evaluate(async () => (await import("/js/assist.js")).assistWatchers?.() ?? null)
+const wsRewrite = async (p) => {
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+a")
+  await p.keyboard.press("Control+e")
+}
+
+test("WS11: an editor that is gone asks for nothing and listens to nothing: a file seen as its source and edited again keeps one listener for the settings, not one more each time, and a completion on its way when the editor goes is cancelled", async () => {
+  const p = await page(ws({}, {}, { editorManual: true }))
+  await wsOpen(p)
+  await wsOven(p)
+  // A completion on its way when the editor goes (the file shown as its source): cancelled.
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+End")
+  await p.keyboard.type("x")
+  await p.waitForFunction(() => window.__mock.editorWaiting().length === 1)
+  const asked = (await p.evaluate(() => window.__mock.editorWaiting()))[0].params.id
+  await p.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Source$/ }).click()
+  await p.waitForSelector(`${wsPanel} .cm-content[contenteditable="false"]`)
+  await p.waitForFunction((id) => window.__mock.calls.some((c) => c.cmd === "editor_cancel" && c.args.id === id && c.args.edit === false), asked)
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "", cancelled: true }))
+  // Edited again and seen as source again, a few times: the listeners do not pile up.
+  const gone = await wsWatchers(p)
+  assert.equal(typeof gone, "number")
+  for (let i = 0; i < 3; i++) {
+    await p.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Edit$/ }).click()
+    await p.waitForSelector(`${wsPanel} .cm-content[contenteditable="true"]`)
+    assert.equal(await wsWatchers(p), gone + 1, "one editor lives, one listens")
+    await p.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Source$/ }).click()
+    await p.waitForSelector(`${wsPanel} .cm-content[contenteditable="false"]`)
+    assert.equal(await wsWatchers(p), gone, "an editor that is gone listens to nothing")
+  }
+  // The tab closed with its editor alive: the same.
+  await p.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Edit$/ }).click()
+  await p.waitForSelector(`${wsPanel} .cm-content[contenteditable="true"]`)
+  await p.click(".wtab__close")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => document.querySelectorAll(".wtab").length === 0)
+  assert.equal(await wsWatchers(p), gone)
+  assert.deepEqual(p.errors, [])
+})
+
+test("WS12: a rewrite is one at a time in a tab, and goes with its tab: asked for again while one is under way it is not begun, and the tab closed while it is written tells the CLI to stop", async () => {
+  const p = await page(ws({}, {}, { editorManual: true }))
+  await wsOpen(p)
+  await wsOven(p)
+  await wsRewrite(p)
+  await p.fill("dialog[open] .dialog__input", "hotter")
+  await p.click('dialog[open] button[type="submit"]')
+  await p.waitForFunction(() => window.__mock.editorWaiting().some((c) => c.method === "_lembas/edit"))
+  const edit = (await p.evaluate(() => window.__mock.editorWaiting())).find((c) => c.method === "_lembas/edit").params.id
+  // A second one meanwhile: said, no question asked, nothing sent.
+  await wsRewrite(p)
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "A rewrite is already under way here: answer or stop it first.")
+  assert.equal(await p.$$eval("dialog[open]", (l) => l.length), 0)
+  assert.equal((await p.evaluate(() => window.__mock.editorWaiting())).filter((c) => c.method === "_lembas/edit").length, 1)
+  // The tab closed while it is written (nothing of the file was changed: no question).
+  await p.click(".wtab__close")
+  await p.waitForFunction(() => document.querySelectorAll(".wtab").length === 0)
+  await p.waitForFunction((id) => window.__mock.calls.some((c) => c.cmd === "editor_cancel" && c.args.id === id && c.args.edit === true), edit)
+  // Its late answer draws nothing anywhere.
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "x\n", model: "qwen" }))
+  await p.waitForTimeout(80)
+  assert.equal(await p.$$eval(".review .dhunk", (l) => l.length), 0)
+  // The file read again while changes wait for their answers: the changes go with the editor they were for.
+  await wsOven(p)
+  await wsRewrite(p)
+  await p.fill("dialog[open] .dialog__input", "hotter")
+  await p.click('dialog[open] button[type="submit"]')
+  await p.waitForFunction(() => window.__mock.editorWaiting().some((c) => c.method === "_lembas/edit"))
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "def bake(loaf):\n    return loaf.heat(240)\n", model: "qwen" }))
+  await p.waitForSelector(`${wsPanel} .review .dhunk`)
+  await p.locator(`${wsPanel} .viewer__modes .seg`, { hasText: /^Source$/ }).click()
+  await p.waitForSelector(`${wsPanel} .cm-content[contenteditable="false"]`)
+  assert.ok(await p.isHidden(`${wsPanel} .review`), "no changes are left for an editor that is gone")
+  assert.equal(await wsDoc(p), WS_OVEN)
+  assert.deepEqual(p.errors, [])
+})
+
+test("WS13: the chat is told only of files of the place it is aimed at: with this computer's file still open in a tab and the chat aimed at the server's files, a message says nothing of an editor; with a file of the server's in front it says that one, and no other place's among the open files", async () => {
+  const p = await page(ws({ "POST /chats": { chat: chatRow({ id: "chat9" }), message: userMessage("m7", "Shorter?"), reply: null } }))
+  await wsOpen(p)
+  await wsFile(p, "README.md", "README.md")
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+a")
+  await p.click('#work-places [data-place="server"]')
+  await p.waitForSelector(wsLine(`${HOME}/lembas.md`))
+  await p.waitForFunction(() => document.getElementById("main").dataset.new === "true")
+  await p.fill("#composer-text", "Shorter?")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").filter((c) => c.args.path === "/chats").length === 1)
+  assert.equal((await made_(p))[0].editor, undefined, "a file of another place is none of this chat's")
+  await p.evaluate(() => document.getElementById("new-chat-btn").click())
+  await wsOpen(p)
+  await p.waitForFunction(() => document.getElementById("main").dataset.new === "true")
+  await wsFile(p, `${HOME}/lembas.md`, "lembas.md")
+  await p.fill("#composer-text", "Shorter?")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").filter((c) => c.args.path === "/chats").length === 2)
+  assert.deepEqual((await made_(p))[1].editor, { path: `${HOME}/lembas.md`, cursor: { line: 1 } })
+  assert.deepEqual(p.errors, [])
+})
+
+test("WS14: a file carried to this computer from another place is written whole in one step, under its name as it is, or not at all: no empty file is made ahead of its text, and a refusal leaves nothing behind", async () => {
+  const p = await page(ws({}, { local_make_text: "oven.py", local_make: "oven.py" }))
+  await wsOpen(p)
+  await p.click('#work-places [data-place="device:token2"]')
+  await p.click("#work-tree .fx__empty .btn")
+  await p.fill("dialog[open] .dirs__typed", DEV)
+  await p.click("dialog[open] #dirs-use")
+  await p.waitForSelector(wsLine(`${DEV}/oven.py`))
+  const carry = async () => {
+    await wsMenu(p, `${DEV}/oven.py`, "Transfer to This computer…")
+    await p.waitForSelector("dialog[open] #fpick-use:not([disabled])")
+    await p.click("dialog[open] #fpick-use")
+    await p.waitForSelector("dialog[open]", { state: "detached" })
+  }
+  await carry()
+  await statusSays(p, "work-status", "Transferred to This computer: 1.")
+  assert.deepEqual(await callsOf(p, "local_make_text"), [{ root: WS_ROOT, dir: "", name: "oven.py", text: WS_DEVICE_FILE.text }])
+  await p.evaluate(() => (window.__mockConfig.commands.local_make_text = { __error: { status: 400, detail: "There is already something called oven.py here." } }))
+  await carry()
+  await statusSays(p, "work-status", "oven.py: There is already something called oven.py here.")
+  assert.equal((await callsOf(p, "local_make")).length, 0, "no empty file is made ahead of its text")
+  assert.equal((await callsOf(p, "local_write")).length, 0)
+  assert.deepEqual(p.errors, [])
+})
+
+test("WS15: a line inside a folder, dragged onto another place after the tree was read again, is still the file it is: the drop says what it does and does it", async () => {
+  const p = await page(ws({}, { local_upload: { listing: null, sent: 1, failed: [] } }))
+  await wsOpen(p)
+  await p.waitForSelector(wsLine("src"))
+  await p.click(`${wsLine("src")} .ftree__row`)
+  await p.waitForSelector(wsLine("src/oven.py"))
+  await p.click("#work-refresh")
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "local_list" && c.args.path === "src").length >= 2)
+  await p.waitForSelector(wsLine("src/oven.py"))
+  // (And the top folder alone read again, as after a change in it: the lines under it stay known.)
+  await p.click("#work-mkdir")
+  await p.fill("dialog[open] .dialog__input", "drafts")
+  await p.click('dialog[open] button[type="submit"]')
+  await p.waitForSelector("dialog[open]", { state: "detached" })
+  await p.waitForSelector(wsLine("src/oven.py"))
+  const centre = async (sel) => {
+    const b = await p.locator(sel).boundingBox()
+    return [b.x + Math.min(b.width / 2, 60), b.y + b.height / 2]
+  }
+  const [x, y] = await centre(`${wsLine("src/oven.py")} .ftree__name`)
+  const [tx, ty] = await centre('#work-places [data-place="server"]')
+  await p.mouse.move(x, y)
+  await p.mouse.down()
+  await p.mouse.move(x + 4, y + 4)
+  await p.mouse.move(tx, ty, { steps: 6 })
+  assert.equal(await p.textContent(".fdrag__does"), "Upload to the server: the folder is asked for next")
+  await p.mouse.up()
+  await p.waitForSelector("dialog[open] #fpick-use:not([disabled])")
+  await p.click("dialog[open] #fpick-use")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_upload"))
+  assert.deepEqual(await callsOf(p, "local_upload"), [{ root: WS_ROOT, paths: ["src/oven.py"], dir: HOME }])
+  assert.deepEqual(p.errors, [])
 })
 
 // --- Run ----------------------------------------------------------------------------------------

@@ -31,9 +31,14 @@ relays them. With older ones each of those says so in words and the rest works.
   server's, or **transferred** to a linked computer's; dropped on the chat they are attached to
   the message, as before. The same words are in each line's menu, for the keyboard. The Files
   page's drag says "Move to …" the same way.
+- **An edit that was not saved is never dropped without a word.** Closing a tab, showing an
+  SVG's picture again over its edited source, signing out and Quit each ask first, naming the
+  files. If the server ends your sign-in while you edit, the tabs are put by as they are and are
+  back when you have signed in again; nobody else who signs in sees them.
 - **The chat knows what you are looking at.** A message sent from the chat beside the files
   tells the agent the file in front, the line the cursor is on, what is selected and which other
-  files are open -- as data beside your message, not written into it.
+  files are open -- as data beside your message, not written into it, and only of the place
+  the chat works in.
 - **Rewrite a selection.** Select text, press Ctrl+E (or the button above the file), say what
   should change: the rewrite comes back as changes, each to accept or reject by itself, or all at
   once. Nothing is put into the file before you accept, and nothing is saved by accepting.

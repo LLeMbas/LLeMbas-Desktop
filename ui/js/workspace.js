@@ -40,6 +40,10 @@ const tabs = [] // { id, key, place, path, name, entry, source, button, panel, s
 let active = null
 let nextTab = 0
 let whose = "" // the account the tabs belong to
+// The tabs of a person who is not signed in now (the sign-in was refused, or they signed out
+// with nothing unsaved): put by, with what they hold, and put back when that person is back.
+// Nobody else sees them; an edit among them still counts as not saved.
+const shelf = new Map() // `server|email` -> { tabs, active, chosen }
 
 const isDir = (e) => e.kind === "dir" || e.kind === "mount"
 const baseName = (p) => String(p).replace(/\/+$/, "").split("/").pop() || String(p)
@@ -98,6 +102,8 @@ async function across(entries, to) {
   const from = place
   const src = source
   if (!pane || !src || to === from) return
+  // (What was dragged is no longer known to the tree: said as that, not as something else.)
+  if (!entries.length) return pane.say(t("That is no longer in the tree: read the folder again."), true)
   const files = entries.filter((e) => !isDir(e))
   if (!files.length) return pane.say(t("Only files go from one place to another for now, not folders."), true)
   const target = sourceOf(to)
@@ -147,10 +153,8 @@ async function across(entries, to) {
 async function writeNew(key, target, dir, name, text) {
   const at = `${String(dir).replace(/\/$/, "")}/${name}`
   if (key === "server") return api("PUT", "/files/content", { path: at, text, create: true })
-  if (key === "local") {
-    await invoke("local_make", { root: target.root, dir, name, folder: false })
-    return invoke("local_write", { root: target.root, path: dir ? `${dir}/${name}` : name, text, base: null, force: true })
-  }
+  // (On this computer in one step, whole or not at all: never an empty file where the text could not be written.)
+  if (key === "local") return invoke("local_make_text", { root: target.root, dir, name, text })
   return api("PUT", DEVICE_FILES.write(target.device), { path: at, text, create: true })
 }
 
@@ -311,7 +315,20 @@ async function takeDrop(at) {
 
 const tabOf = (key) => tabs.find((x) => x.key === key) || null
 
+/** Every edit not saved, of whoever's tabs: the ones on the screen and the ones put by for a person who is not signed in now. */
+const unsaved = () => [...tabs, ...[...shelf.values()].flatMap((s) => s.tabs)].filter((x) => x.inst?.dirty)
+let toldUnsaved = -1
+
+/** Rust is told how many (it asks before Quit): only when the number changes. */
+function tellUnsaved() {
+  const n = unsaved().length
+  if (n === toldUnsaved) return
+  toldUnsaved = n
+  invoke("set_unsaved", { count: n })
+}
+
 function drawTabs() {
+  tellUnsaved()
   const strip = $("work-tabs")
   for (const tab of tabs) {
     tab.button.setAttribute("aria-selected", String(tab === active))
@@ -343,7 +360,11 @@ async function mount(tab) {
     tab.file = file
     tab.inst = mountFile(tab.slots, file, {
       edit: true,
-      reopen: (again) => draw(again),
+      // Shown another way (an SVG's picture for its source): an edit not saved is asked about first, as the viewer asks.
+      reopen: async (again) => {
+        if (tab.inst?.dirty && !(await ask({ title: t("Not saved yet"), text: tab.name, ok: t("Discard"), cancel: t("Cancel"), danger: true }))) return
+        draw(again)
+      },
       extensions: (a) => assistExtensions(a, tab.hooks),
       changed: () => drawTabs(),
     })
@@ -425,13 +446,29 @@ async function closeTab(tab, sure = false) {
 export const workspaceDirty = () => tabs.some((x) => x.inst?.dirty)
 
 /**
+ * Before the person signs out: the edits in the tabs that were not saved are named, and go only
+ * on their word. True when there are none, or they may go (the tabs that held them are closed).
+ */
+export async function workspaceMayLeave() {
+  const dirty = tabs.filter((x) => x.inst?.dirty)
+  if (!dirty.length) return true
+  const names = dirty.map((x) => x.name).join(", ")
+  if (!(await ask({ title: t("Not saved yet"), text: t("In the workspace: %(names)s", { names }), ok: t("Discard"), cancel: t("Cancel"), danger: true }))) return false
+  for (const tab of dirty) await closeTab(tab, true)
+  return true
+}
+
+/**
  * What the person has in front of them, for the chat's message (harness spec 3.11.0, *Editor
  * context in a prompt*): the file in front, the line the cursor is on, what is selected (its
  * lines, from 1 and inclusive, and its text as the editor holds it, saved or not), and the other
  * open files of the same place. Null while the workspace is not what the window shows.
  */
 export function editorContext() {
-  if (!ctx?.shown() || !active) return null
+  // Only of the place and folder the chat beside is aimed at: a file of another machine that
+  // is still open in a tab is none of that chat's.
+  const here = (tab) => tab.place === place && (tab.source.root ?? "") === (source?.root ?? "")
+  if (!ctx?.shown() || !active || !source || !here(active)) return null
   const out = { path: active.file?.path || active.path }
   const view = active.inst?.editor
   if (view?.state) {
@@ -443,7 +480,7 @@ export function editorContext() {
       out.selection = { path: out.path, start: doc.lineAt(sel.from).number, end: doc.lineAt(sel.to > sel.from && doc.lineAt(sel.to).from === sel.to ? sel.to - 1 : sel.to).number, text: text.length > SELECTION_CHARS ? text.slice(0, SELECTION_CHARS) : text }
     }
   }
-  const open = tabs.filter((x) => x !== active && x.place === active.place).map((x) => x.file?.path || x.path)
+  const open = tabs.filter((x) => x !== active && here(x)).map((x) => x.file?.path || x.path)
   if (open.length) out.open = open.slice(0, 20)
   return out
 }
@@ -506,9 +543,24 @@ function drawTools() {
 export function showWorkspace() {
   const who = `${ctx.status()?.server || ""}|${ctx.status()?.account?.email || ""}`
   if (who !== whose) {
-    // Another person's window now: nothing of the last one's tabs is theirs to see.
-    for (const tab of [...tabs]) closeTab(tab, true)
+    // Another person's window now: nothing of the last one's tabs is theirs to see. The tabs
+    // are put by as they are -- an edit not saved is not thrown away behind its owner's back --
+    // and this person's own, from before, are put back.
+    if (tabs.length) shelf.set(whose, { tabs: tabs.splice(0), active, chosen: new Map(chosen) })
+    for (const s of shelf.values()) for (const tab of s.tabs) (tab.item.remove(), tab.panel.remove())
+    active = null
     chosen.clear()
+    const back = shelf.get(who)
+    shelf.delete(who)
+    if (back) {
+      for (const tab of back.tabs) {
+        tabs.push(tab)
+        $("work-tabs").append(tab.item)
+        $("work-panels").append(tab.panel)
+      }
+      active = back.active
+      for (const [k, v] of back.chosen) chosen.set(k, v)
+    }
     resetAssist()
     whose = who
     drawnFor = ""
@@ -558,6 +610,9 @@ export function initWorkspace(context) {
   // Ctrl+W closes the tab in front, while the workspace is what the window shows.
   document.addEventListener("keydown", (e) => {
     if (!ctx.shown() || !active || document.querySelector("dialog[open]")) return
+    // (Not from the chat beside, whose message box has its own Ctrl+W, nor from the terminal.)
+    const on = document.activeElement
+    if (on && on !== document.body && !$("page-workspace").contains(on)) return
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "w") {
       e.preventDefault()
       closeTab(active)

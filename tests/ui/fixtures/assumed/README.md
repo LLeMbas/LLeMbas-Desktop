@@ -7,13 +7,9 @@ tests give for a route the app spells in exactly one place:
 
 | File | Route | Spelled in |
 |---|---|---|
-| `device_fs_listing.json` | `GET /devices/{id}/fs?path=` | `ui/js/explorer.js` `DEVICE_FILES` |
-| `device_fs_content.json` | `GET /devices/{id}/fs/content?path=` | the same |
-| `device_fs_conflict.json` | `PUT /devices/{id}/fs/content` answered 409 | the same |
-| `device_fs_batch.json` | `POST /devices/{id}/fs/move`, `/copy`, `/delete` | the same |
 | `event_ask_edit.json` | the `ask` frame's card for an edit asked in manual mode | `ui/js/chat.js` `editDiffs` |
 | `message_editor.json` | the `editor` field of `POST /chats` and `POST /chats/{id}/messages` | `ui/js/chat.js` `withEditor` |
 
 When the server's own fixtures for these exist, they replace these files (through
-`scripts/fetch-fixtures.sh`, into the directory above), the three places are changed to match,
+`scripts/fetch-fixtures.sh`, into the directory above), the two places are changed to match,
 and this directory goes.

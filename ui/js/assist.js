@@ -104,6 +104,8 @@ export function onAssist(fn) {
   watchers.add(fn)
   return () => watchers.delete(fn)
 }
+/** How many are told when the settings change (the tests': one for the head's buttons, one for each editor that lives). */
+export const assistWatchers = () => watchers.size
 
 /** Save one of the two as the person's own choice (`null`: the instance's again). */
 async function saveSetting(which, model) {
@@ -178,6 +180,9 @@ const AROUND = 40
  * extensions, and puts `complete()` and `rewrite()` on `hooks` for the tab's own buttons.
  */
 export async function assistExtensions(api, hooks) {
+  // (The editor before this one in the same tab -- another way of seeing the file was shown in
+  // between -- is let go first: what it had on its way, and its place among those told of the settings.)
+  hooks.close?.()
   const { state: S, view: V } = await codeMirror()
   const setGhost = S.StateEffect.define()
   class Ghost extends V.WidgetType {
@@ -277,13 +282,19 @@ export async function assistExtensions(api, hooks) {
     const view = api.view()
     if (view) rewrite(view, api, hooks)
   }
-  hooks.close = () => {
+  const close = () => {
     cancel()
     forget()
+    // A rewrite of this editor's that is still written, or waits for its answers: stopped, and its changes gone with the editor.
+    hooks.rewriting?.stop()
+    if (hooks.close === close) hooks.close = null
   }
+  hooks.close = close
 
   return [
     ghost,
+    // The editor gone (the tab closed, the file read again, shown another way): the same.
+    V.ViewPlugin.define(() => ({ destroy: close })),
     S.Prec.highest(
       V.keymap.of([
         { key: "Tab", run: take },
@@ -315,6 +326,8 @@ export async function assistExtensions(api, hooks) {
  * what it was. Never saved by this: the edit is the person's to save.
  */
 async function rewrite(view, api, hooks) {
+  // One at a time in a tab: its changes stand in the tab's one place for them.
+  if (hooks.rewriting) return void hooks.say?.(t("A rewrite is already under way here: answer or stop it first."), true)
   const sel = view.state.selection.main
   if (sel.empty) return void hooks.say?.(t("Select what should be rewritten first."), true)
   const doc = view.state.doc
@@ -325,6 +338,8 @@ async function rewrite(view, api, hooks) {
   const original = doc.sliceString(from, to)
   const instruction = await ask({ title: t("Rewrite the selection"), text: t("Say what should change. Nothing is put into the file until you accept it."), value: "", ok: t("Rewrite"), cancel: t("Cancel") })
   if (!instruction) return void view.focus()
+  // (Asked twice before the first was answered, or the editor went meanwhile.)
+  if (hooks.rewriting || api.view() !== view) return
   const box = clear(hooks.review)
   box.hidden = false
   const id = `e${++nextId}`
@@ -341,7 +356,23 @@ async function rewrite(view, api, hooks) {
   if (api.lang) params.language = api.lang
   if (hooks.cwd) params.cwd = hooks.cwd
   if (mainModel()) params.model = mainModel()
+  let stopped = false
+  let answered = false
+  const mine = (hooks.rewriting = {
+    id,
+    // Stopped from outside (the tab closed, the file read again): the CLI is told, nothing is drawn or put in.
+    stop: () => {
+      if (hooks.rewriting !== mine) return
+      hooks.rewriting = null
+      stopped = true
+      if (!answered) HELPER.cancelEdit(id)
+      clear(box).hidden = true
+      hooks.reviewing?.(false)
+    },
+  })
   const done = (words = "", error = false) => {
+    if (hooks.rewriting !== mine) return
+    hooks.rewriting = null
     clear(box).hidden = true
     hooks.say?.(words, error)
     hooks.reviewing?.(false)
@@ -349,7 +380,6 @@ async function rewrite(view, api, hooks) {
   }
   // While it is written: its words so far, as text, and a way to stop it.
   const soFar = h("pre", { class: "review__writing", "aria-label": t("The rewrite so far") })
-  let stopped = false
   box.append(
     h(
       "div",
@@ -367,8 +397,10 @@ async function rewrite(view, api, hooks) {
       soFar.scrollTop = soFar.scrollHeight
     })
   } catch (err) {
+    answered = true
     return void (stopped || done(why(err), true))
   }
+  answered = true
   if (stopped || r?.cancelled) return void (stopped || done())
   const text = typeof r?.text === "string" ? r.text : ""
   const hunks = hunksOf(original, text)
