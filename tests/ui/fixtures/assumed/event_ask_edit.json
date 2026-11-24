@@ -1,0 +1,40 @@
+{
+  "cards": [
+    {
+      "id": "card9",
+      "kind": "approval",
+      "why": "",
+      "dismissable": false,
+      "expires_in": 1800,
+      "items": [
+        {
+          "index": 0,
+          "key": "0",
+          "kind": "approval",
+          "tool": "edit",
+          "title": "Edit a file",
+          "header": "",
+          "detail": "src/oven.py",
+          "reason": "Manual mode asks before every edit.",
+          "purpose": "Bake hotter",
+          "options": [],
+          "multiple": false,
+          "free_text": true,
+          "always": true,
+          "editable": false,
+          "plan": null,
+          "mode_choice": false,
+          "job": "",
+          "subagent": null,
+          "diffs": [
+            {
+              "path": "src/oven.py",
+              "old_text": "def bake(loaf):\n    return loaf.heat(220)\n",
+              "new_text": "def bake(loaf):\n    # <img src=x onerror=alert(1)>\n    return loaf.heat(240)\n"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

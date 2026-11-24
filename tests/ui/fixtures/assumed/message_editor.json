@@ -1,0 +1,6 @@
+{
+  "path": "/home/dev/project/src/oven.py",
+  "cursor": { "line": 2 },
+  "selection": { "path": "/home/dev/project/src/oven.py", "start": 2, "end": 2, "text": "    return loaf.heat(220)" },
+  "open": ["/home/dev/project/README.md"]
+}

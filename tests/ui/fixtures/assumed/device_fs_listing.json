@@ -1,0 +1,10 @@
+{
+  "device": "token2",
+  "path": "/home/user/project",
+  "parent": "/home/user",
+  "entries": [
+    { "name": "src", "path": "/home/user/project/src", "kind": "dir", "file_kind": null, "size": 0, "updated_at": "2026-01-02T03:04:05+00:00" },
+    { "name": "notes.md", "path": "/home/user/project/notes.md", "kind": "file", "file_kind": "markdown", "size": 31, "updated_at": "2026-01-02T03:04:05+00:00" },
+    { "name": "oven.py", "path": "/home/user/project/oven.py", "kind": "file", "file_kind": "code", "size": 44, "updated_at": "2026-01-02T03:04:05+00:00" }
+  ]
+}

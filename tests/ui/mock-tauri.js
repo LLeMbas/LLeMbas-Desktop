@@ -25,6 +25,8 @@
 //            viewer's file (by the last part of its path, or its node id); `viewerLibs`
 //            { main, worker } -- PDF.js as text, what `viewer_libs` answers.
 //   python   { url, version } -- where `python_prepare` says the `python` tool's runner frame is.
+//   editor   { "_lembas/complete": value, … } -- what the bundled CLI answers the editor's helper
+//            (`editor_call`); `editorManual` holds each call for `__mock.editorAnswer(value)`.
 //   takes    { "/chats/c1/page/take": [call, …] } -- what a runner's long poll is handed, one
 //            call a poll, each answered after `takeDelay` ms; with none left the poll is held
 //            as the server holds it (`takeHold` ms, 25 s unless said), then answered with
@@ -44,6 +46,7 @@
     for (const cb of listeners.get(name) || []) cb({ event: name, payload })
   }
 
+  const editorWaiting = [] // the editor's calls waiting for `editorAnswer` (`editorManual`)
   const held = [] // [{ key, go }] answers waiting for `release`
   const polls = new Set() // long polls held with nothing to hand over: { bare, go }
 
@@ -205,9 +208,26 @@
         return (config.commands || {}).model_image ?? ""
       case "terminal_word":
         return "lembas"
+      case "editor_call": {
+        // The bundled CLI as the editor's helper (src-tauri/src/editor.rs): `editor: { method:
+        // value }` answers at once (an array: one a call, the last one again after; `__error`
+        // rejects); `editorManual: true` makes every call wait for `__mock.editorAnswer()`.
+        const asked = { method: args.method, params: JSON.parse(JSON.stringify(args.params ?? null)) }
+        const settle = (value) => (value && value.__error ? Promise.reject(value.__error) : Promise.resolve(value === undefined ? null : JSON.parse(JSON.stringify(value))))
+        if (config.editorManual) return new Promise((resolve) => editorWaiting.push({ ...asked, go: (value) => resolve(settle(value)) }))
+        const own = (config.editor || {})[args.method]
+        if (own === undefined) return Promise.reject({ status: 501, detail: "This needs a newer LLeMbas CLI than the one in this app." })
+        return settle(Array.isArray(own) ? (own.length > 1 ? own.shift() : own[0]) : own)
+      }
       default: {
         // A command the test answers itself: `commands: { name: value }` (an `__error` rejects).
-        const own = (config.commands || {})[cmd]
+        // `{ __by: "path", "": a, "src": b }` answers by one of the call's arguments (`*` for
+        // any other value of it).
+        let own = (config.commands || {})[cmd]
+        if (own && typeof own === "object" && typeof own.__by === "string") {
+          const key = String((args || {})[own.__by] ?? "")
+          own = Object.prototype.hasOwnProperty.call(own, key) ? own[key] : own["*"]
+        }
         if (own && own.__error) return Promise.reject(own.__error)
         return own === undefined ? null : JSON.parse(JSON.stringify(own))
       }
@@ -266,6 +286,15 @@
     },
     frame,
     emit: dispatch,
+    /** The editor's calls that wait (`editorManual`): [{ method, params }], oldest first. */
+    editorWaiting: () => editorWaiting.map((c) => ({ method: c.method, params: c.params })),
+    /** Answer the oldest waiting call of `method` (any, with none named) with `value` (`{ __error }` refuses). */
+    editorAnswer(value, method = "") {
+      const at = editorWaiting.findIndex((c) => !method || c.method === method)
+      if (at < 0) return false
+      editorWaiting.splice(at, 1)[0].go(value)
+      return true
+    },
     /** The calls of one command, or of `api` with one method and path prefix. */
     api: (method, prefix) => calls.filter((c) => c.cmd === "api" && c.args.method === method && c.args.path.startsWith(prefix)),
     streams: () => [...streams.values()].map((s) => s.path),

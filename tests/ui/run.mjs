@@ -6166,7 +6166,9 @@ test("F4: a row dragged onto a folder is moved there, with everything ticked whe
   }
   // Onto a folder in the list: it says it would take it, and takes it.
   await drag(`${serverRow("lembas.md")} .frow__label`, `${serverRow("recipes")} .frow__label`, async () => {
-    assert.equal(await p.textContent(".fdrag"), "lembas.md")
+    // What is dragged, and -- in words -- what a drop here would do.
+    assert.equal(await p.textContent(".fdrag__what"), "lembas.md")
+    assert.equal(await p.textContent(".fdrag__does"), "Move to recipes")
     assert.ok(await p.$eval(`#server-list .frow[data-path="/home/frodo/recipes"]`, (x) => x.classList.contains("is-drop")))
     await shot(p, "f4-drag-1280")
   })
@@ -6185,7 +6187,7 @@ test("F4: a row dragged onto a folder is moved there, with everything ticked whe
   // A ticked row carries the others ticked with it: onto the folder's line in the tree.
   await p.check(`${serverRow("lembas.md")} .frow__pick`)
   await p.check(`${serverRow("map.png")} .frow__pick`)
-  await drag(`${serverRow("map.png")} .frow__label`, `#server-tree .ftree__row[data-path="${HOME}/recipes"]`, async () => assert.equal(await p.textContent(".fdrag"), "2 selected"))
+  await drag(`${serverRow("map.png")} .frow__label`, `#server-tree .ftree__row[data-path="${HOME}/recipes"]`, async () => assert.equal(await p.textContent(".fdrag__what"), "2 selected"))
   await p.waitForFunction(() => window.__mock.api("POST", "/files/batch").length === 1)
   assert.deepEqual(await bodies(p, "POST", "/files/batch"), [{ op: "move", paths: [`${HOME}/lembas.md`, `${HOME}/map.png`], to: `${HOME}/recipes` }])
   // Files from the computer: held over the pane it shows where they would land; dropped on a
@@ -8955,6 +8957,925 @@ test("RX14: More asked of the list, and the account signed out before the answer
   await p.waitForTimeout(100)
   assert.equal(await p.$$eval("#chat-list .chatrow", (l) => l.length), 0, "nothing of the account that left")
   assert.deepEqual(p.errors, [])
+})
+
+// --- The workspace: one view for a folder, in three places --------------------------------------
+//
+// This computer's files are Rust's (`local_*`), the server's are /api/v2's (the pinned fixtures),
+// a linked computer's are ASSUMED routes (tests/ui/fixtures/assumed/, see its README): the app
+// spells them in one place each. The editor's helper is the bundled CLI's (`editor_call`), which
+// the mock answers.
+
+const assumed = (name) => JSON.parse(readFileSync(join(HERE, "fixtures", "assumed", `${name}.json`), "utf8"))
+const WS_ROOT = "/home/dev/project"
+const WS_OVEN = "def bake(loaf):\n    return loaf.heat(220)\n"
+const wsEntry = (name, path, kind, file_kind = null) => ({ name, path, kind, size: kind === "dir" ? 0 : 44, modified: 1767323045, file_kind })
+const wsRead = (path, text, kind, over = {}) => ({ root: WS_ROOT, path, name: path.split("/").pop(), size: text.length, text, withheld: null, kind, mime: "text/plain", sha: SHA, writable: true, ...over })
+const WS_DEVICE = assumed("device_fs_listing")
+const WS_DEVICE_FILE = assumed("device_fs_content")
+// (The editor's two models, and the models they name by `ref`: the server's own fixtures.)
+const WS_SETTINGS = fixture("editor")
+const WS_MODELS = fixture("models")
+const DEV = "/home/user/project"
+
+function ws(over = {}, commands = {}, extra = {}) {
+  return {
+    status: status(),
+    routes: baseRoutes({
+      "GET /devices": { devices: [{ id: "token1", name: "workbench", host: "workbench", platform: "linux", terminal: true }, { id: "token2", name: "LLeMbas CLI on laptop", host: "laptop", platform: "linux", terminal: true }] },
+      "GET /chats": { chats: [], more: false },
+      "GET /files": F4_HOME,
+      [`GET /files${q(`${HOME}/recipes`)}`]: { path: `${HOME}/recipes`, parent: HOME, entries: [] },
+      "GET /files/content": F4_CONTENT,
+      [`GET /files/content${q(`${HOME}/map.png`)}`]: fixture("file_content_withheld"),
+      "GET /editor": WS_SETTINGS,
+      "GET /models": WS_MODELS,
+      "GET /devices/token2/directories": { ...fixture("device_directories"), device: "token2", path: DEV, parent: "/home/user", entries: [] },
+      "GET /devices/token2/fs": WS_DEVICE,
+      [`GET /devices/token2/fs${q(`${DEV}/src`)}`]: { device: "token2", path: `${DEV}/src`, parent: DEV, entries: [] },
+      "GET /devices/token2/fs/content": WS_DEVICE_FILE,
+      ...over,
+    }),
+    commands: {
+      local_list: {
+        __by: "path",
+        "": { root: WS_ROOT, path: "", more: false, entries: [wsEntry("src", "src", "dir"), wsEntry("README.md", "README.md", "file", "markdown"), wsEntry("map.png", "map.png", "file", "image")] },
+        src: { root: WS_ROOT, path: "src", more: false, entries: [wsEntry("oven.py", "src/oven.py", "file", "code")] },
+        "*": { root: WS_ROOT, path: "", more: false, entries: [] },
+      },
+      local_read: {
+        __by: "path",
+        "README.md": wsRead("README.md", "# Project\n", "markdown"),
+        "src/oven.py": wsRead("src/oven.py", WS_OVEN, "code"),
+        "map.png": wsRead("map.png", "", "image", { text: null, withheld: "binary", mime: "image/png", sha: null }),
+      },
+      local_write: { sha: "ef".repeat(32) },
+      ...commands,
+    },
+    streams: {},
+    ...extra,
+  }
+}
+
+async function wsOpen(p) {
+  await p.evaluate(() => document.getElementById("nav-workspace").click())
+  await p.waitForSelector("#page-workspace:not([hidden])")
+}
+const wsLine = (path) => `#work-tree li[data-path="${path}"] > .ftree__line`
+const wsPanel = ".wpanel:not([hidden])"
+/** What the editor in front holds: its lines, without what the helper only offers. */
+const wsDoc = (p) =>
+  p.$$eval(`${wsPanel} .cm-line`, (l) =>
+    l
+      .map((x) => {
+        const c = x.cloneNode(true)
+        for (const g of c.querySelectorAll(".cm-ghost")) g.remove()
+        return c.textContent
+      })
+      .join("\n"),
+  )
+const wsGhost = (p) => p.$$eval(`${wsPanel} .cm-ghost`, (l) => l.map((x) => x.textContent).join(""))
+async function wsFile(p, path, name) {
+  await p.click(`${wsLine(path)} .ftree__row`)
+  await p.waitForSelector(`.wtab__open[aria-selected="true"] >> text=${name}`)
+  await p.waitForSelector(`${wsPanel} .cm-content`)
+}
+async function wsOven(p) {
+  await p.waitForSelector(wsLine("src"))
+  await p.click(`${wsLine("src")} .ftree__row`)
+  await p.waitForSelector(wsLine("src/oven.py"))
+  await wsFile(p, "src/oven.py", "oven.py")
+}
+const wsMenu = async (p, path, item) => {
+  await p.click(`${wsLine(path)} .ftree__more`)
+  await p.locator(".menu .menu__item", { hasText: new RegExp(`^${item.replace(/[.…]/g, "\\$&")}$`) }).click()
+}
+/** The bodies of the chats made (`POST /chats` itself, not a message into one). */
+const made_ = (p) => p.evaluate(() => window.__mock.api("POST", "/chats").filter((c) => c.args.path === "/chats").map((c) => c.args.body))
+const wsCalls = (p, method) => p.evaluate((m) => window.__mock.calls.filter((c) => c.cmd === "editor_call" && c.args.method === m).map((c) => c.args.params), method)
+
+test("WS1: the workspace on this computer: the three places at its top, a tree of folders and files, a file opened in a tab and edited there -- saved from what was read, and where the file changed meanwhile both ways on are offered -- several tabs, moved along and closed from the keyboard, an edit not saved asked about", async () => {
+  const p = await page(ws())
+  await wsOpen(p)
+  await p.waitForSelector(wsLine("README.md"))
+  assert.deepEqual(await p.$$eval("#work-places .work__place", (l) => l.map((b) => [b.textContent, b.getAttribute("aria-selected")])), [["This computer", "true"], ["laptop", "false"], ["Server", "false"]])
+  // Folders first, then files; every name of one depth begins in one column.
+  assert.deepEqual(await p.$$eval("#work-tree .ftree > li", (l) => l.map((x) => x.dataset.path)), ["src", "README.md", "map.png"])
+  const lefts = await p.$$eval("#work-tree .ftree > li > .ftree__line .ftree__name", (l) => l.map((x) => Math.round(x.getBoundingClientRect().left)))
+  assert.equal(new Set(lefts).size, 1, `the names of one depth stand in one column (${lefts})`)
+  // The chat stands beside the files, the same chat as everywhere: a new agent chat for this folder.
+  const [work, chat] = await p.evaluate(() => ["page-workspace", "main"].map((id) => document.getElementById(id).getBoundingClientRect().toJSON()))
+  assert.ok(chat.width > 250 && chat.left >= work.right - 1, "the chat is beside the files")
+  assert.ok(await p.isVisible("#composer-text"))
+  // A folder opened, a file in it: a tab, the editor, the file's own text.
+  await wsOven(p)
+  assert.equal(await wsDoc(p), "def bake(loaf):\n    return loaf.heat(220)\n")
+  assert.match(await p.textContent(`${wsPanel} .wpanel__path`), /This computer · src\/oven\.py/)
+  assert.ok(await p.isVisible(`${wsPanel} .wtab__rewrite`), "a file that can be written has the helper's buttons")
+  await shot(p, "ws1-local-1280")
+  // Edited: marked as not saved; saved with Ctrl+S, from what was read.
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+End")
+  await p.keyboard.type("# hot")
+  await p.waitForFunction(() => document.querySelector('.wtab[data-dirty="true"]'))
+  assert.equal(await p.textContent(`${wsPanel} .viewer__said`), "Not saved yet")
+  await p.keyboard.press("Control+s")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_write"))
+  assert.deepEqual(await callsOf(p, "local_write"), [{ root: WS_ROOT, path: "src/oven.py", text: `${WS_OVEN}# hot`, base: SHA, force: false }])
+  await p.waitForFunction(() => document.querySelector('.wtab[data-dirty="false"]'))
+  assert.equal(await p.textContent(`${wsPanel} .viewer__said`), "Saved.")
+  // Changed meanwhile: not saved; read it again, or save anyway.
+  await p.evaluate((detail) => (window.__mockConfig.commands.local_write = { __error: { status: 409, detail } }), F4_CONFLICT.detail)
+  await p.keyboard.type("!")
+  await p.keyboard.press("Control+s")
+  await p.waitForSelector(`${wsPanel} .viewer__bar.is-conflict`)
+  assert.equal(await p.textContent(`${wsPanel} .viewer__said`), F4_CONFLICT.detail)
+  assert.ok(await p.isVisible(`${wsPanel} .viewer__reload`))
+  await p.evaluate(() => (window.__mockConfig.commands.local_write = { sha: "12".repeat(32) }))
+  await p.click(`${wsPanel} .viewer__force`)
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "local_write").length === 3)
+  assert.deepEqual((await callsOf(p, "local_write")).at(-1), { root: WS_ROOT, path: "src/oven.py", text: `${WS_OVEN}# hot!`, base: null, force: true })
+  // A second file: a second tab; the first keeps what it holds. A picture is drawn as one, in a tab like any file.
+  await wsFile(p, "README.md", "README.md")
+  assert.equal(await wsDoc(p), "# Project\n")
+  await p.click(`${wsLine("map.png")} .ftree__row`)
+  await p.waitForSelector(`${wsPanel} img.viewer__image`)
+  assert.deepEqual(await p.$$eval(".wtab__name", (l) => l.map((x) => x.textContent)), ["oven.py", "README.md", "map.png"])
+  // Along the tabs with the arrows; the file opened again is the tab it has.
+  await p.focus('.wtab__open[aria-selected="true"]')
+  await p.keyboard.press("ArrowLeft")
+  assert.equal(await p.textContent('.wtab__open[aria-selected="true"] .wtab__name'), "README.md")
+  await p.keyboard.press("Home")
+  assert.equal(await p.textContent('.wtab__open[aria-selected="true"] .wtab__name'), "oven.py")
+  assert.equal(await wsDoc(p), `${WS_OVEN}# hot!`)
+  await p.click(`${wsLine("README.md")} .ftree__row`)
+  assert.equal(await p.$$eval(".wtab", (l) => l.length), 3)
+  // An edit not saved is asked about before its tab closes; kept on Cancel, let go on Discard.
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.type("x")
+  await p.waitForFunction(() => document.querySelectorAll('.wtab[data-dirty="true"]').length === 1)
+  await p.keyboard.press("Control+w")
+  await p.waitForSelector("dialog[open]")
+  assert.match(await p.textContent("dialog[open]"), /Not saved yet/)
+  await p.click("dialog[open] .btn:not(.btn--danger)")
+  assert.equal(await p.$$eval(".wtab", (l) => l.length), 3)
+  await p.click('.wtab[data-dirty="true"] .wtab__close')
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForFunction(() => document.querySelectorAll(".wtab").length === 2)
+  assert.equal(await p.textContent('.wtab__open[aria-selected="true"] .wtab__name'), "map.png")
+  // Signed out, and another person signs in: the workspace is entered anew, and the tabs of the one who left are not theirs to see.
+  const say = (st) => p.evaluate((x) => ((window.__mockConfig.status = x), window.__mock.emit("status", x)), st)
+  await say(status({ account: null, linked: false }))
+  await p.waitForSelector("#shell", { state: "hidden" })
+  await say(status({ account: { name: "Bo Example", email: "bo@example.org" } }))
+  await p.waitForSelector("#shell:not([hidden])")
+  assert.ok(await p.isHidden("#page-workspace"))
+  await wsOpen(p)
+  await p.waitForSelector(wsLine("README.md"))
+  assert.equal(await p.$$eval(".wtab", (l) => l.length), 0)
+  assert.ok(await p.isVisible("#work-none"))
+  assert.deepEqual(p.errors, [])
+})
+
+test("WS2: the same hands on the files in all three places -- a new file and folder, rename, move and copy through the dialog, delete -- each done by that place's own means, and the same file kinds drawn; the server's and a linked computer's files are edited and saved from what was read, with the same warning when one changed meanwhile", async () => {
+  const batch = assumed("device_fs_batch")
+  const conflict = assumed("device_fs_conflict")
+  const p = await page(
+    ws(
+      {
+        "POST /files/mkdir": F4_HOME,
+        "PUT /files/content": { sha: "34".repeat(32) },
+        "POST /files/rename": F4_HOME,
+        "POST /files/move": F4_HOME,
+        "POST /files/copy": fixture("files_copied"),
+        "DELETE /files": F4_HOME,
+        "POST /devices/token2/fs/mkdir": WS_DEVICE,
+        "PUT /devices/token2/fs/content": { sha: "sha256:" + "56".repeat(32) },
+        "POST /devices/token2/fs/rename": WS_DEVICE,
+        "POST /devices/token2/fs/move": batch,
+        "POST /devices/token2/fs/copy": batch,
+        "POST /devices/token2/fs/delete": batch,
+      },
+      { local_make: {}, local_rename: {}, local_transfer: [{ path: "README.md", ok: true, to: "src/README.md" }], local_delete: [{ path: "README.md", ok: true }] },
+    ),
+  )
+  await wsOpen(p)
+  const menuOf = async (path) => {
+    await p.click(`${wsLine(path)} .ftree__more`)
+    const items = await p.$$eval(".menu .menu__item", (l) => l.map((x) => x.textContent))
+    await p.keyboard.press("Escape")
+    return items
+  }
+  const named = async (text) => {
+    await p.waitForSelector("dialog[open] .dialog__input")
+    await p.fill("dialog[open] .dialog__input", text)
+    await p.click('dialog[open] button[type="submit"]')
+  }
+  const walk = async () => {
+    await p.waitForSelector("dialog[open] #fpick-use:not([disabled])")
+    await p.click("dialog[open] .fpick__row")
+    await p.waitForFunction(() => document.querySelector("dialog[open] .fpick__chosen")?.textContent.includes("/"))
+    await p.click("dialog[open] #fpick-use")
+  }
+  const hands = async (file, folderRow) => {
+    await p.waitForSelector(wsLine(file))
+    await p.click("#work-mkdir")
+    await named("drafts")
+    await p.waitForSelector("dialog[open]", { state: "detached" })
+    await p.waitForSelector(wsLine(file))
+    await p.click("#work-mkfile")
+    await named("todo.md")
+    await p.waitForSelector(wsLine(file))
+    await wsMenu(p, file, "Rename")
+    await named("renamed.md")
+    await p.waitForSelector(wsLine(file))
+    await wsMenu(p, file, "Move")
+    await walk()
+    await p.waitForSelector(wsLine(file))
+    await wsMenu(p, file, "Copy to…")
+    await walk()
+    await p.waitForSelector(wsLine(file))
+    await wsMenu(p, file, "Delete")
+    await p.click("dialog[open] .btn--danger")
+    await p.waitForSelector("dialog[open]", { state: "detached" })
+    void folderRow
+  }
+  // --- This computer: Rust, inside the agent's folder.
+  await p.waitForSelector(wsLine("README.md"))
+  assert.deepEqual(await menuOf("README.md"), ["Open in the viewer", "Move", "Copy to…", "Transfer to laptop…", "Upload to the server…", "Rename", "Delete"])
+  assert.deepEqual(await menuOf("src"), ["New folder", "New file", "Move", "Copy to…", "Rename", "Delete"])
+  await hands("README.md")
+  assert.deepEqual(await callsOf(p, "local_make"), [{ root: WS_ROOT, dir: "", name: "drafts", folder: true }, { root: WS_ROOT, dir: "", name: "todo.md", folder: false }])
+  assert.deepEqual(await callsOf(p, "local_rename"), [{ root: WS_ROOT, path: "README.md", name: "renamed.md" }])
+  assert.deepEqual(await callsOf(p, "local_transfer"), [{ root: WS_ROOT, paths: ["README.md"], to: "src", copy: false }, { root: WS_ROOT, paths: ["README.md"], to: "src", copy: true }])
+  assert.deepEqual(await callsOf(p, "local_delete"), [{ root: WS_ROOT, paths: ["README.md"] }])
+  // --- The server: /api/v2, as the Files page does it.
+  await p.click('#work-places [data-place="server"]')
+  await p.waitForSelector(wsLine(`${HOME}/lembas.md`))
+  assert.deepEqual(await p.$$eval("#work-tree .ftree > li", (l) => l.map((x) => x.dataset.path)), [`${HOME}/recipes`, `${HOME}/lembas.md`, `${HOME}/map.png`])
+  assert.deepEqual(await menuOf(`${HOME}/lembas.md`), ["Open in the viewer", "Move", "Copy to…", "Download to this computer…", "Transfer to laptop…", "Rename", "Delete"])
+  await hands(`${HOME}/lembas.md`)
+  assert.deepEqual(await bodies(p, "POST", "/files/mkdir"), [{ path: HOME, name: "drafts" }])
+  assert.deepEqual(await bodies(p, "PUT", "/files/content"), [{ path: `${HOME}/todo.md`, text: "", create: true }])
+  assert.deepEqual(await bodies(p, "POST", "/files/rename"), [{ path: `${HOME}/lembas.md`, name: "renamed.md" }])
+  assert.deepEqual(await bodies(p, "POST", "/files/move"), [{ path: `${HOME}/lembas.md`, to: `${HOME}/recipes` }])
+  assert.deepEqual(await bodies(p, "POST", "/files/copy"), [{ path: `${HOME}/lembas.md`, to: `${HOME}/recipes` }])
+  assert.equal(await p.evaluate((at) => window.__mock.api("DELETE", "/files").filter((c) => c.args.path === at).length, `/files${q(`${HOME}/lembas.md`)}`), 1)
+  // Its file in a tab: Markdown, opened to be written, saved from what was read; changed meanwhile, said.
+  await wsFile(p, `${HOME}/lembas.md`, "lembas.md")
+  assert.equal(await wsDoc(p), "# Lembas\n\nWrap it in a leaf.\n")
+  assert.deepEqual(await p.$$eval(`${wsPanel} .viewer__modes .seg`, (l) => l.map((b) => b.textContent)), ["Preview", "Source", "Edit"])
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+End")
+  await p.keyboard.type("Eat.")
+  await p.keyboard.press("Control+s")
+  await p.waitForFunction(() => window.__mock.api("PUT", "/files/content").length === 2)
+  assert.deepEqual((await bodies(p, "PUT", "/files/content")).at(-1), { path: `${HOME}/lembas.md`, text: "# Lembas\n\nWrap it in a leaf.\nEat.", base: SHA })
+  await p.evaluate((e) => window.__mock.answer("PUT /files/content", { __error: e }), F4_CONFLICT)
+  await p.keyboard.type("!")
+  await p.keyboard.press("Control+s")
+  await p.waitForSelector(`${wsPanel} .viewer__bar.is-conflict`)
+  assert.equal(await p.textContent(`${wsPanel} .viewer__said`), F4_CONFLICT.detail)
+  // The same drawing of what is not text: a picture, in a tab.
+  await p.click(`${wsLine(`${HOME}/map.png`)} .ftree__row`)
+  await p.waitForSelector(`${wsPanel} img.viewer__image`)
+  // --- A linked computer: its folder chosen by walking to it there, then the same again.
+  await p.click('#work-places [data-place="device:token2"]')
+  await p.waitForSelector("#work-tree .fx__empty")
+  assert.match(await p.textContent("#work-tree .fx__empty"), /Choose the folder on laptop to work in\./)
+  await p.click("#work-tree .fx__empty .btn")
+  await p.waitForSelector("dialog[open]")
+  await p.fill("dialog[open] .dirs__typed", DEV)
+  await p.click("dialog[open] #dirs-use")
+  await p.waitForSelector(wsLine(`${DEV}/oven.py`))
+  assert.equal(await p.textContent("#work-folder"), "project")
+  assert.deepEqual(await p.$$eval("#work-tree .ftree > li", (l) => l.map((x) => x.dataset.path)), [`${DEV}/src`, `${DEV}/notes.md`, `${DEV}/oven.py`])
+  assert.deepEqual(await menuOf(`${DEV}/notes.md`), ["Open in the viewer", "Move", "Copy to…", "Transfer to This computer…", "Transfer to Server…", "Rename", "Delete"])
+  await hands(`${DEV}/notes.md`)
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/mkdir"), [{ path: DEV, name: "drafts" }])
+  assert.deepEqual(await bodies(p, "PUT", "/devices/token2/fs/content"), [{ path: `${DEV}/todo.md`, text: "", create: true }])
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/rename"), [{ path: `${DEV}/notes.md`, name: "renamed.md" }])
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/move"), [{ paths: [`${DEV}/notes.md`], to: `${DEV}/src` }])
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/copy"), [{ paths: [`${DEV}/notes.md`], to: `${DEV}/src` }])
+  assert.deepEqual(await bodies(p, "POST", "/devices/token2/fs/delete"), [{ paths: [`${DEV}/notes.md`] }])
+  await wsFile(p, `${DEV}/oven.py`, "oven.py")
+  assert.equal(await wsDoc(p), WS_OVEN)
+  assert.match(await p.textContent(`${wsPanel} .wpanel__path`), /laptop · \/home\/user\/project\/oven\.py/)
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+End")
+  await p.keyboard.type("# hot")
+  await p.keyboard.press("Control+s")
+  await p.waitForFunction(() => window.__mock.api("PUT", "/devices/token2/fs/content").length === 2)
+  assert.deepEqual((await bodies(p, "PUT", "/devices/token2/fs/content")).at(-1), { path: `${DEV}/oven.py`, text: `${WS_OVEN}# hot`, base: WS_DEVICE_FILE.sha })
+  await p.evaluate((detail) => window.__mock.answer("PUT /devices/token2/fs/content", { __error: { status: 409, detail } }), conflict.detail)
+  await p.keyboard.type("!")
+  await p.keyboard.press("Control+s")
+  await p.waitForSelector(`${wsPanel} .viewer__bar.is-conflict`)
+  assert.equal(await p.textContent(`${wsPanel} .viewer__said`), conflict.detail)
+  await p.evaluate(() => window.__mock.answer("PUT /devices/token2/fs/content", { sha: "sha256:" + "78".repeat(32) }))
+  await p.click(`${wsPanel} .viewer__force`)
+  await p.waitForFunction(() => window.__mock.api("PUT", "/devices/token2/fs/content").length === 4)
+  assert.deepEqual((await bodies(p, "PUT", "/devices/token2/fs/content")).at(-1), { path: `${DEV}/oven.py`, text: `${WS_OVEN}# hot!`, force: true })
+  // A server without the routes: said in its place, with Try again -- never an empty box.
+  const old = await page(ws({ "GET /devices/token2/fs": { __error: { status: 404, detail: "Not Found" } } }))
+  await wsOpen(old)
+  await old.click('#work-places [data-place="device:token2"]')
+  await old.click("#work-tree .fx__empty .btn")
+  await old.fill("dialog[open] .dirs__typed", DEV)
+  await old.click("dialog[open] #dirs-use")
+  await old.waitForSelector("#work-tree .fnote.is-error")
+  assert.match(await old.textContent("#work-tree .fnote.is-error"), /Not Found/)
+  assert.deepEqual(p.errors, [])
+  assert.deepEqual(old.errors, [])
+})
+
+test("WS3: the chat beside the files is the agent's chat for that folder on that machine -- on the server, a chat there -- and is told what is open: the file in front, the cursor's line, the selection and the other open files, with the first message and every later one; the terminal opens on the same computer, under the files; outside the workspace a message says nothing of an editor", async () => {
+  const made = { chat: agentChat({ running: false }), message: userMessage("m1", "Why 220?"), reply: null }
+  const p = await page(
+    ws(
+      { "POST /chats": made, "POST /chats/chat2/messages": { message: userMessage("m3", "And now?"), reply: null }, "GET /chats/chat2": { chat: agentChat({ running: false }), messages: [userMessage("m1", "Why 220?")], more: false, live: null }, "GET /models?chat=chat2": models() },
+      {},
+      { terminal: [["control", fixture("terminal_ready")]] },
+    ),
+  )
+  await wsOpen(p)
+  await wsFile(p, "README.md", "README.md")
+  await wsOven(p)
+  // The second line selected, from the keyboard.
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+Home")
+  await p.keyboard.press("ArrowDown")
+  await p.keyboard.press("Shift+End")
+  // The terminal: on this computer, in the folder; laid out under the files, the chat still beside both.
+  await p.waitForFunction(() => document.getElementById("work-terminal").getAttribute("aria-disabled") === "false")
+  await p.click("#work-terminal")
+  await p.waitForFunction(() => window.__mock.terminals().length === 1)
+  assert.deepEqual((await p.evaluate(() => window.__mock.terminals()))[0].target, { chat: null, device: "token1", directory: "/home/dev/project" })
+  await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+  const box = (id) => p.evaluate((i) => document.getElementById(i).getBoundingClientRect().toJSON(), id)
+  const [work, term, chat] = [await box("page-workspace"), await box("terminal"), await box("main")]
+  assert.ok(term.top >= work.bottom - 1 && Math.abs(term.left - work.left) <= 1 && Math.abs(term.right - work.right) <= 1, "the terminal is under the files, as wide as they are")
+  assert.ok(chat.left >= work.right - 1 && chat.bottom >= term.bottom - 1, "the chat is beside both")
+  assert.ok(term.height > 120 && work.height > 200)
+  await shot(p, "ws3-terminal-1280")
+  // The first message makes the folder's agent chat, and says what is in front.
+  await p.fill("#composer-text", "Why 220?")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  assert.deepEqual((await bodies(p, "POST", "/chats"))[0], { text: "Why 220?", editor: assumed("message_editor"), kind: "agent", device: "token1", directory: WS_ROOT, mode: "edit" })
+  await p.waitForSelector('#messages .msg[data-id="m1"]')
+  // A later one: with the cursor only, nothing selected.
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+Home")
+  await p.fill("#composer-text", "And now?")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/messages").length === 1)
+  assert.deepEqual((await bodies(p, "POST", "/chats/chat2/messages"))[0], { text: "And now?", editor: { path: `${WS_ROOT}/src/oven.py`, cursor: { line: 1 }, open: [`${WS_ROOT}/README.md`] } })
+  // The server's files: a chat on the server; no terminal there, and why is said.
+  await p.click('#work-places [data-place="server"]')
+  await p.waitForSelector(wsLine(`${HOME}/lembas.md`))
+  await p.waitForFunction(() => document.getElementById("main").dataset.new === "true")
+  await p.waitForFunction(() => document.getElementById("work-terminal").getAttribute("aria-disabled") === "true")
+  assert.match(await p.getAttribute("#work-terminal", "title"), /The server's files have no terminal/)
+  await p.click("#work-terminal", { force: true })
+  assert.equal(await p.textContent("#work-note"), "The server's files have no terminal: a terminal opens on a computer.")
+  await wsFile(p, `${HOME}/lembas.md`, "lembas.md")
+  await p.evaluate((r) => window.__mock.answer("POST /chats", r), { chat: chatRow({ id: "chat9" }), message: userMessage("m7", "Shorter?"), reply: null })
+  await p.fill("#composer-text", "Shorter?")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").filter((c) => c.args.path === "/chats").length === 2)
+  const onServer = (await made_(p))[1]
+  assert.equal(onServer.kind, undefined, "a chat on the server, not an agent chat")
+  assert.deepEqual(onServer.editor, { path: `${HOME}/lembas.md`, cursor: { line: 1 } })
+  // Outside the workspace: the chat alone, and nothing of an editor is said.
+  await p.evaluate(() => document.getElementById("new-chat-btn").click())
+  await p.waitForSelector("#page-workspace", { state: "hidden" })
+  await p.fill("#composer-text", "Hello")
+  await p.click("#send")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats").filter((c) => c.args.path === "/chats").length === 3)
+  assert.equal((await made_(p))[2].editor, undefined)
+  assert.deepEqual(p.errors, [])
+  // A folder that has its agent chat already: that chat is the one beside the files. A linked
+  // computer's folder: a new agent chat there.
+  const q2 = await page(ws({ "GET /chats": { chats: [agentChat({ running: false, device: { token_id: "token1", directory: WS_ROOT } })], more: false }, "GET /chats/chat2": { chat: agentChat({ running: false, device: { token_id: "token1", directory: WS_ROOT } }), messages: [userMessage("m1", "Tidy the build")], more: false, live: null }, "GET /models?chat=chat2": models(), "POST /chats": { chat: agentChat({ id: "chat7", running: false, device: { token_id: "token2", directory: DEV } }), message: userMessage("m9", "Hi"), reply: null } }))
+  await q2.waitForSelector('.chatrow[data-id="chat2"]')
+  await wsOpen(q2)
+  await q2.waitForSelector('#messages .msg[data-id="m1"]')
+  assert.equal(await q2.textContent("#chat-title"), "Tidy the build")
+  await q2.click('#work-places [data-place="device:token2"]')
+  await q2.click("#work-tree .fx__empty .btn")
+  await q2.fill("dialog[open] .dirs__typed", DEV)
+  await q2.click("dialog[open] #dirs-use")
+  await q2.waitForSelector(wsLine(`${DEV}/oven.py`))
+  await q2.waitForFunction(() => document.getElementById("main").dataset.new === "true")
+  await q2.fill("#composer-text", "Hi")
+  await q2.click("#send")
+  await q2.waitForFunction(() => window.__mock.api("POST", "/chats").length === 1)
+  const there = (await bodies(q2, "POST", "/chats"))[0]
+  assert.deepEqual([there.kind, there.device, there.directory], ["agent", "token2", DEV])
+  assert.deepEqual(q2.errors, [])
+})
+
+test("WS4: a drop says in words what it does before it is let go: a line of the tree onto a folder is moved there; onto another place's button it is uploaded, downloaded or transferred into a folder chosen next; files from outside the window are copied into this computer's folder, uploaded to the server's, transferred to a linked computer's -- and on the chat they are the chat's", async () => {
+  const p = await page(
+    ws(
+      { "PUT /devices/token2/fs/content": { sha: "sha256:" + "56".repeat(32) }, "PUT /files/content": { sha: "34".repeat(32) } },
+      {
+        local_transfer: [{ path: "README.md", ok: true, to: "src/README.md" }],
+        local_upload: { listing: null, sent: 1, failed: [] },
+        local_download: "README.md",
+        local_take_dropped: { listing: null, sent: 2, failed: [] },
+        library_upload_dropped: { listing: F4_HOME, sent: 1, failed: [] },
+        device_upload_dropped: { listing: null, sent: 1, failed: [{ name: "big.iso", error: "This file is too large to send." }] },
+        attach_dropped: [],
+      },
+    ),
+  )
+  await wsOpen(p)
+  await p.waitForSelector(wsLine("README.md"))
+  const centre = async (sel) => {
+    const b = await p.locator(sel).boundingBox()
+    return [b.x + Math.min(b.width / 2, 60), b.y + b.height / 2]
+  }
+  const drag = async (from, to, check) => {
+    const [x, y] = await centre(from)
+    const [tx, ty] = await centre(to)
+    await p.mouse.move(x, y)
+    await p.mouse.down()
+    await p.mouse.move(x + 3, y + 3)
+    await p.mouse.move((x + tx) / 2, (y + ty) / 2, { steps: 4 })
+    await p.mouse.move(tx, ty, { steps: 4 })
+    await check?.()
+    await p.mouse.up()
+  }
+  const says = async (what, does) => {
+    assert.equal(await p.textContent(".fdrag__what"), what)
+    assert.equal(await p.textContent(".fdrag__does"), does)
+  }
+  const pick = async () => {
+    await p.waitForSelector("dialog[open] #fpick-use:not([disabled])")
+    await p.click("dialog[open] #fpick-use")
+    await p.waitForSelector("dialog[open]", { state: "detached" })
+  }
+  // Inside the tree: onto a folder, moved.
+  await drag(`${wsLine("README.md")} .ftree__name`, `${wsLine("src")} .ftree__name`, async () => {
+    await says("README.md", "Move to src")
+    await shot(p, "ws4-drag-1280")
+  })
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_transfer"))
+  assert.deepEqual(await callsOf(p, "local_transfer"), [{ root: WS_ROOT, paths: ["README.md"], to: "src", copy: false }])
+  await statusSays(p, "work-status", "Moved.")
+  assert.equal(await p.$$eval(".wtab", (l) => l.length), 0, "the click that ends a drag opens nothing")
+  // Onto nothing that takes it: nothing is said to happen, and nothing does.
+  await p.waitForSelector(wsLine("README.md"))
+  await drag(`${wsLine("README.md")} .ftree__name`, `${wsLine("map.png")} .ftree__name`, async () => says("README.md", ""))
+  assert.equal((await callsOf(p, "local_transfer")).length, 1)
+  // From this computer onto the server's button: uploaded, into a folder asked for next.
+  await drag(`${wsLine("README.md")} .ftree__name`, '#work-places [data-place="server"]', async () => says("README.md", "Upload to the server: the folder is asked for next"))
+  await p.waitForSelector("dialog[open] #fpick-title")
+  assert.equal(await p.textContent("dialog[open] #fpick-title"), "Upload to which folder?")
+  await pick()
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_upload"))
+  assert.deepEqual(await callsOf(p, "local_upload"), [{ root: WS_ROOT, paths: ["README.md"], dir: HOME }])
+  await statusSays(p, "work-status", "Uploaded to frodo: 1.")
+  // ...and onto a linked computer's: transferred -- only where a folder is chosen there.
+  await drag(`${wsLine("README.md")} .ftree__name`, '#work-places [data-place="device:token2"]', async () => says("README.md", "Transfer to laptop: the folder is asked for next"))
+  await statusSays(p, "work-status", "Choose a folder in laptop first.")
+  await p.click('#work-places [data-place="device:token2"]')
+  await p.click("#work-tree .fx__empty .btn")
+  await p.fill("dialog[open] .dirs__typed", DEV)
+  await p.click("dialog[open] #dirs-use")
+  await p.waitForSelector(wsLine(`${DEV}/oven.py`))
+  // From the linked computer to the server: a text file's text, written there as a new file.
+  await drag(`${wsLine(`${DEV}/oven.py`)} .ftree__name`, '#work-places [data-place="server"]', async () => says("oven.py", "Transfer to Server: the folder is asked for next"))
+  assert.equal(await p.textContent("dialog[open] #fpick-title"), "Transfer to which folder?")
+  await pick()
+  await p.waitForFunction(() => window.__mock.api("PUT", "/files/content").length === 1)
+  assert.deepEqual(await bodies(p, "PUT", "/files/content"), [{ path: `${HOME}/oven.py`, text: WS_DEVICE_FILE.text, create: true }])
+  await statusSays(p, "work-status", "Transferred to Server: 1.")
+  // Files from outside, held over the window: what a drop would do here is said; dropped on a
+  // folder they go into it, elsewhere into the folder stood in.
+  await p.evaluate(() => window.__mock.emit("drag", true))
+  assert.equal(await p.getAttribute("#work-files", "data-drag"), "true")
+  assert.equal(await p.textContent("#work-drop"), "Drop on a folder to transfer the files to it on laptop; anywhere else they go into project.")
+  const [dx, dy] = await centre(`${wsLine(`${DEV}/src`)} .ftree__name`)
+  await p.evaluate(([x, y]) => (window.__mock.emit("drop-at", { x, y }), window.__mock.emit("drop", ["a.txt", "big.iso"])), [dx, dy])
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "device_upload_dropped"))
+  assert.deepEqual(await callsOf(p, "device_upload_dropped"), [{ device: "token2", dir: `${DEV}/src` }])
+  await statusSays(p, "work-status", "big.iso: This file is too large to send.")
+  assert.equal(await p.getAttribute("#work-files", "data-drag"), "false")
+  // The server's files: uploaded.
+  await p.click('#work-places [data-place="server"]')
+  await p.waitForSelector(wsLine(`${HOME}/lembas.md`))
+  // From the server onto this computer: downloaded.
+  await drag(`${wsLine(`${HOME}/lembas.md`)} .ftree__name`, '#work-places [data-place="local"]', async () => says("lembas.md", "Download to this computer: the folder is asked for next"))
+  assert.equal(await p.textContent("dialog[open] #fpick-title"), "Download to which folder?")
+  await pick()
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_download"))
+  assert.deepEqual(await callsOf(p, "local_download"), [{ root: WS_ROOT, dir: "", path: `${HOME}/lembas.md`, name: "lembas.md" }])
+  await statusSays(p, "work-status", "Downloaded to project: 1.")
+  await p.evaluate(() => window.__mock.emit("drag", true))
+  assert.equal(await p.textContent("#work-drop"), "Drop on a folder to upload the files into it; anywhere else they are uploaded into frodo.")
+  const [tx, ty] = await centre("#work-tree")
+  await p.evaluate(([x, y]) => (window.__mock.emit("drop-at", { x, y: y + 200 }), window.__mock.emit("drop", ["c.txt"])), [tx, ty])
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "library_upload_dropped"))
+  assert.deepEqual(await callsOf(p, "library_upload_dropped"), [{ dir: HOME }])
+  await statusSays(p, "work-status", "Uploaded to frodo: 1.")
+  // This computer: copied into the folder.
+  await p.click('#work-places [data-place="local"]')
+  await p.waitForSelector(wsLine("README.md"))
+  await p.evaluate(() => window.__mock.emit("drag", true))
+  assert.equal(await p.textContent("#work-drop"), "Drop on a folder to copy the files into it; anywhere else they are copied into project.")
+  const [sx, sy] = await centre(`${wsLine("src")} .ftree__name`)
+  await p.evaluate(([x, y]) => (window.__mock.emit("drop-at", { x, y }), window.__mock.emit("drop", ["d.txt", "e.txt"])), [sx, sy])
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "local_take_dropped"))
+  assert.deepEqual(await callsOf(p, "local_take_dropped"), [{ root: WS_ROOT, dir: "src" }])
+  await statusSays(p, "work-status", "Copied into src: 2.")
+  assert.equal((await callsOf(p, "attach_dropped")).length, 0, "none of these was an attachment")
+  // Dropped on the chat beside the files: the chat's, to attach -- and nothing is put into the folder.
+  const [cx, cy] = await centre("#composer-text")
+  await p.evaluate(([x, y]) => (window.__mock.emit("drop-at", { x, y }), window.__mock.emit("drop", ["f.txt"])), [cx, cy])
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "attach_dropped"))
+  await p.waitForTimeout(80)
+  assert.equal((await callsOf(p, "local_take_dropped")).length, 1)
+  assert.deepEqual(p.errors, [])
+})
+
+test("WS5: a completion is offered as it is typed -- asked for after a pause, the one before it cancelled by the next key and never shown late -- taken with Tab, left with Escape, and nothing is saved by it; with no model chosen for it nothing is asked while typing, only on its key or button; a refusal is said once; a CLI from before the editor's methods is said as that", async () => {
+  const p = await page(ws({}, {}, { editorManual: true }))
+  await wsOpen(p)
+  await wsOven(p)
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+End")
+  await p.keyboard.type("x")
+  await p.waitForFunction(() => window.__mock.editorWaiting().length === 1)
+  assert.deepEqual(await p.evaluate(() => window.__mock.editorWaiting()), [{ method: "_lembas/complete", params: { id: "c1", prefix: `def bake(loaf):\n    return loaf.heat(220)\nx`, suffix: "", path: "src/oven.py", language: "python" } }])
+  // The next key: the one on its way is cancelled by its id, and what it answers late is not shown.
+  await p.keyboard.type("y")
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "editor_cancel"))
+  assert.deepEqual(await callsOf(p, "editor_cancel"), [{ id: "c1", edit: false }])
+  await p.waitForFunction(() => window.__mock.editorWaiting().length === 2)
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "STALE", model: "solo", finish: "stop" }))
+  await p.waitForTimeout(80)
+  assert.equal(await wsGhost(p), "")
+  await p.evaluate(() => window.__mock.editorAnswer({ text: " = loaf", model: "solo", finish: "stop" }))
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .cm-ghost"))
+  assert.equal(await wsGhost(p), " = loaf")
+  assert.equal(await wsDoc(p), `${WS_OVEN}xy`, "offered, not written")
+  // Tab takes it; the file is edited, not saved.
+  await p.keyboard.press("Tab")
+  assert.equal(await wsDoc(p), `${WS_OVEN}xy = loaf`)
+  assert.equal(await wsGhost(p), "")
+  await p.waitForTimeout(500)
+  assert.equal((await p.evaluate(() => window.__mock.editorWaiting())).length, 0, "taking a completion asks for no other")
+  assert.equal((await callsOf(p, "local_write")).length, 0)
+  // Escape leaves it.
+  await p.keyboard.type("z")
+  await p.waitForFunction(() => window.__mock.editorWaiting().length === 1)
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "zz", model: "solo", finish: "stop" }))
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .cm-ghost"))
+  await p.keyboard.press("Escape")
+  assert.equal(await wsGhost(p), "")
+  assert.equal(await wsDoc(p), `${WS_OVEN}xy = loafz`)
+  // A cancelled one answers with nothing, as the CLI does: nothing is offered and nothing is said as wrong.
+  await p.keyboard.type("q")
+  await p.waitForFunction(() => window.__mock.editorWaiting().length === 1)
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "", cancelled: true }))
+  await p.waitForTimeout(60)
+  assert.equal(await wsGhost(p), "")
+  assert.equal(await p.textContent(`${wsPanel} .wpanel__said`), "")
+  // A refusal: said, once; typing on asks nothing more. On its key it is asked again.
+  await p.keyboard.type("r")
+  await p.waitForFunction(() => window.__mock.editorWaiting().length === 1)
+  await p.evaluate(() => window.__mock.editorAnswer({ __error: { status: 400, detail: "This model is not allowed for autocomplete." } }))
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "This model is not allowed for autocomplete.")
+  await p.keyboard.type("s")
+  await p.waitForTimeout(600)
+  assert.equal((await p.evaluate(() => window.__mock.editorWaiting())).length, 0)
+  await p.keyboard.press("Alt+Backslash")
+  await p.waitForFunction(() => window.__mock.editorWaiting().length === 1)
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "!", model: "solo", finish: "stop" }))
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .cm-ghost"))
+  assert.equal(await p.textContent(`${wsPanel} .wpanel__said`), "Tab takes it, Escape leaves it.")
+  assert.deepEqual(p.errors, [])
+  // No model chosen for autocomplete: nothing while typing; on the button, asked.
+  const o = await page(ws({ "GET /editor": fixture("editor_unset") }, {}, { editorManual: true }))
+  await wsOpen(o)
+  await wsOven(o)
+  assert.equal(await o.textContent('#work-tools .assist__pick[data-which="autocomplete"] .assist__value'), "Off")
+  await o.click(`${wsPanel} .cm-content`)
+  await o.keyboard.type("x")
+  await o.waitForTimeout(700)
+  assert.equal(await o.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "editor_call").length), 0)
+  await o.click(`${wsPanel} .wtab__complete`)
+  await o.waitForFunction(() => window.__mock.editorWaiting().length === 1)
+  assert.equal((await o.evaluate(() => window.__mock.editorWaiting()))[0].params.model, undefined, "the server chooses: no model is named")
+  await o.evaluate(() => window.__mock.editorAnswer({ text: "", model: "", finish: "stop" }))
+  await o.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "Nothing to complete here.")
+  assert.deepEqual(o.errors, [])
+  // The CLI in the app is from before these methods: said as that.
+  const old = await page(ws())
+  await wsOpen(old)
+  await wsOven(old)
+  await old.click(`${wsPanel} .cm-content`)
+  await old.keyboard.press("Alt+Backslash")
+  await old.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "This needs a newer LLeMbas CLI than the one in this app.")
+  assert.deepEqual(old.errors, [])
+})
+
+const WS_LONG = "def bake(loaf):\n    loaf.rest()\n    return loaf.heat(220)\n\n\ndef serve(loaf):\n    return loaf.slice(8)\n"
+const WS_LONG_NEW = "def bake(loaf):\n    loaf.rest()\n    return loaf.heat(240)  # <b>hot</b>\n\n\ndef serve(loaf):\n    return loaf.slice(12)\n"
+
+test("WS6: a selection is rewritten by an instruction and comes back as changes to accept or reject, each by itself: the selection, some lines around it and the instruction go to the CLI; what it writes is shown as it comes, as text; nothing is put into the file before a change is accepted, and nothing is saved; all at once too; stopped, and a text changed meanwhile, change nothing", async () => {
+  const p = await page(ws({}, { local_read: { __by: "path", "src/oven.py": wsRead("src/oven.py", WS_LONG, "code") } }, { editorManual: true }))
+  await wsOpen(p)
+  await wsOven(p)
+  // Nothing selected: said, nothing asked.
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+Home")
+  await p.keyboard.press("Control+e")
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "Select what should be rewritten first.")
+  const ask = async (instruction, keys = ["Control+a"]) => {
+    await p.click(`${wsPanel} .cm-content`)
+    for (const k of keys) await p.keyboard.press(k)
+    await p.keyboard.press("Control+e")
+    await p.waitForSelector("dialog[open] .dialog__input")
+    assert.match(await p.textContent("dialog[open]"), /Nothing is put into the file until you accept it\./)
+    await p.fill("dialog[open] .dialog__input", instruction)
+    await p.click('dialog[open] button[type="submit"]')
+    await p.waitForFunction(() => window.__mock.editorWaiting().some((c) => c.method === "_lembas/edit"))
+  }
+  // Lines 2 and 3 selected: they go whole, with the lines around them.
+  await ask("bake hotter", ["Control+Home", "ArrowDown", "Shift+ArrowDown", "Shift+End"])
+  let [call] = await p.evaluate(() => window.__mock.editorWaiting())
+  assert.deepEqual(call.params, { id: call.params.id, text: "    loaf.rest()\n    return loaf.heat(220)\n", instruction: "bake hotter", path: "src/oven.py", before: "def bake(loaf):\n", after: "\n\ndef serve(loaf):\n    return loaf.slice(8)\n", language: "python", cwd: WS_ROOT, model: "local/gpt-oss" })
+  // Written in pieces, shown as they come; stopped: the CLI is told, and the file is as it was.
+  await p.evaluate((id) => window.__mock.emit("editor", { id, delta: "    loaf.rest()\n    return" }), call.params.id)
+  await p.waitForFunction(() => document.querySelector(".review__writing")?.textContent === "    loaf.rest()\n    return")
+  await p.click(`${wsPanel} .review__stop`)
+  assert.deepEqual((await callsOf(p, "editor_cancel")).at(-1), { id: call.params.id, edit: true })
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "", cancelled: true }))
+  assert.ok(await p.isHidden(`${wsPanel} .review`))
+  assert.equal(await wsDoc(p), WS_LONG)
+  // The whole file: two changes. One rejected, one accepted.
+  await ask("hotter, and more slices")
+  ;[call] = await p.evaluate(() => window.__mock.editorWaiting())
+  assert.equal(call.params.text, WS_LONG)
+  await p.evaluate((text) => window.__mock.editorAnswer({ text, model: "qwen" }), WS_LONG_NEW)
+  await p.waitForSelector(`${wsPanel} .review .dhunk`)
+  assert.equal(await p.$$eval(`${wsPanel} .review .dhunk`, (l) => l.length), 2)
+  assert.equal(await p.textContent(`${wsPanel} .review__title`), "2 changes: 2 lines out, 2 in")
+  assert.deepEqual(await p.$$eval(`${wsPanel} .review .dhunk:first-child .dline`, (l) => l.map((x) => [x.className.replace("dline ", ""), x.querySelector(".dline__text").textContent])), [
+    ["is-same", "def bake(loaf):"],
+    ["is-same", "    loaf.rest()"],
+    ["is-del", "    return loaf.heat(220)"],
+    ["is-add", "    return loaf.heat(240)  # <b>hot</b>"],
+    ["is-same", ""],
+    ["is-same", ""],
+  ])
+  assert.equal(await p.$$eval(`${wsPanel} .review b`, (l) => l.length), 0, "a model's words are text")
+  assert.equal(await wsDoc(p), WS_LONG, "nothing is in the file before a change is accepted")
+  // (Accept and Reject stand in two columns, the same on every change.)
+  const cols = await p.$$eval(`${wsPanel} .review .dhunk`, (l) => l.map((x) => [Math.round(x.querySelector(".dhunk__no").getBoundingClientRect().left), Math.round(x.querySelector(".dhunk__yes").getBoundingClientRect().left)]))
+  assert.deepEqual(cols[0], cols[1])
+  await shot(p, "ws6-review-1280")
+  await p.click(`${wsPanel} .review .dhunk:nth-child(1) .dhunk__no`)
+  assert.equal(await p.textContent(`${wsPanel} .review__left`), "1 left to answer")
+  assert.equal(await wsDoc(p), WS_LONG)
+  await p.click(`${wsPanel} .review .dhunk:nth-child(2) .dhunk__yes`)
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .review").hidden)
+  assert.equal(await wsDoc(p), WS_LONG.replace("slice(8)", "slice(12)"))
+  assert.equal(await p.textContent(`${wsPanel} .wpanel__said`), "1 of 2 changes are in the file. Not saved yet.")
+  assert.equal(await p.getAttribute('.wtab:has(.wtab__open[aria-selected="true"])', "data-dirty"), "true")
+  assert.equal((await callsOf(p, "local_write")).length, 0, "accepting writes the editor, never the file")
+  // Reject all: nothing. Accept all: everything.
+  await ask("hotter")
+  await p.evaluate((text) => window.__mock.editorAnswer({ text, model: "qwen" }), WS_LONG_NEW)
+  await p.waitForSelector(`${wsPanel} .review .dhunk`)
+  await p.click(`${wsPanel} .review__none`)
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "Nothing was changed.")
+  assert.equal(await wsDoc(p), WS_LONG.replace("slice(8)", "slice(12)"))
+  await ask("hotter")
+  await p.evaluate((text) => window.__mock.editorAnswer({ text, model: "qwen" }), WS_LONG_NEW)
+  await p.waitForSelector(`${wsPanel} .review .dhunk`)
+  await p.click(`${wsPanel} .review__all`)
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "The changes are in the file. Not saved yet.")
+  assert.equal(await wsDoc(p), WS_LONG_NEW)
+  // The same text back: nothing would change. The text changed while the changes waited: nothing is put in.
+  await ask("again")
+  await p.evaluate((text) => window.__mock.editorAnswer({ text, model: "qwen" }), WS_LONG_NEW)
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "Nothing would change.")
+  await ask("cooler")
+  await p.evaluate((text) => window.__mock.editorAnswer({ text, model: "qwen" }), WS_LONG)
+  await p.waitForSelector(`${wsPanel} .review .dhunk`)
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+Home")
+  await p.keyboard.type("# ")
+  await p.click(`${wsPanel} .review__all`)
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "The text changed meanwhile: nothing was put in.")
+  assert.equal(await wsDoc(p), `# ${WS_LONG_NEW}`)
+  // A refusal, in the CLI's words.
+  await ask("hotter")
+  await p.evaluate(() => window.__mock.editorAnswer({ __error: { status: 400, detail: "Not logged in." } }))
+  await p.waitForFunction(() => document.querySelector(".wpanel:not([hidden]) .wpanel__said").textContent === "Not logged in.")
+  assert.ok(await p.isHidden(`${wsPanel} .review`))
+  assert.deepEqual(p.errors, [])
+})
+
+test("WS7: the two model settings of the editor -- autocomplete, and the main model -- are read from the server, switched for this window from the workspace's head, and saved as the person's choice from there; only models allowed for autocomplete are offered for it; a server without the settings says so", async () => {
+  const saved = { ...WS_SETTINGS, autocomplete: { ...WS_SETTINGS.autocomplete, model: "local/vision-small" } }
+  const p = await page(ws({ "PUT /editor": saved }, {}, { editorManual: true }))
+  await wsOpen(p)
+  await wsOven(p)
+  const pickOf = (which) => `#work-tools .assist__pick[data-which="${which}"]`
+  await p.waitForFunction(() => document.querySelector("#work-tools .assist__value")?.textContent === "Qwen")
+  assert.deepEqual(await p.$$eval("#work-tools .assist__pick", (l) => l.map((b) => [b.querySelector(".assist__label").textContent, b.querySelector(".assist__value").textContent])), [["Autocomplete", "Qwen"], ["Main model", "gpt-oss"]])
+  await p.click(pickOf("autocomplete"))
+  // (gpt-oss is not among the ones the administrator allows for autocomplete.)
+  assert.deepEqual(await p.$$eval(".menu .menu__item .menu__label", (l) => l.map((x) => x.textContent)), ["Off: only when asked for", "Qwen", "Vision", "Saved as your choice"])
+  // The quick switch: this window's, at once, and not saved.
+  await p.locator(".menu .menu__item", { hasText: /^Vision/ }).click()
+  assert.equal(await p.textContent(`${pickOf("autocomplete")} .assist__value`), "Vision")
+  assert.equal(await p.getAttribute(pickOf("autocomplete"), "data-quick"), "true")
+  assert.equal(await p.evaluate(() => window.__mock.api("PUT", "/editor").length), 0)
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.type("x")
+  await p.waitForFunction(() => window.__mock.editorWaiting().length === 1)
+  assert.equal((await p.evaluate(() => window.__mock.editorWaiting()))[0].params.model, "local/vision-small")
+  await p.evaluate(() => window.__mock.editorAnswer({ text: "", cancelled: true }))
+  // Saved as the person's choice: it follows them to every editor.
+  await p.click(pickOf("autocomplete"))
+  await p.locator(".menu .menu__item", { hasText: /^Save as my choice/ }).click()
+  await p.waitForFunction(() => window.__mock.api("PUT", "/editor").length === 1)
+  assert.deepEqual(await bodies(p, "PUT", "/editor"), [{ autocomplete_model: "local/vision-small" }])
+  await p.waitForFunction((sel) => document.querySelector(sel).dataset.quick === "false", pickOf("autocomplete"))
+  assert.equal(await p.textContent(`${pickOf("autocomplete")} .assist__value`), "Vision")
+  // The main model, switched: a rewrite runs on it.
+  await p.click(pickOf("main"))
+  await p.locator(".menu .menu__item", { hasText: /^Qwen/ }).click()
+  await p.click(`${wsPanel} .cm-content`)
+  await p.keyboard.press("Control+a")
+  await p.keyboard.press("Control+e")
+  await p.fill("dialog[open] .dialog__input", "hotter")
+  await p.click('dialog[open] button[type="submit"]')
+  await p.waitForFunction(() => window.__mock.editorWaiting().some((c) => c.method === "_lembas/edit"))
+  assert.equal((await p.evaluate(() => window.__mock.editorWaiting())).find((c) => c.method === "_lembas/edit").params.model, "local/qwen")
+  assert.deepEqual(p.errors, [])
+  // A server from before the settings: said on the buttons; autocomplete is off, the main model the chat's.
+  const old = await page(ws({ "GET /editor": { __error: { status: 404, detail: "Not Found" } } }))
+  await wsOpen(old)
+  await old.waitForFunction(() => document.querySelector('#work-tools .assist__pick[data-which="autocomplete"]')?.title.includes("no editor settings yet"))
+  assert.deepEqual(await old.$$eval("#work-tools .assist__value", (l) => l.map((x) => x.textContent)), ["Off", "The chat's"])
+  // No model chosen by anybody: the same two words, and nothing is wrong.
+  const unset = await page(ws({ "GET /editor": fixture("editor_unset") }))
+  await wsOpen(unset)
+  await unset.waitForSelector("#work-tools .assist__value")
+  assert.deepEqual(await unset.$$eval("#work-tools .assist__value", (l) => l.map((x) => x.textContent)), ["Off", "The chat's"])
+  assert.equal(await unset.getAttribute('#work-tools .assist__pick[data-which="autocomplete"]', "title"), "")
+  assert.deepEqual(unset.errors, [])
+  assert.deepEqual(old.errors, [])
+})
+
+test("WS8: an edit the agent asks to make in manual mode is drawn on its card as what would change -- the file, how much, each line as text -- and accepted or rejected there; a card without it is drawn as before", async () => {
+  const card = assumed("event_ask_edit").cards[0]
+  const p = await page(agentChatOpen([["ask", { cards: [card] }]], { "POST /chats/chat2/interactions/card9": { answered: true, remembered: false, not_remembered: [] } }))
+  await openChatRow(p, "chat2")
+  await p.waitForSelector("#cards .ask__diff")
+  assert.equal(await p.textContent("#cards .ask__diff-path"), "src/oven.py")
+  assert.equal(await p.textContent("#cards .ask__diff-count"), "1 lines out, 2 in")
+  assert.deepEqual(await p.$$eval("#cards .ask__diff .dline", (l) => l.map((x) => [x.className.replace("dline ", ""), x.querySelector(".dline__text").textContent])), [
+    ["is-same", "def bake(loaf):"],
+    ["is-del", "    return loaf.heat(220)"],
+    ["is-add", "    # <img src=x onerror=alert(1)>"],
+    ["is-add", "    return loaf.heat(240)"],
+  ])
+  assert.equal(await p.$$eval("#cards img", (l) => l.length), 0, "what the model wrote is text, never markup")
+  assert.equal(await p.$$eval("#cards .call__pre", (l) => l.length), 0, "the diff stands in the place of the raw input")
+  // The diff scrolls inside its own box; the card does not grow past the window.
+  assert.ok(await noSideways(p, 1280))
+  await shot(p, "ws8-card-1280")
+  await p.click("#cards .ask__actions .btn--primary")
+  await p.waitForFunction(() => window.__mock.api("POST", "/chats/chat2/interactions/card9").length === 1)
+  assert.equal((await bodies(p, "POST", "/chats/chat2/interactions/card9"))[0].verdict, "allow")
+  // A new file, and the device's own list of the same (`content`), are read the same way.
+  const fresh = { ...card, id: "card10", items: [{ ...card.items[0], diffs: undefined, content: [{ type: "diff", path: "notes.md", oldText: null, newText: "one\ntwo\n" }] }] }
+  await p.evaluate(([path, c]) => window.__mock.frame(path, "ask", { cards: [c] }), [STREAM2, fresh])
+  await p.waitForFunction(() => document.querySelector("#cards .ask__diff-path")?.textContent === "notes.md")
+  assert.equal(await p.textContent("#cards .ask__diff-count"), "A new file, 2 lines")
+  // Without a diff: the input, as before.
+  const plain = { ...card, id: "card11", items: [{ ...card.items[0], diffs: undefined }] }
+  await p.evaluate(([path, c]) => window.__mock.frame(path, "ask", { cards: [c] }), [STREAM2, plain])
+  await p.waitForFunction(() => document.querySelector("#cards .call__pre")?.textContent === "src/oven.py")
+  assert.equal(await p.$$eval("#cards .ask__diff", (l) => l.length), 0)
+  assert.deepEqual(p.errors, [])
+  // At a phone's width the card and its diff stay inside the window.
+  const n = await page(agentChatOpen([["ask", { cards: [card] }]]), { width: 390, height: 844 })
+  await n.evaluate(() => document.querySelector('.chatrow[data-id="chat2"]').click())
+  await n.waitForSelector("#cards .ask__diff")
+  assert.ok(await noSideways(n, 390))
+  const b = await n.$eval("#cards .ask__diff", (el) => el.getBoundingClientRect().toJSON())
+  assert.ok(b.left >= 0 && b.right <= 390.5, `the diff is inside the window (${b.left}..${b.right})`)
+  assert.deepEqual(n.errors, [])
+})
+
+test("WS9: the workspace at every width: wide, the files, the tabs and the chat side by side with the terminal's row under the files; at a phone's width one part at a time -- Files, Editor, Chat, Terminal -- nothing scrolls sideways, nothing is cut off or overlaps, and what is tapped is 40 px", async () => {
+  for (const [width, height] of [[1920, 1080], [1280, 860], [1024, 768], [800, 700], [390, 844]]) {
+    const p = await page(ws({}, {}, { terminal: [["control", fixture("terminal_ready")]] }), { width, height })
+    await wsOpen(p)
+    await p.waitForSelector(wsLine("README.md"))
+    const narrow = width <= 1024
+    const shown = (id) => p.evaluate((i) => { const el = document.getElementById(i); const r = el.getBoundingClientRect(); return !el.hidden && getComputedStyle(el).display !== "none" && r.width > 0 && r.height > 0 }, id)
+    const problems = async (what) => {
+      assert.ok(await noSideways(p, width), `${what} at ${width}: nothing scrolls sideways`)
+      const out = await p.evaluate((w) => {
+        const bad = []
+        const page = document.getElementById("page-workspace")
+        const seen = [...page.querySelectorAll("button, select, .ftree__name, .wtab__name, .head__title")].filter((el) => el.offsetParent !== null && getComputedStyle(el).visibility !== "hidden" && el.getBoundingClientRect().width > 0)
+        for (const el of seen) {
+          const r = el.getBoundingClientRect()
+          // (What scrolls inside a box of its own -- the places, the tabs, the tree -- may be past that box's edge.)
+          const scroller = el.closest(".work__places, .work__tabs, .work__tree, .review, .wpanel__body")
+          if (!scroller && (r.left < -0.5 || r.right > w + 0.5)) bad.push(`outside the window: ${el.id || el.className} (${Math.round(r.left)}..${Math.round(r.right)})`)
+        }
+        const heads = [...page.querySelectorAll(".work__head > *")].filter((el) => el.offsetParent !== null && el.getBoundingClientRect().width > 0)
+        for (let i = 0; i < heads.length; i++)
+          for (let j = i + 1; j < heads.length; j++) {
+            const [a, b] = [heads[i].getBoundingClientRect(), heads[j].getBoundingClientRect()]
+            if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) bad.push(`overlap in the head: ${heads[i].id} / ${heads[j].id}`)
+          }
+        return bad
+      }, width)
+      assert.deepEqual(out, [], `${what} at ${width}`)
+    }
+    await problems("the tree")
+    if (!narrow) {
+      // Side by side: files, the open file, the chat.
+      assert.ok((await shown("work-files")) && (await shown("work-editor")) && (await shown("main")), `all three at ${width}`)
+      assert.ok(!(await shown("work-panes")))
+      await wsOven(p)
+      await problems("a file open")
+      await p.waitForFunction(() => document.getElementById("work-terminal").getAttribute("aria-disabled") === "false")
+      await p.click("#work-terminal")
+      await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+      const [work, term, chat] = await p.evaluate(() => ["page-workspace", "terminal", "main"].map((id) => document.getElementById(id).getBoundingClientRect().toJSON()))
+      assert.ok(term.top >= work.bottom - 1 && Math.abs(term.left - work.left) <= 1, `the terminal under the files at ${width}`)
+      assert.ok(chat.left >= work.right - 1 && chat.width >= 250, `the chat beside at ${width} (${Math.round(chat.width)})`)
+      assert.ok(work.height >= 240, `the files keep their room above the terminal at ${width} (${Math.round(work.height)})`)
+      await problems("with the terminal")
+      // The chat folded away: its room goes to the files; and back.
+      await p.click("#work-chat")
+      assert.ok(!(await shown("main")))
+      await p.click("#work-chat")
+      assert.ok(await shown("main"))
+      await shot(p, `ws9-${width}`)
+    } else {
+      // One part at a time, chosen at the top.
+      assert.ok(await shown("work-panes"))
+      assert.ok((await shown("work-files")) && !(await shown("work-editor")) && !(await shown("main")), `the files alone at ${width}`)
+      await shot(p, `ws9-${width}-files`)
+      await p.click(`${wsLine("src")} .ftree__row`)
+      await p.waitForSelector(wsLine("src/oven.py"))
+      await p.click(`${wsLine("src/oven.py")} .ftree__row`)
+      await p.waitForSelector(`${wsPanel} .cm-content`)
+      assert.ok((await shown("work-editor")) && !(await shown("work-files")), `a file opened shows the editor at ${width}`)
+      assert.equal(await p.getAttribute('#work-panes [data-pane="editor"]', "aria-selected"), "true")
+      await problems("the editor")
+      await shot(p, `ws9-${width}-editor`)
+      await p.click('#work-panes [data-pane="chat"]')
+      assert.ok((await shown("main")) && !(await shown("work-editor")) && (await p.isVisible("#composer-text")), `the chat alone at ${width}`)
+      const [head, chat] = await p.evaluate(() => [document.querySelector(".work__head").getBoundingClientRect().toJSON(), document.getElementById("main").getBoundingClientRect().toJSON()])
+      assert.ok(chat.top >= head.bottom - 1 && chat.width >= Math.min(width, 380) - 1, `the chat under the workspace's head, the window's width, at ${width}`)
+      await problems("the chat")
+      await shot(p, `ws9-${width}-chat`)
+      await p.waitForFunction(() => { document.querySelector('#work-panes [data-pane="terminal"]').click(); return document.getElementById("shell").dataset.wpane === "terminal" })
+      await p.waitForFunction(() => document.querySelector("#terminal-message").textContent === "Connected.")
+      assert.ok((await shown("terminal")) && !(await shown("main")), `the terminal alone at ${width}`)
+      await problems("the terminal")
+      await p.click('#work-panes [data-pane="files"]')
+      assert.ok(await shown("work-files"))
+      if (width <= 480) {
+        // What a thumb uses is 40 px tall: the places, the parts, a line of the tree and its menu, a tab and its close.
+        await p.click('#work-panes [data-pane="editor"]')
+        const small = await p.evaluate(() =>
+          [...document.querySelectorAll("#work-places button, #work-panes button, .wtab__open, .wtab__close, #work-tools .assist__pick, .wpanel:not([hidden]) .wpanel__assist button")]
+            .filter((el) => el.offsetParent !== null)
+            .map((el) => [el.id || el.className, Math.round(el.getBoundingClientRect().height)])
+            .filter(([, h]) => h < 40),
+        )
+        assert.deepEqual(small, [], "tap targets of the editor's part")
+        await p.click('#work-panes [data-pane="files"]')
+        const lines = await p.evaluate(() =>
+          [...document.querySelectorAll("#work-tree .ftree__row, #work-tree .ftree__more")]
+            .filter((el) => el.offsetParent !== null)
+            .map((el) => [el.className, Math.round(el.getBoundingClientRect().height)])
+            .filter(([, h]) => h < 40),
+        )
+        assert.deepEqual(lines, [], "tap targets of the tree")
+      }
+    }
+    assert.deepEqual(p.errors, [])
+    await p.context().close()
+  }
 })
 
 // --- Run ----------------------------------------------------------------------------------------

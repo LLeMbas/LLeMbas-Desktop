@@ -6,6 +6,52 @@ All notable changes to LLeMbas Desktop. The format follows
 
 ## Unreleased
 
+The workspace's editor helper needs a LLeMbas CLI with the editor's methods (harness spec
+3.11.0) and a server with the editor settings; a linked computer's files need a server that
+relays them. With older ones each of those says so in words and the rest works.
+
+### Added
+
+- **Workspace: one view for working on a folder.** A new entry in the sidebar. At its top you
+  choose where the files are -- **this computer**, another **linked computer**, or the
+  **server** -- and all three work the same: a tree of the folder's files, files open in tabs,
+  the agent's chat for that folder beside them, and a terminal on the same machine under the
+  files. On a narrow window one part shows at a time: Files, Editor, Chat, Terminal.
+- **The same files, the same hands, in every place.** A tab draws a file exactly as the viewer
+  does (text and code in the editor, Markdown, pictures, tables, notebooks, sound and video, PDF)
+  and a file that may be written is edited there and saved with Ctrl+S. A save always starts
+  from what was read: where the file changed meanwhile it is not written, and you choose between
+  reading it again and saving anyway. Every line of the tree has the Files page's menu: new file
+  and folder, rename, move and copy through the folder dialog, delete.
+- **Drag and drop that says what it will do.** While something is held, the words beside it say
+  what letting go there does: a file onto a folder is **moved**; onto another place's button it
+  is **uploaded** (this computer to the server), **downloaded** (the server to this computer) or
+  **transferred** (to or from a linked computer), into a folder you choose next. Files dragged in
+  from outside the window are **copied** into this computer's folder, **uploaded** to the
+  server's, or **transferred** to a linked computer's; dropped on the chat they are attached to
+  the message, as before. The same words are in each line's menu, for the keyboard. The Files
+  page's drag says "Move to …" the same way.
+- **The chat knows what you are looking at.** A message sent from the chat beside the files
+  tells the agent the file in front, the line the cursor is on, what is selected and which other
+  files are open -- as data beside your message, not written into it.
+- **Rewrite a selection.** Select text, press Ctrl+E (or the button above the file), say what
+  should change: the rewrite comes back as changes, each to accept or reject by itself, or all at
+  once. Nothing is put into the file before you accept, and nothing is saved by accepting.
+- **Autocomplete.** As you type, after a short pause, a completion is offered in grey at the
+  cursor: Tab takes it, Escape leaves it, and typing on cancels the request. Alt+\ (or the
+  button) asks for one at any time. As-you-type runs only when an autocomplete model is chosen.
+- **Two model settings for the editor**, at the workspace's top: **Autocomplete** and **Main
+  model** (rewrites). Each can be switched for this window at once, and saved as your own choice
+  on the server, where it follows you to the other LLeMbas editors.
+- **An edit the agent asks to make in manual mode is shown as a diff** on its approval card:
+  the file, how many lines go and come, and each changed line. In edit and auto mode nothing
+  changes.
+
+### Changed
+
+- The app's icon is its own: the LLeMbas leaf with a small window beside it, so it is told apart
+  from the other LLeMbas products.
+
 ### Fixed
 
 - **A message that no longer waits is no longer drawn as waiting.** When Send now or Discard is

@@ -1,0 +1,10 @@
+{
+  "path": "/home/user/project/oven.py",
+  "name": "oven.py",
+  "size": 44,
+  "mime": "text/x-python",
+  "file_kind": "code",
+  "sha": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "writable": true,
+  "text": "def bake(loaf):\n    return loaf.heat(220)\n"
+}

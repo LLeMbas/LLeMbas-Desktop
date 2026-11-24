@@ -29,7 +29,8 @@ file_content.json file_content_withheld.json file_save_conflict.json file_create
 files_trash.json files_restored.json files_trash_emptied.json file_versions.json files_batch.json
 tool_media.json media_job.json media_job_done.json media_job_failed.json media_jobs.json mcp_servers.json
 file_node.json file_content_archive.json event_reply.json event_reply_end.json
-message_unsure.json message_carried.json message_sent_now.json message_discarded.json"
+message_unsure.json message_carried.json message_sent_now.json message_discarded.json
+editor.json editor_unset.json"
 
 [ $# -eq 1 ] || { echo "usage: scripts/fetch-fixtures.sh <server-ref>" >&2; exit 2; }
 commit="$(git -C "$SERVER" rev-parse --verify --quiet "$1^{commit}")" \
