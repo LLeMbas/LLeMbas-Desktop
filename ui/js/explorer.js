@@ -154,8 +154,13 @@ const DRAG_PX = 6
  *     move(paths, to)  copy(paths, to)  remove(paths)   -> { done, failed: [{ path, error }], said? }
  *   dirItems?(entry), fileItems?(entry), acrossItems?(entry)  -> more of a row's menu
  *   batchItems?(paths) -> more of the bar's buttons: [{ label, run }]
+ *   treeFiles?    the tree lists files as well as folders, each line with the list's own menu
+ *                 (the workspace, whose tree is the whole of its files; the list is not shown)
+ *   across?       what a drop onto another place does: { words(place) -> the sentence said
+ *                 while it is held there, drop(entries, place) } -- a place is an element with
+ *                 `data-place-drop`, anywhere in the window
  */
-function explorer(el, source) {
+export function explorer(el, source) {
   let current = null // the directory listed now (as answered)
   let chosen = null // the file whose details show
   let shown = [] // the entries listed now
@@ -192,6 +197,7 @@ function explorer(el, source) {
   const treeBox = el.tree
   const opened = new Set()
   const branches = new Map() // path -> { ul, depth }
+  const known = new Map() // path -> entry: what the tree has listed (a dragged line's entry)
   const drawTree = () => {
     clear(treeBox)
     const rootRow = h(
@@ -212,11 +218,35 @@ function explorer(el, source) {
       depth,
       load: () => fetchDir(path),
       draw: (answer) => {
-        const dirs = (answer.entries || []).filter(isDir)
-        for (const e of dirs) ul.append(twig(e, depth))
+        const all = answer.entries || []
+        if (ul.parentElement === treeBox || path === source.top()) known.clear()
+        for (const e of all) known.set(e.path, e)
+        for (const e of all.filter(isDir)) ul.append(twig(e, depth))
+        if (source.treeFiles) {
+          for (const e of all.filter((x) => !isDir(x))) ul.append(leaf(e, depth))
+          if (!all.length && depth === 0) ul.append(h("li", { class: "fnote" }, h("span", { text: t("Nothing here yet. Not even a hobbit hole.") })))
+        }
         mark()
       },
     })
+  }
+  /** What a line of a tree that lists files has at its end: the list's own menu for the entry. */
+  const more = (e) =>
+    source.treeFiles
+      ? h("button", { type: "button", class: "tool ftree__more", "aria-label": t("More for %(name)s", { name: e.name }), title: t("More for %(name)s", { name: e.name }), onclick: (ev) => menu(ev.currentTarget, itemsFor(e)) }, icon(ICONS.more))
+      : null
+  /** A file's line in the tree (only where the tree lists files): opens it. */
+  const leaf = (e, depth) => {
+    const row = h(
+      "button",
+      { type: "button", class: "ftree__row ftree__row--file", title: e.path, dataset: { path: e.path, file: "true" }, onclick: () => source.open(e) },
+      h("span", { class: `frow__icon frow__icon--${kindOf(e)}` }, icon(iconOf(e))),
+      h("span", { class: "ftree__name", text: e.name }),
+    )
+    const line = h("div", { class: "ftree__line" }, h("span", { class: "ftree__gap", "aria-hidden": "true" }), row, more(e))
+    line.style.setProperty("--depth", String(depth))
+    line.addEventListener("contextmenu", (ev) => (ev.preventDefault(), menu({ x: ev.clientX, y: ev.clientY }, itemsFor(e))))
+    return h("li", { role: "treeitem", dataset: { path: e.path, kind: e.kind } }, line)
   }
   const twig = (e, depth) => {
     const chevron = h("button", { type: "button", class: "ftree__chevron", "aria-label": e.name, "aria-expanded": "false", tabindex: "-1" }, icon(ICONS.chevron))
@@ -226,9 +256,10 @@ function explorer(el, source) {
       icon(iconOf(e)),
       h("span", { class: "ftree__name", text: e.name }),
     )
-    const line = h("div", { class: "ftree__line" }, chevron, row)
+    const line = h("div", { class: "ftree__line" }, chevron, row, more(e))
     line.style.setProperty("--depth", String(depth))
-    const li = h("li", { role: "treeitem", dataset: { path: e.path } }, line)
+    if (source.treeFiles) line.addEventListener("contextmenu", (ev) => (ev.preventDefault(), menu({ x: ev.clientX, y: ev.clientY }, itemsFor(e))))
+    const li = h("li", { role: "treeitem", dataset: { path: e.path, kind: e.kind } }, line)
     let kids = null
     const expand = (opening) => {
       chevron.setAttribute("aria-expanded", String(opening))
@@ -493,6 +524,64 @@ function explorer(el, source) {
   // the crumbs takes it.
   // The pane's elements outlive an explorer (the pane is drawn again for another folder): the
   // list has one such handler, the latest explorer's, never one from each.
+  const dragFrom = (ev, paths, label) => {
+    let ghost = null
+    let over = null
+    let words = ""
+    const nameOf = (to) => (to === source.top() ? source.rootName() : baseName(to))
+    // What takes a drop, and what the drop would do, in words: a folder of this place moves it
+    // there; another place (its button) is a copy to there, the folder asked for afterwards.
+    const takes = (x, y) => {
+      const under = document.elementFromPoint(x, y)
+      const place = source.across ? under?.closest?.("[data-place-drop]") : null
+      if (place && place.dataset.placeDrop !== source.place) {
+        words = source.across.words(place.dataset.placeDrop, place)
+        return words ? place : null
+      }
+      const hit = under?.closest?.("[data-drop]")
+      if (!hit || !el.pane.contains(hit)) return null
+      const to = hit.dataset.drop
+      // Not onto itself, into itself, or into the folder it is in already.
+      if (paths.some((p) => to === p || to.startsWith(`${p}/`) || dirOf(p) === to)) return null
+      words = t("Move to %(folder)s", { folder: nameOf(to) })
+      return hit
+    }
+    const move = (e) => {
+      if (!ghost) {
+        if (Math.hypot(e.clientX - ev.clientX, e.clientY - ev.clientY) < DRAG_PX) return
+        ghost = h("div", { class: "fdrag", "aria-hidden": "true" }, h("span", { class: "fdrag__what", text: label }), h("span", { class: "fdrag__does" }))
+        document.body.append(ghost)
+        el.pane.classList.add("is-dragging")
+      }
+      ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`
+      const hit = takes(e.clientX, e.clientY)
+      if (hit === over) return
+      over?.classList.remove("is-drop")
+      over = hit
+      over?.classList.add("is-drop")
+      // What letting go here would do, in words; nothing where nothing would take it.
+      ghost.lastChild.textContent = over ? words : ""
+    }
+    const end = (e) => {
+      document.removeEventListener("pointermove", move)
+      document.removeEventListener("pointerup", end)
+      document.removeEventListener("pointercancel", end)
+      el.pane.classList.remove("is-dragging")
+      over?.classList.remove("is-drop")
+      if (!ghost) return
+      ghost.remove()
+      // The click that ends a drag opens nothing.
+      const swallow = (c) => (c.stopPropagation(), c.preventDefault())
+      document.addEventListener("click", swallow, { capture: true, once: true })
+      setTimeout(() => document.removeEventListener("click", swallow, true), 0)
+      if (e.type !== "pointerup" || !over) return
+      if (over.dataset.placeDrop) source.across.drop(paths.map((p) => picked.get(p) || shown.find((x) => x.path === p) || known.get(p)).filter(Boolean), over.dataset.placeDrop)
+      else moveInto(paths, over.dataset.drop)
+    }
+    document.addEventListener("pointermove", move)
+    document.addEventListener("pointerup", end)
+    document.addEventListener("pointercancel", end)
+  }
   el.list.onpointerdown = !ops?.move
     ? null
     : (ev) => {
@@ -500,48 +589,16 @@ function explorer(el, source) {
       const from = ev.target.closest?.(".frow[data-path]")
       if (!from || from.dataset.kind === "mount" || ev.target.closest(".frow__actions, .frow__tick")) return
       const paths = picked.has(from.dataset.path) ? [...picked.keys()] : [from.dataset.path]
-      const label = paths.length > 1 ? t("%(n)s selected", { n: paths.length }) : from.querySelector(".frow__label")?.textContent || ""
-      let ghost = null
-      let over = null
-      const takes = (x, y) => {
-        const hit = document.elementFromPoint(x, y)?.closest?.("[data-drop]")
-        if (!hit || !el.pane.contains(hit)) return null
-        const to = hit.dataset.drop
-        // Not onto itself, into itself, or into the folder it is in already.
-        if (paths.some((p) => to === p || to.startsWith(`${p}/`) || dirOf(p) === to)) return null
-        return hit
-      }
-      const move = (e) => {
-        if (!ghost) {
-          if (Math.hypot(e.clientX - ev.clientX, e.clientY - ev.clientY) < DRAG_PX) return
-          ghost = h("div", { class: "fdrag", "aria-hidden": "true", text: label })
-          document.body.append(ghost)
-          el.pane.classList.add("is-dragging")
-        }
-        ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`
-        const hit = takes(e.clientX, e.clientY)
-        if (hit === over) return
-        over?.classList.remove("is-drop")
-        over = hit
-        over?.classList.add("is-drop")
-      }
-      const end = (e) => {
-        document.removeEventListener("pointermove", move)
-        document.removeEventListener("pointerup", end)
-        document.removeEventListener("pointercancel", end)
-        el.pane.classList.remove("is-dragging")
-        over?.classList.remove("is-drop")
-        if (!ghost) return
-        ghost.remove()
-        // The click that ends a drag opens nothing.
-        const swallow = (c) => (c.stopPropagation(), c.preventDefault())
-        document.addEventListener("click", swallow, { capture: true, once: true })
-        setTimeout(() => document.removeEventListener("click", swallow, true), 0)
-        if (e.type === "pointerup" && over) moveInto(paths, over.dataset.drop)
-      }
-      document.addEventListener("pointermove", move)
-      document.addEventListener("pointerup", end)
-      document.addEventListener("pointercancel", end)
+      dragFrom(ev, paths, paths.length > 1 ? t("%(n)s selected", { n: paths.length }) : from.querySelector(".frow__label")?.textContent || "")
+    }
+  // (A tree that lists files is dragged from as the list is: a line onto a folder, or a place.)
+  el.tree.onpointerdown = !(ops?.move && source.treeFiles)
+    ? null
+    : (ev) => {
+      if (ev.button !== 0 || ev.pointerType !== "mouse") return
+      const from = ev.target.closest?.("li[data-path]")
+      if (!from || from.dataset.kind === "mount" || ev.target.closest(".ftree__more, .ftree__chevron")) return
+      dragFrom(ev, [from.dataset.path], from.querySelector(".ftree__name")?.textContent || "")
     }
 
   // --- The chosen file's details and preview.
@@ -656,14 +713,15 @@ const baseName = (p) => String(p).replace(/\/+$/, "").split("/").pop() || p
 const outcomes = (results) => ({ done: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).map((r) => ({ path: r.path, error: r.error || "" })), notes: results.filter((r) => r.ok && r.note).map((r) => String(r.note)) })
 
 /** This computer's tree under `root`, as an explorer's (and a folder dialog's) place. */
-function localSource(root) {
+export function localSource(root) {
   const where = t("This computer")
   const read = (e) => invoke("local_read", { root, path: e.path })
-  const open = async (e) => {
+  // The file as the viewer takes it (`openViewer`, `mountFile`): read now; `reload` shows it read again.
+  const file = async (e, reload) => {
     try {
       const f = await read(e)
       const editable = f.writable && typeof f.text === "string"
-      return openViewer({
+      return {
         name: f.name,
         path: `${f.root}/${f.path}`,
         where,
@@ -676,14 +734,18 @@ function localSource(root) {
         media: () => invoke("media_open", { source: "local", kind: fileKind(f.name, f.kind), root, path: f.path }),
         sealed: { source: "local", root, path: f.path },
         save: editable ? (text, { base, force }) => invoke("local_write", { root, path: f.path, text, base: base || null, force: !!force }) : undefined,
-        reload: () => open(e),
-      })
+        reload,
+      }
     } catch (err) {
-      return openViewer({ name: e.name, path: e.path, where, error: why(err) })
+      return { name: e.name, path: e.path, where, error: why(err) }
     }
   }
+  const open = async (e) => openViewer(await file(e, () => open(e)))
   return {
     key: "local",
+    place: "local",
+    root,
+    file,
     top: () => "",
     ask: (path) => path || "",
     parent: (path) => (String(path).includes("/") ? String(path).replace(/\/[^/]*$/, "") : ""),
@@ -782,6 +844,108 @@ export async function readLocal(root, path) {
   return invoke("local_read", { root, path })
 }
 
+// --- A linked computer ---------------------------------------------------------------------------
+//
+// The files of another computer of the person's, through the server's relay to the LLeMbas agent
+// there (the CLI's `_lembas/fs/*`, harness spec 3.11.0 *Device files*; inside that computer's own
+// folders and under its limits).
+//
+// 🚧 ASSUMED. The editor round's contract asks the server for "`/api/v2` routes for the apps to
+// browse and edit a linked computer's files (list, read, write with a base check, mkdir, move,
+// copy, delete, upload, download)" and names none. Until the server's routes and fixtures exist,
+// the addresses and shapes below are this app's reading of it, written as the server's own
+// `/files` routes are and as the spec's `_lembas/fs/*` results read. DEVICE_FILES and
+// `deviceSource` are the whole seam: nothing else in the app spells a device's file route
+// (Rust's `upload_to_device` spells the upload). The fixtures the tests answer with are in
+// tests/ui/fixtures/assumed/, apart from the ones pinned from the server.
+//
+//   GET  /devices/{id}/fs?path=           -> { device, path, parent, entries: [{ name, path, kind: "dir"|"file", size, file_kind?, updated_at }] }
+//   GET  /devices/{id}/fs/content?path=   -> { path, name, size, mime, file_kind, sha, text, writable, withheld?: { reason, message } }
+//   PUT  /devices/{id}/fs/content         { path, text, base? | force?, create? } -> { sha, text? }; 409 { detail } when it changed
+//   POST /devices/{id}/fs/mkdir           { path, name }
+//   POST /devices/{id}/fs/rename          { path, name }
+//   POST /devices/{id}/fs/move | /copy    { paths, to } -> { results: [{ path, ok, error }], done, failed }
+//   POST /devices/{id}/fs/delete          { paths }     -> the same (to that computer's trash, or refused in words)
+//   POST /devices/{id}/fs/upload?path=    multipart `files` (by Rust: `device_upload_dropped`)
+// Paths are absolute on that computer, as its directories are listed (`/devices/{id}/directories`).
+export const DEVICE_FILES = {
+  list: (device, path) => `/devices/${enc(device)}/fs?path=${enc(path)}`,
+  read: (device, path) => `/devices/${enc(device)}/fs/content?path=${enc(path)}`,
+  write: (device) => `/devices/${enc(device)}/fs/content`,
+  act: (device, what) => `/devices/${enc(device)}/fs/${what}`,
+}
+
+/** A linked computer's tree under `root` (a folder there), as an explorer's place. `name`: the computer's. */
+export function deviceSource(device, root, name) {
+  const where = name || t("A linked computer")
+  const top = String(root).replace(/\/+$/, "") || "/"
+  const read = (e) => get(DEVICE_FILES.read(device, e.path))
+  const several = (r, n) => (Array.isArray(r?.results) ? batched(r) : { done: n, failed: [] })
+  const file = async (e, reload) => {
+    try {
+      const f = await read(e)
+      const at = f.path || e.path
+      const kind = fileKind(f.name || e.name, f.file_kind || f.kind || e.file_kind)
+      return {
+        name: f.name || e.name,
+        path: at,
+        where,
+        kind,
+        mime: f.mime || "",
+        text: f.text ?? undefined,
+        withheld: f.withheld,
+        size: f.size,
+        sha: f.sha,
+        // (No bytes of a linked computer's file are served to the viewer yet: what is not text says so.)
+        save: f.writable !== false && typeof f.text === "string" && !f.withheld ? (text, { base, force }) => api("PUT", DEVICE_FILES.write(device), force ? { path: at, text, force: true } : { path: at, text, base }) : undefined,
+        reload,
+      }
+    } catch (err) {
+      return { name: e.name, path: e.path, where, error: why(err) }
+    }
+  }
+  const open = async (e) => openViewer(await file(e, () => open(e)))
+  return {
+    key: "device",
+    place: "device",
+    device,
+    root: top,
+    file,
+    top: () => top,
+    ask: (path) => path || top,
+    parent: (path) => (path === top ? top : String(path).replace(/\/[^/]*$/, "") || "/"),
+    rootName: () => baseName(top),
+    crumbs: (path) => {
+      const out = [[baseName(top), top]]
+      const rest = String(path).startsWith(top) ? String(path).slice(top.length) : ""
+      let at = top
+      for (const part of rest.split("/").filter(Boolean)) {
+        at = `${at.replace(/\/$/, "")}/${part}`
+        out.push([part, at])
+      }
+      return out
+    },
+    list: async (path) => {
+      const r = await get(DEVICE_FILES.list(device, path || top))
+      if (!r || !Array.isArray(r.entries)) throw { detail: r?.error || t("The server's answer could not be read.") }
+      return { path: r.path ?? path, entries: r.entries }
+    },
+    preview: read,
+    open,
+    ops: {
+      mkdir: (dir, folder) => post(DEVICE_FILES.act(device, "mkdir"), { path: dir, name: folder }),
+      mkfile: async (dir, fileName) => {
+        if (fileName.includes("/")) throw { detail: t("A file needs a name without a slash.") }
+        return api("PUT", DEVICE_FILES.write(device), { path: `${dir.replace(/\/$/, "")}/${fileName}`, text: "", create: true })
+      },
+      rename: (e, to) => post(DEVICE_FILES.act(device, "rename"), { path: e.path, name: to }),
+      move: async (paths, to) => several(await post(DEVICE_FILES.act(device, "move"), { paths, to }), paths.length),
+      copy: async (paths, to) => several(await post(DEVICE_FILES.act(device, "copy"), { paths, to }), paths.length),
+      remove: async (paths) => several(await post(DEVICE_FILES.act(device, "delete"), { paths }), paths.length),
+    },
+  }
+}
+
 // --- The server ---------------------------------------------------------------------------------
 
 export async function readServer(path) {
@@ -867,9 +1031,11 @@ function showTrash() {
 let firstListing = true
 
 /** The server's tree, as an explorer's (and a folder dialog's) place. */
-function serverSource() {
+export function serverSource() {
   return {
     key: "server",
+    place: "server",
+    file: (e, reload) => serverFile(e.path, e.name, e, reload),
     top: () => serverRoot,
     // The top is asked as `/`, which is what the server opens a person at.
     ask: (path) => (!path || path === serverRoot ? "/" : path),
@@ -962,6 +1128,11 @@ export function renderServer() {
  * its size and what it is) and from a chat's outputs. One the person may write is edited there.
  */
 export async function openServerFile(path, name, entry) {
+  return openViewer(await serverFile(path, name, entry, () => openServerFile(path, name, entry)))
+}
+
+/** A file in the server's tree as the viewer takes it: read now; `reload` shows it read again. */
+export async function serverFile(path, name, entry, reload) {
   const where = t("Server")
   try {
     const f = await readServer(path)
@@ -974,7 +1145,7 @@ export async function openServerFile(path, name, entry) {
       else if (base) body.base = base
       return api("PUT", "/files/content", body)
     }
-    return await openViewer({
+    return {
       name: f.name || name,
       path: at,
       where,
@@ -992,10 +1163,10 @@ export async function openServerFile(path, name, entry) {
       download: () => downloadFile(at, f.name || name),
       // Only where the server says the person may write it (a server before that says nothing).
       save: f.writable === true && !f.withheld ? save : undefined,
-      reload: () => openServerFile(path, name, entry),
-    })
+      reload,
+    }
   } catch (err) {
-    return openViewer({ name, path, where, error: why(err) })
+    return { name, path, where, error: why(err) }
   }
 }
 

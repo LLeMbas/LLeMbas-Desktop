@@ -93,7 +93,10 @@ async function language(name) {
  * with undo, `onChange()` after every change and `onSave()` on Ctrl+S. Returns the editor:
  * `state.doc.toString()` is what it holds, `destroy()` lets it go.
  */
-export async function codeView(parent, text, { lang = "", line = 0, editable = false, onChange, onSave } = {}) {
+/** CodeMirror's own modules (state, view, commands), for what builds on the editor (assist.js). */
+export const codeMirror = () => load()
+
+export async function codeView(parent, text, { lang = "", line = 0, editable = false, onChange, onSave, extra = [] } = {}) {
   const { state, view, base, commands } = await load()
   const mode = editable
     ? [
@@ -116,7 +119,7 @@ export async function codeView(parent, text, { lang = "", line = 0, editable = f
     : [state.EditorState.readOnly.of(true), view.EditorView.editable.of(false)]
   const ed = new view.EditorView({
     parent,
-    state: state.EditorState.create({ doc: text, extensions: [mode, base, await language(lang)] }),
+    state: state.EditorState.create({ doc: text, extensions: [extra, mode, base, await language(lang)] }),
   })
   if (line > 0 && line <= ed.state.doc.lines) {
     const at = ed.state.doc.line(line).from

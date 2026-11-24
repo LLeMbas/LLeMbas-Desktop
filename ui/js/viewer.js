@@ -81,7 +81,7 @@ const WHOLE_BYTES = 64 * 1024 * 1024
 // The most of an archive's listing drawn (the server lists no more than this itself).
 const ARCHIVE_ENTRIES = 2000
 
-let current = null // { editor, sealed, media, dirty, keep }
+let current = null // what the panel beside the chat shows: { editor, sealed, media, dirty, keep, alive }
 let onChange = () => {}
 let kept = null // an edit the screen was taken from under: { file, text, sha }
 
@@ -90,22 +90,30 @@ export function onViewer(fn) {
   onChange = fn
 }
 
-function teardownBody() {
-  if (!current) return
-  current.editor?.destroy()
-  current.editor = null
-  if (current.sealed) invoke("sealed_close", { url: current.sealed })
-  current.sealed = null
-  current.frame?.close()
-  current.frame = null
-  for (const url of current.blobs || []) URL.revokeObjectURL(url)
-  current.blobs = []
+/** Let go of what a drawn file's body holds: its editor, its sealed frame, what it made addresses for. */
+function teardownBody(inst) {
+  if (!inst) return
+  inst.editor?.destroy()
+  inst.editor = null
+  if (inst.sealed) invoke("sealed_close", { url: inst.sealed })
+  inst.sealed = null
+  inst.frame?.close()
+  inst.frame = null
+  for (const url of inst.blobs || []) URL.revokeObjectURL(url)
+  inst.blobs = []
+}
+
+/** Let go of a drawn file altogether: nothing of it is drawn or answered into its place any more. */
+function teardownOf(inst) {
+  if (!inst) return
+  inst.alive = false
+  teardownBody(inst)
+  if (inst.media) invoke("media_close", { url: inst.media }).catch(() => {})
+  inst.media = null
 }
 
 function teardown() {
-  if (!current) return
-  teardownBody()
-  if (current.media) invoke("media_close", { url: current.media }).catch(() => {})
+  teardownOf(current)
   current = null
 }
 
@@ -348,66 +356,89 @@ function drawFacts(file, words) {
 export async function openViewer(file) {
   if (!(await mayLeave())) return false
   teardown()
-  const byName = showKind(file.path || file.name)
-  const kind = fileKind(file.path || file.name, file.kind)
-  const lang = file.language || byName.language
   $("viewer").hidden = false
   onChange(true)
   $("viewer-name").textContent = file.name || file.path || ""
   $("viewer-name").title = file.path || ""
   $("viewer-where").textContent = file.where || ""
-  const body = clear($("viewer-body"))
-  const modes = clear($("viewer-modes"))
-  const bar = clear($("viewer-bar"))
-  bar.hidden = true
-  const mine = (current = { name: file.name || "", dirty: false, blobs: [] })
-  const here = () => current === mine
-  if (file.error) {
-    body.append(h("p", { class: "viewer__note is-error", text: file.error }))
-    return true
-  }
-  // What the webview draws from the bytes themselves.
-  if (MEDIA_KINDS.includes(kind) && file.media && !(kind === "svg" && typeof file.text === "string" && !file.withheld && file.viewAs === "source")) {
-    await drawMedia(file, kind, body, modes, bar, mine)
-    return true
-  }
-  // What a parser has to read: in a sealed frame, never here. (A .gltf is text as well; it is
-  // drawn, and its source is the file to download.)
-  if (sealedKind(kind) && file.sealed) {
-    const frame = sealedViewer(kind, file.sealed, { name: file.name || "" })
-    mine.frame = frame
-    body.append(h("div", { class: "viewer__sealed" }, frame.el))
-    if (file.download) {
-      bar.hidden = false
-      bar.append(h("span", { class: "viewer__said", text: Number.isFinite(file.size) ? bytes(file.size) : "" }), h("button", { type: "button", class: "btn btn--sm", text: t("Download"), onclick: () => file.download() }))
-    }
-    return true
-  }
-  const isText = TEXT_KINDS.includes(kind) && !file.withheld && typeof file.text === "string"
-  // An archive the server listed: what is in it. One it could not list says why, in its words.
-  if (kind === "archive" && file.archive && typeof file.archive === "object") {
-    if (file.archive.problem) {
-      body.append(drawFacts({ ...file, kind }, String(file.archive.message || "") || t("This file cannot be shown here.")))
-      return true
-    }
-    body.append(drawArchive(file))
-    if (file.download) {
-      bar.hidden = false
-      bar.append(h("span", { class: "viewer__said", text: Number.isFinite(file.size) ? bytes(file.size) : "" }), h("button", { type: "button", class: "btn btn--sm", text: t("Download"), onclick: () => file.download() }))
-    }
-    return true
-  }
-  if (!isText) {
-    body.append(drawFacts({ ...file, kind }, file.withheld ? withheldWords(file.withheld, file.size) : t("This is not a text file; it cannot be shown here.")))
-    return true
-  }
-  await drawText(file, kind, lang, body, modes, bar, mine, here)
+  const bar = $("viewer-bar")
+  current = mountFile({ body: $("viewer-body"), modes: $("viewer-modes"), bar }, file, { reopen: openViewer, kept: true })
+  await current.ready
   return true
 }
 
+/**
+ * Draw a file into a place of its own -- the panel beside the chat, or a tab of the workspace:
+ * the same viewers and the same editing in both. `slots`: `{ body, modes, bar }`, the elements
+ * for the file itself, for its ways of being seen (Preview, Source, Edit) and for the line that
+ * says what is so and what can be done. `file`: as `openViewer` takes it. `opts`:
+ *   reopen(file)     draws the file anew, another way (an SVG's picture or its source)
+ *   kept             an edit the screen was taken from under is put back here (the panel only)
+ *   edit             a text file that may be written opens in the editor at once
+ *   extensions(api)  -> more for the editor of a file being edited (the workspace's helpers);
+ *                    `api`: { file, lang, view(): the editor or null }
+ *   changed(inst)    called when `dirty` changes, and after a save
+ * Answers at once with what is drawn: `{ name, dirty, editor, alive, ready, keep?, save?(),
+ * text?(), close() }` -- `ready` settles when the file is on the screen, `close()` lets it go.
+ */
+export function mountFile(slots, file, opts = {}) {
+  const byName = showKind(file.path || file.name)
+  const kind = fileKind(file.path || file.name, file.kind)
+  const lang = file.language || byName.language
+  const body = clear(slots.body)
+  const modes = clear(slots.modes)
+  const bar = clear(slots.bar)
+  bar.hidden = true
+  bar.classList.remove("is-conflict")
+  const mine = { name: file.name || "", file, kind, lang, dirty: false, blobs: [], alive: true, editor: null, ready: null, close: () => teardownOf(mine) }
+  const here = () => mine.alive
+  const download = () => {
+    if (!file.download) return
+    bar.hidden = false
+    bar.append(h("span", { class: "viewer__said", text: Number.isFinite(file.size) ? bytes(file.size) : "" }), h("button", { type: "button", class: "btn btn--sm", text: t("Download"), onclick: () => file.download() }))
+  }
+  mine.ready = (async () => {
+    if (file.error) {
+      body.append(h("p", { class: "viewer__note is-error", text: file.error }))
+      return
+    }
+    // What the webview draws from the bytes themselves.
+    if (MEDIA_KINDS.includes(kind) && file.media && !(kind === "svg" && typeof file.text === "string" && !file.withheld && file.viewAs === "source")) {
+      await drawMedia(file, kind, body, modes, bar, mine, opts)
+      return
+    }
+    // What a parser has to read: in a sealed frame, never here. (A .gltf is text as well; it is
+    // drawn, and its source is the file to download.)
+    if (sealedKind(kind) && file.sealed) {
+      const frame = sealedViewer(kind, file.sealed, { name: file.name || "" })
+      mine.frame = frame
+      body.append(h("div", { class: "viewer__sealed" }, frame.el))
+      download()
+      return
+    }
+    const isText = TEXT_KINDS.includes(kind) && !file.withheld && typeof file.text === "string"
+    // An archive the server listed: what is in it. One it could not list says why, in its words.
+    if (kind === "archive" && file.archive && typeof file.archive === "object") {
+      if (file.archive.problem) {
+        body.append(drawFacts({ ...file, kind }, String(file.archive.message || "") || t("This file cannot be shown here.")))
+        return
+      }
+      body.append(drawArchive(file))
+      download()
+      return
+    }
+    if (!isText) {
+      body.append(drawFacts({ ...file, kind }, file.withheld ? withheldWords(file.withheld, file.size) : t("This is not a text file; it cannot be shown here.")))
+      return
+    }
+    await drawText(file, kind, lang, body, modes, bar, mine, here, opts)
+  })()
+  return mine
+}
+
 /** A picture, sound or video: the element the webview has for it, at the address Rust serves. */
-async function drawMedia(file, kind, body, modes, bar, mine) {
-  const here = () => current === mine
+async function drawMedia(file, kind, body, modes, bar, mine, opts = {}) {
+  const here = () => mine.alive
   const failed = (text) => {
     if (!here()) return
     clear(body).append(drawFacts({ ...file, kind }, text || t("This file cannot be shown here.")))
@@ -487,13 +518,13 @@ async function drawMedia(file, kind, body, modes, bar, mine) {
   if (kind === "svg" && typeof file.text === "string" && !file.withheld) {
     modes.append(
       h("button", { type: "button", class: "seg", "aria-pressed": "true", text: t("Preview") }),
-      h("button", { type: "button", class: "seg", "aria-pressed": "false", text: t("Source"), onclick: () => openViewer({ ...file, viewAs: "source" }) }),
+      h("button", { type: "button", class: "seg", "aria-pressed": "false", text: t("Source"), onclick: () => opts.reopen?.({ ...file, viewAs: "source" }) }),
     )
   }
 }
 
 /** A text file: drawn (Markdown, a page, a table, a notebook), as its source, or being edited. */
-async function drawText(file, kind, lang, body, modes, bar, mine, here) {
+async function drawText(file, kind, lang, body, modes, bar, mine, here, opts = {}) {
   let text = file.text // as saved
   let sha = file.sha || null
   let draft = null // what the editor holds, while it differs
@@ -503,7 +534,7 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
   const now = () => (mine.editor && mode === "edit" ? mine.editor.state.doc.toString() : draft ?? text)
   // An edit of this very file that the screen was taken from under: back in the editor, not
   // saved, and still starting from what it started from then.
-  if (kept && editable && kept.file.path === file.path && kept.file.where === file.where) {
+  if (opts.kept && kept && editable && kept.file.path === file.path && kept.file.where === file.where) {
     if (kept.text !== text) {
       draft = kept.text
       sha = kept.sha
@@ -512,9 +543,15 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
     kept = null
   }
   mine.keep = () => ({ file, text: now(), sha })
+  // What the file holds now, as the person has it (saved or not), and a save asked from outside.
+  mine.text = now
+  mine.save = () => save(false)
+  mine.editable = editable
 
   const said = h("span", { class: "viewer__said", role: "status" })
-  const saveBtn = h("button", { type: "button", class: "btn btn--sm btn--primary", id: "viewer-save", text: t("Save"), onclick: () => save(false) })
+  // (The panel beside the chat is one of a kind and names its buttons; a tab is one of several.)
+  const idOf = (name) => (opts.kept ? `viewer-${name}` : null)
+  const saveBtn = h("button", { type: "button", class: "btn btn--sm btn--primary viewer__save", id: idOf("save"), text: t("Save"), onclick: () => save(false) })
   const drawBar = (state) => {
     // One line: what is so, then what can be done about it. A file changed meanwhile says the
     // server's own sentence, and offers both ways on.
@@ -527,8 +564,8 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
     bar.append(said)
     if (state?.conflict) {
       bar.append(
-        h("button", { type: "button", class: "btn btn--sm", id: "viewer-reload", text: t("Reload"), onclick: () => ((mine.dirty = false), file.reload?.()) }),
-        h("button", { type: "button", class: "btn btn--sm btn--danger", id: "viewer-force", text: t("Save anyway"), onclick: () => save(true) }),
+        h("button", { type: "button", class: "btn btn--sm viewer__reload", id: idOf("reload"), text: t("Reload"), onclick: () => ((mine.dirty = false), file.reload?.()) }),
+        h("button", { type: "button", class: "btn btn--sm btn--danger viewer__force", id: idOf("force"), text: t("Save anyway"), onclick: () => save(true) }),
       )
       return
     }
@@ -543,6 +580,7 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
     if (dirty === mine.dirty) return
     mine.dirty = dirty
     drawBar()
+    opts.changed?.(mine)
   }
   async function save(force) {
     if (!editable || !here()) return
@@ -559,6 +597,7 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
       draft = now() === text ? null : now()
       mine.dirty = now() !== text
       drawBar({ text: mine.dirty ? t("Not saved yet") : t("Saved.") })
+      opts.changed?.(mine)
     } catch (err) {
       if (!here()) return
       drawBar(err?.status === 409 ? { conflict: true, error: true, text: why(err) } : { error: true, text: why(err) })
@@ -569,7 +608,7 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
     if (!here()) return
     // What the editor held goes with it: seen drawn, or as source, before it is saved.
     if (mine.editor && mode === "edit") draft = now() === text ? null : now()
-    teardownBody()
+    teardownBody(mine)
     mode = next
     clear(body)
     for (const b of modes.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.mode === mode))
@@ -577,7 +616,10 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
     if (mode === "edit" || mode === "source" || !drawn) {
       const holder = h("div", { class: "viewer__code" })
       body.append(holder)
-      const ed = await codeView(holder, words, { lang, line: file.line || 0, editable: mode === "edit", onChange: touched, onSave: () => save(false) })
+      // (The workspace's helpers -- a completion as it is typed, a selection rewritten -- are the
+      // editor's own extensions, given only to a file being edited.)
+      const extra = mode === "edit" && opts.extensions ? await opts.extensions({ file, lang, view: () => (mine.alive && mode === "edit" ? mine.editor : null) }) : []
+      const ed = await codeView(holder, words, { lang, line: file.line || 0, editable: mode === "edit", onChange: touched, onSave: () => save(false), extra })
       if (!here() || mode !== next) return ed.destroy()
       mine.editor = ed
       if (mode === "edit") ed.focus()
@@ -599,11 +641,12 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here) {
 
   const seg = (m, label) => h("button", { type: "button", class: "seg", dataset: { mode: m }, text: label, onclick: () => show(m) })
   if (drawn) modes.append(seg("view", kind === "html" ? t("Page") : t("Preview")), seg("source", t("Source")))
-  else if (kind === "svg" && file.media) modes.append(h("button", { type: "button", class: "seg", "aria-pressed": "false", text: t("Preview"), onclick: () => openViewer({ ...file, text, sha, viewAs: "" }) }), seg("view", t("Source")))
+  else if (kind === "svg" && file.media) modes.append(h("button", { type: "button", class: "seg", "aria-pressed": "false", text: t("Preview"), onclick: () => opts.reopen?.({ ...file, text, sha, viewAs: "" }) }), seg("view", t("Source")))
   else if (editable) modes.append(seg("view", t("Source")))
   if (editable) modes.append(seg("edit", t("Edit")))
   drawBar()
-  await show(draft !== null ? "edit" : "view")
+  // (In the workspace a file that may be written is opened to be written; a table and a notebook are still seen first.)
+  await show(draft !== null || (opts.edit && editable && kind !== "table" && kind !== "notebook") ? "edit" : "view")
 }
 
 export function initViewer() {
