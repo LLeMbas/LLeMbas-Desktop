@@ -344,7 +344,7 @@ async function boot() {
   initVoice({ where: mediaFor, alert: (text) => alertIn(text), note: (text) => alertIn(text, true) })
   initPython({ me: () => me, changed: () => pythonChanged() })
   // What a model made: "Open in Files" leads to the server's files, at the file where it is.
-  initMedia({ openInFiles: (m) => (showFiles("server"), revealServerFile(m.path || "", m.node_id || "")), woken: (job) => mediaJobEnded(job) })
+  initMedia({ openFile: (m) => openServerFile(m.path, m.name || ""), openInFiles: (m) => (showFiles("server"), revealServerFile(m.path || "", m.node_id || "")), woken: (job) => mediaJobEnded(job) })
   initChat({
     status: () => status,
     thisDevices,

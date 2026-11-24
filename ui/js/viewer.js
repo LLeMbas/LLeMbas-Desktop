@@ -115,6 +115,7 @@ function teardownOf(inst) {
 function teardown() {
   teardownOf(current)
   current = null
+  dirtyTold()
 }
 
 /** Close it, whatever it holds: an edit not saved is let go (the Close button asks first). */
@@ -159,12 +160,18 @@ export async function restoreEdit() {
 /** Whether what is open has changes that were not saved. */
 export const viewerDirty = () => !!current?.dirty
 
+let dirtyTold = () => {}
+/** Called whenever the panel's edit becomes saved or not saved, and when the panel closes (the count Quit asks about). */
+export function onViewerDirty(fn) {
+  dirtyTold = fn
+}
+
 /** An edit not saved is not thrown away without a word: true when there is none, or it may go. */
 export async function mayLeave() {
   if (!current?.dirty) return true
   const go = !!(await ask({ title: t("Not saved yet"), text: current.name || "", ok: t("Discard"), cancel: t("Cancel"), danger: true }))
   // Let go by the person's own word: nothing of it is kept, whatever closes the viewer next.
-  if (go && current) current.dirty = false
+  if (go && current) (current.dirty = false), dirtyTold()
   return go
 }
 
@@ -362,7 +369,8 @@ export async function openViewer(file) {
   $("viewer-name").title = file.path || ""
   $("viewer-where").textContent = file.where || ""
   const bar = $("viewer-bar")
-  current = mountFile({ body: $("viewer-body"), modes: $("viewer-modes"), bar }, file, { reopen: openViewer, kept: true })
+  current = mountFile({ body: $("viewer-body"), modes: $("viewer-modes"), bar }, file, { reopen: openViewer, kept: true, changed: () => dirtyTold() })
+  dirtyTold()
   await current.ready
   return true
 }
@@ -560,7 +568,9 @@ async function drawText(file, kind, lang, body, modes, bar, mine, here, opts = {
     bar.classList.toggle("is-conflict", state?.conflict === true)
     said.className = `viewer__said${state?.error ? " is-error" : ""}`
     said.setAttribute("role", state?.error ? "alert" : "status")
-    said.textContent = state?.text ?? (mine.dirty ? t("Not saved yet") : "")
+    // (A file that may not be written where it is says why, where its place gave a reason.)
+    said.textContent = state?.text ?? (mine.dirty ? t("Not saved yet") : file.note || "")
+    if (file.note && !editable) bar.hidden = false
     bar.append(said)
     if (state?.conflict) {
       bar.append(

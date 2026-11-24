@@ -32,7 +32,8 @@ file_node.json file_content_archive.json event_reply.json event_reply_end.json
 message_unsure.json message_carried.json message_sent_now.json message_discarded.json
 editor.json editor_unset.json
 device_fs_listing.json device_fs_content.json device_fs_conflict.json device_fs_batch.json device_fs_written.json
-device_fs_roots.json device_fs_no_trash.json device_fs_content_withheld.json"
+device_fs_roots.json device_fs_no_trash.json device_fs_content_withheld.json device_fs_search.json device_fs_stat.json
+event_ask_edit.json message_editor.json tool_media_shown.json"
 
 [ $# -eq 1 ] || { echo "usage: scripts/fetch-fixtures.sh <server-ref>" >&2; exit 2; }
 commit="$(git -C "$SERVER" rev-parse --verify --quiet "$1^{commit}")" \

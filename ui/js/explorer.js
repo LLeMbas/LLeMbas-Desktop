@@ -692,7 +692,7 @@ export function explorer(el, source) {
     if (e) choose(e)
     return !!e
   }
-  return { go, refresh, changed, drawTree, say, act, newIn, folderAt, reveal, current: () => current ?? source.top() }
+  return { go, refresh, changed, drawTree, say, act, newIn, folderAt, reveal, current: () => current ?? source.top(), listed: () => [...known.values()] }
 }
 
 // --- This computer ------------------------------------------------------------------------------
@@ -869,19 +869,29 @@ export async function readLocal(root, path) {
 //   POST /devices/{id}/fs/delete          { paths }     -> the same (to that computer's trash; one it has no trash for fails, in words)
 //   POST /devices/{id}/fs/upload?path=    multipart `files` (by Rust: `device_upload_dropped`)
 // Paths are absolute on that computer. What the computer will not let be changed says so
-// (`writable: false` on an entry, on a file's content): no change is offered there. Not used
-// yet: `/fs/raw` (a file's bytes), `/fs/stat`, `/fs/search`, a delete for good (`permanent`).
+// (`writable: false` on an entry, on a file's content): no change is offered there. And:
+//   GET  /devices/{id}/fs                 (no `path`) -> the computer's own folders, as a listing
+//   GET  /devices/{id}/fs/raw?path=       a file's bytes (by Rust: the viewers' `media_open` and `viewer_bytes`, and `carry`)
+//   GET  /devices/{id}/fs/stat?path=&hash=1 -> an entry with its `sha`: whether an open file is still what was read
+//   GET  /devices/{id}/fs/search?path=&q= -> { root, files: [{ path (from `root`), kind }], truncated }
+//   POST /devices/{id}/fs/delete          { paths, permanent: true } after `no_trash`, on the person's word
 export const DEVICE_FILES = {
   list: (device, path) => `/devices/${enc(device)}/fs?path=${enc(path)}`,
+  stat: (device, path) => `/devices/${enc(device)}/fs/stat?path=${enc(path)}&hash=1`,
+  search: (device, path, q) => `/devices/${enc(device)}/fs/search?path=${enc(path)}&q=${enc(q)}`,
   read: (device, path) => `/devices/${enc(device)}/fs/content?path=${enc(path)}`,
   write: (device) => `/devices/${enc(device)}/fs/content`,
   act: (device, what) => `/devices/${enc(device)}/fs/${what}`,
 }
 
-/** A linked computer's tree under `root` (a folder there), as an explorer's place. `name`: the computer's. */
+/**
+ * A linked computer's tree under `root` (a folder there), as an explorer's place. `name`: the
+ * computer's. With no `root` it is the computer's own folders (what it lets be opened at all):
+ * where a folder to work in is chosen by walking to it.
+ */
 export function deviceSource(device, root, name) {
   const where = name || t("A linked computer")
-  const top = String(root).replace(/\/+$/, "") || "/"
+  const top = root ? String(root).replace(/\/+$/, "") || "/" : ""
   const read = (e) => get(DEVICE_FILES.read(device, e.path))
   const several = (r, n) => (Array.isArray(r?.results) ? batched(r) : { done: n, failed: [] })
   const file = async (e, reload) => {
@@ -889,6 +899,9 @@ export function deviceSource(device, root, name) {
       const f = await read(e)
       const at = f.path || e.path
       const kind = fileKind(f.name || e.name, f.file_kind || f.kind || e.file_kind)
+      // One of the files that run code, which this computer lets nobody change from here:
+      // read, never written, and said in the computer's own sentence.
+      const guarded = e.runs_code === true && (e.writable === false || f.writable === false)
       return {
         name: f.name || e.name,
         path: at,
@@ -899,8 +912,11 @@ export function deviceSource(device, root, name) {
         withheld: f.withheld,
         size: f.size,
         sha: f.sha,
-        // (A linked computer's bytes -- `/fs/raw` -- are not drawn by the viewer yet: what is not text says so.)
-        save: f.writable !== false && typeof f.text === "string" && !f.withheld ? (text, { base, force }) => api("PUT", DEVICE_FILES.write(device), force ? { path: at, text, force: true } : { path: at, text, base }) : undefined,
+        // Its bytes, through the server (`/fs/raw`): drawn and played by the same viewers as anywhere.
+        media: () => invoke("media_open", { source: "device", kind, device, path: at }),
+        sealed: { source: "device", device, path: at },
+        note: guarded ? t("This computer does not let files that run code be changed from here.") : "",
+        save: !guarded && f.writable !== false && typeof f.text === "string" && !f.withheld ? (text, { base, force }) => api("PUT", DEVICE_FILES.write(device), force ? { path: at, text, force: true } : { path: at, text, base }) : undefined,
         reload,
       }
     } catch (err) {
@@ -917,8 +933,22 @@ export function deviceSource(device, root, name) {
     top: () => top,
     ask: (path) => path || top,
     parent: (path) => (path === top ? top : String(path).replace(/\/[^/]*$/, "") || "/"),
-    rootName: () => baseName(top),
+    rootName: () => (top ? baseName(top) : where),
+    // Whether the file is still what was read (`sha`): asked of the computer itself.
+    changed: async (e, sha) => {
+      if (!sha) return false
+      const now = await get(DEVICE_FILES.stat(device, e.path))
+      return typeof now?.sha === "string" && now.sha !== "" && now.sha !== sha
+    },
+    // Names under the folder, found by the computer: [{ name, path, kind }], and whether there were more.
+    search: async (q) => {
+      const r = await get(DEVICE_FILES.search(device, top, q))
+      const base = String(r?.root || top).replace(/\/$/, "")
+      return { entries: (r?.files || []).map((f) => ({ name: f.path, path: `${base}/${f.path}`, kind: f.kind === "dir" ? "dir" : "file" })), more: r?.truncated === true }
+    },
     crumbs: (path) => {
+      // (The computer's folders are not under one folder: its name, then the folder walked to.)
+      if (!top) return path ? [[where, ""], [path, path]] : [[where, ""]]
       const out = [[baseName(top), top]]
       const rest = String(path).startsWith(top) ? String(path).slice(top.length) : ""
       let at = top
@@ -945,7 +975,24 @@ export function deviceSource(device, root, name) {
       rename: (e, to) => post(DEVICE_FILES.act(device, "rename"), { path: e.path, name: to }),
       move: async (paths, to) => several(await post(DEVICE_FILES.act(device, "move"), { paths, to }), paths.length),
       copy: async (paths, to) => several(await post(DEVICE_FILES.act(device, "copy"), { paths, to }), paths.length),
-      remove: async (paths) => several(await post(DEVICE_FILES.act(device, "delete"), { paths }), paths.length),
+      remove: async (paths) => {
+        const r = await post(DEVICE_FILES.act(device, "delete"), { paths })
+        // What that computer has no trash for was not deleted: for good only on the person's
+        // word, asked once, naming each file.
+        const lost = (r?.results || []).filter((x) => !x.ok && x.reason === "no_trash").map((x) => x.path)
+        if (!lost.length) return several(r, paths.length)
+        const yes = await ask({
+          title: t("Delete for good?"),
+          text: t("%(computer)s has no trash for: %(names)s. Deleting cannot be undone.", { computer: where, names: lost.map(baseName).join(", ") }),
+          ok: t("Delete for good"),
+          cancel: t("Cancel"),
+          danger: true,
+        })
+        const first = several(r, paths.length)
+        if (!yes) return { done: first.done, failed: first.failed.filter((f) => !lost.includes(f.path)), said: t("Not deleted: %(names)s.", { names: lost.map(baseName).join(", ") }) }
+        const again = several(await post(DEVICE_FILES.act(device, "delete"), { paths: lost, permanent: true }), lost.length)
+        return { done: first.done + again.done, failed: [...first.failed.filter((f) => !lost.includes(f.path)), ...again.failed] }
+      },
     },
   }
 }

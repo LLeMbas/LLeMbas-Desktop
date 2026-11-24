@@ -31,10 +31,29 @@ relays them. With older ones each of those says so in words and the rest works.
   server's, or **transferred** to a linked computer's; dropped on the chat they are attached to
   the message, as before. The same words are in each line's menu, for the keyboard. The Files
   page's drag says "Move to …" the same way.
+- **Any file, and whole folders, between the three places.** A picture, an archive, a video: what
+  is carried from one place to another goes as it is, with how far it is and **Cancel** while it
+  goes; a transfer that fails or is cancelled leaves nothing half-written where it was going. A
+  folder is made there and everything in it carried, and one line at the end says what went and
+  what did not, each with why.
+- **A linked computer's files are seen like any others.** Its pictures, sound, video, PDFs and 3D
+  models open in the same viewers. A file that runs code, on a computer that lets nobody change
+  such files from outside, opens read-only and says so. Where that computer has no trash for a
+  file, deleting says so and asks -- naming the file -- before deleting it for good. The folder to
+  work in is chosen by walking to it among the computer's own folders. A file open in a tab that
+  changed there meanwhile says so when you come back to its tab.
+- **A file an agent shows in a chat is drawn by its kind**, whatever the model itself can read: a
+  picture, sound and video where they are, a PDF and a 3D model in their viewer once asked for,
+  text in the viewer beside the chat, an archive or anything else as what it is, with Open in
+  Files and Download. Needs a server after 2.0.0-beta.18.
+- The workspace speaks all nine languages of the app.
+- **Find by name** above the tree: a linked computer looks under the whole folder; on this
+  computer and the server the names the tree has listed are looked through.
 - **An edit that was not saved is never dropped without a word.** Closing a tab, showing an
   SVG's picture again over its edited source, signing out and Quit each ask first, naming the
   files. If the server ends your sign-in while you edit, the tabs are put by as they are and are
-  back when you have signed in again; nobody else who signs in sees them.
+  back when you have signed in again; nobody else who signs in sees them. Quit counts an edit in
+  the viewer beside a chat as well.
 - **The chat knows what you are looking at.** A message sent from the chat beside the files
   tells the agent the file in front, the line the cursor is on, what is selected and which other
   files are open -- as data beside your message, not written into it, and only of the place

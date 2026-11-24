@@ -21,12 +21,12 @@
 // A narrow window shows one part at a time: Files, Editor, Chat, Terminal.
 
 import { $, h, clear, icon, ICONS } from "./dom.js"
-import { invoke, listen, api, why } from "./bridge.js"
+import { invoke, listen, post, carry, why } from "./bridge.js"
 import { ask } from "./popup.js"
-import { mountFile } from "./viewer.js"
+import { mountFile, viewerDirty, onViewerDirty } from "./viewer.js"
 import { explorer, localSource, serverSource, deviceSource, DEVICE_FILES } from "./explorer.js"
 import { pickFolder } from "./filedialogs.js"
-import { pickDirectory } from "./dirpick.js"
+import { bytes } from "./dom.js"
 import { assistExtensions, assistButtons, assistControls, loadAssist, resetAssist } from "./assist.js"
 import { terminalAvailable, terminalOpen, showTerminal } from "./terminal.js"
 
@@ -97,65 +97,123 @@ function acrossWords(from, to) {
   return t("Transfer to %(place)s", { place: placeName(to) })
 }
 
-/** The files chosen, into a folder of another place: asked for by walking to it, then done and said. */
+/** A place as Rust's `carry` names it. */
+const placeOf = (key, src) => ({ place: key === "local" ? "local" : key === "server" ? "server" : "device", root: src.root ?? null, device: src.device ?? null })
+
+/** The most files and folders one carrying of a folder takes: more is said, not begun. */
+const FOLDER_MOST = 2000
+
+/** How far the transfer under way is, at the foot of the files, with Cancel. */
+function showCarry(name, frame, job, batch) {
+  const box = $("work-carry")
+  box.hidden = false
+  const total = Number(frame?.total)
+  const done = Number(frame?.done) || 0
+  const far = frame?.state === "sending" ? t("sending…") : Number.isFinite(total) && total > 0 ? t("%(done)s of %(total)s", { done: bytes(done), total: bytes(total) }) : done ? bytes(done) : t("starting…")
+  $("work-carry-name").textContent = name
+  $("work-carry-name").title = name
+  $("work-carry-far").textContent = far
+  const bar = $("work-carry-bar")
+  bar.hidden = !(Number.isFinite(total) && total > 0)
+  bar.max = total > 0 ? total : 1
+  bar.value = Math.min(done, total > 0 ? total : 1)
+  $("work-carry-cancel").onclick = () => {
+    batch.cancelled = true
+    job.cancel()
+  }
+}
+
+/** One file from a place into a folder of another: counted into `batch` as gone, not gone (with why), or cancelled. */
+async function carryFile(here, there, path, dir, name, batch) {
+  if (batch.cancelled) return
+  try {
+    let job = null
+    job = await carry({ ...here, path }, { ...there, path: dir }, (f) => job && showCarry(name, f, job, batch))
+    showCarry(name, { state: "reading" }, job, batch)
+    await job.done
+    batch.sent++
+  } catch (err) {
+    if (err?.cancelled) batch.cancelled = true
+    else batch.failed.push({ path: name, error: why(err) })
+  }
+}
+
+/** A new folder `name` in `dir` of a place; its path there. */
+async function makeFolder(key, target, dir, name) {
+  if (key === "local") return invoke("local_make", { root: target.root, dir, name, folder: true })
+  if (key === "server") {
+    await post("/files/mkdir", { path: dir, name })
+    return `${String(dir).replace(/\/$/, "")}/${name}`
+  }
+  const r = await post(DEVICE_FILES.act(target.device, "mkdir"), { path: dir, name })
+  return r?.path || `${String(dir).replace(/\/$/, "")}/${name}`
+}
+
+/** A folder and all in it: made there, then walked and carried, folder by folder. */
+async function carryFolder(src, here, to, target, there, dir, entry, batch) {
+  if (batch.cancelled) return
+  let made
+  try {
+    made = await makeFolder(to, target, dir, entry.name)
+    batch.folders++
+  } catch (err) {
+    return void batch.failed.push({ path: `${entry.name}/`, error: why(err) })
+  }
+  let listing
+  try {
+    listing = await src.list(src.ask(entry.path))
+  } catch (err) {
+    return void batch.failed.push({ path: `${entry.name}/`, error: why(err) })
+  }
+  for (const e of listing.entries || []) {
+    if (batch.cancelled) return
+    if (++batch.seen > FOLDER_MOST) {
+      if (!batch.over) batch.failed.push({ path: `${entry.name}/`, error: t("More than %(n)s files and folders: the rest was not carried.", { n: FOLDER_MOST }) })
+      batch.over = true
+      return
+    }
+    // (A link that leads out of the folder, and what is neither a file nor a folder, stay where they are.)
+    if (e.outside || e.kind === "other" || e.kind === "mount") batch.failed.push({ path: e.name, error: t("Not a file or a folder that can be carried.") })
+    else if (isDir(e)) await carryFolder(src, here, to, target, there, made, e, batch)
+    else await carryFile(here, there, e.path, made, e.name, batch)
+  }
+}
+
+/**
+ * What was chosen, into a folder of another place: asked for by walking to it, then carried --
+ * any file, whatever it holds, and a folder with all in it -- with how far it is and Cancel at
+ * the foot of the files, and one line at the end of what went and what did not.
+ */
 async function across(entries, to) {
   const from = place
   const src = source
-  if (!pane || !src || to === from) return
+  const mine = pane
+  if (!mine || !src || to === from) return
   // (What was dragged is no longer known to the tree: said as that, not as something else.)
-  if (!entries.length) return pane.say(t("That is no longer in the tree: read the folder again."), true)
-  const files = entries.filter((e) => !isDir(e))
-  if (!files.length) return pane.say(t("Only files go from one place to another for now, not folders."), true)
+  if (!entries.length) return mine.say(t("That is no longer in the tree: read the folder again."), true)
   const target = sourceOf(to)
-  if (!target) return pane.say(t("Choose a folder in %(place)s first.", { place: placeName(to) }), true)
+  if (!target) return mine.say(t("Choose a folder in %(place)s first.", { place: placeName(to) }), true)
   const way = wayOf(from, to)
   const dir = await pickFolder({ source: target, start: target.top(), title: way === "upload" ? t("Upload to which folder?") : way === "download" ? t("Download to which folder?") : t("Transfer to which folder?"), ok: way === "upload" ? t("Upload here") : way === "download" ? t("Download here") : t("Transfer here") })
   if (dir === null || dir === undefined) return
-  await pane.act(
-    async () => {
-      const failed = []
-      let sent = 0
-      if (way === "upload") {
-        const r = await invoke("local_upload", { root: src.root, paths: files.map((e) => e.path), dir })
-        sent = Number(r?.sent) || 0
-        for (const f of r?.failed || []) failed.push({ path: f.name, error: f.error || "" })
-      } else if (way === "download") {
-        for (const e of files) {
-          try {
-            await invoke("local_download", { root: target.root, dir, path: e.path, name: e.name })
-            sent++
-          } catch (err) {
-            failed.push({ path: e.name, error: why(err) })
-          }
-        }
-      } else {
-        // To or from a linked computer: a file's text, read in one place and written as a new
-        // file in the other (never over one: a taken name is the refusal, in words).
-        for (const e of files) {
-          try {
-            const f = await src.file(e)
-            if (f.error) throw { detail: f.error }
-            if (typeof f.text !== "string" || f.withheld) throw { detail: t("Only text files can go to or from a linked computer for now.") }
-            await writeNew(to, target, dir, e.name, f.text)
-            sent++
-          } catch (err) {
-            failed.push({ path: e.name, error: why(err) })
-          }
-        }
-      }
-      return { quiet: true, done: sent, failed }
-    },
-    (r) => (way === "upload" ? t("Uploaded to %(folder)s: %(n)s.", { folder: baseName(dir) || target.rootName(), n: r?.done ?? 0 }) : way === "download" ? t("Downloaded to %(folder)s: %(n)s.", { folder: baseName(dir) || target.rootName(), n: r?.done ?? 0 }) : t("Transferred to %(place)s: %(n)s.", { place: placeName(to), n: r?.done ?? 0 })),
-  )
-}
-
-/** A new text file `name` in `dir` of a place. */
-async function writeNew(key, target, dir, name, text) {
-  const at = `${String(dir).replace(/\/$/, "")}/${name}`
-  if (key === "server") return api("PUT", "/files/content", { path: at, text, create: true })
-  // (On this computer in one step, whole or not at all: never an empty file where the text could not be written.)
-  if (key === "local") return invoke("local_make_text", { root: target.root, dir, name, text })
-  return api("PUT", DEVICE_FILES.write(target.device), { path: at, text, create: true })
+  const batch = { sent: 0, folders: 0, failed: [], cancelled: false, seen: 0, over: false }
+  const here = placeOf(from, src)
+  const there = placeOf(to, target)
+  mine.say("")
+  for (const e of entries) {
+    if (batch.cancelled) break
+    if (isDir(e)) await carryFolder(src, here, to, target, there, dir, e, batch)
+    else await carryFile(here, there, e.path, dir, e.name, batch)
+  }
+  $("work-carry").hidden = true
+  // One line of what went, then what did not, each with why.
+  const where = baseName(dir) || target.rootName()
+  const n = batch.sent
+  const went = way === "upload" ? t("Uploaded to %(folder)s: %(n)s.", { folder: where, n }) : way === "download" ? t("Downloaded to %(folder)s: %(n)s.", { folder: where, n }) : t("Transferred to %(place)s: %(n)s.", { place: placeName(to), n })
+  const lines = [batch.cancelled ? `${t("Cancelled.")} ${went}` : went]
+  if (batch.folders) lines[0] += ` ${t("Folders made: %(n)s.", { n: batch.folders })}`
+  if (batch.failed.length) lines.push(t("Not carried: %(n)s.", { n: batch.failed.length }), ...batch.failed.map((f) => `${f.path}: ${f.error}`))
+  mine.say(lines.join("\n"), batch.failed.length > 0 || batch.cancelled)
 }
 
 // --- The tree ------------------------------------------------------------------------------------------
@@ -200,7 +258,8 @@ function drawWhere() {
 async function chooseFolder() {
   const d = computerOf(place)
   if (!d) return
-  const dir = await pickDirectory({ device: d.id, name: computerName(d), value: rootOf(place), recent: ctx.knownFolders(d.id) })
+  // Walked to among the computer's own folders (its roots, as it lists them): no path is typed.
+  const dir = await pickFolder({ source: deviceSource(d.id, "", computerName(d)), start: rootOf(place) || "", title: t("Work in which folder on %(computer)s?", { computer: computerName(d) }), ok: t("Work here") })
   if (!dir) return
   chosen.set(place, dir)
   drawTree()
@@ -216,6 +275,63 @@ function emptyTree(words, button) {
   $("work-status").hidden = true
   clear($("work-tree")).append(h("div", { class: "fx__empty" }, icon(ICONS.folder), h("p", { text: words }), button || null))
   for (const id of ["work-mkdir", "work-mkfile", "work-refresh"]) $(id).hidden = true
+  $("work-filter").hidden = true
+}
+
+// --- Finding a file by its name ----------------------------------------------------------------------
+
+let filterTimer = 0
+let filterAsked = 0
+
+/**
+ * The filter above the tree. A linked computer looks under the folder itself (its own search);
+ * elsewhere the names the tree has listed are looked through. What is found stands in the
+ * tree's place: a file opens, a folder is gone to.
+ */
+function filterTree() {
+  clearTimeout(filterTimer)
+  const q = $("work-filter").value.trim()
+  const found = $("work-found")
+  const mine = ++filterAsked
+  if (!q || !pane) {
+    found.hidden = true
+    $("work-tree").hidden = false
+    return
+  }
+  filterTimer = setTimeout(async () => {
+    const src = source
+    const of = pane
+    let result
+    try {
+      if (src.search) result = await src.search(q)
+      else {
+        const low = q.toLowerCase()
+        result = { entries: of.listed().filter((e) => e.name.toLowerCase().includes(low)).map((e) => ({ ...e, name: e.path })), more: false, listed: true }
+      }
+    } catch (err) {
+      result = { entries: [], error: why(err) }
+    }
+    if (mine !== filterAsked) return
+    $("work-tree").hidden = true
+    found.hidden = false
+    const none = result.error || (result.entries.length ? "" : result.listed ? t("Nothing among the folders opened in the tree is called that.") : t("Nothing under this folder is called that."))
+    found.replaceChildren(
+      ...result.entries.map((e) =>
+        h(
+          "li",
+          { dataset: { path: e.path } },
+          h(
+            "button",
+            { type: "button", class: "ftree__row work__hit", title: e.path, onclick: () => (isDir(e) ? (($("work-filter").value = ""), filterTree(), of.go(e.path)) : src.open({ ...e, name: baseName(e.path) })) },
+            icon(isDir(e) ? ICONS.folder : ICONS.file),
+            h("bdi", { class: "ftree__name", text: e.name }),
+          ),
+        ),
+      ),
+      none ? h("li", { class: `fnote${result.error ? " is-error" : ""}` }, h("span", { text: none })) : null,
+      result.more ? h("li", { class: "fnote" }, h("span", { text: t("There are more: type more of the name.") })) : null,
+    )
+  }, 250)
 }
 
 /** Draw the tree for the place and its folder (again where either changed), and point the chat at them. */
@@ -225,15 +341,21 @@ function drawTree(force = true) {
   const key = `${place}\n${rootOf(place)}`
   if (!force && key === drawnFor && pane) return
   drawnFor = key
+  $("work-filter").value = ""
+  $("work-found").hidden = true
+  $("work-tree").hidden = false
   dropWords()
   const base = sourceOf(place)
   if (!base) {
     if (place === "local") emptyTree(t("No project folder yet: the agent can open nothing on this computer."), h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Add folder…"), onclick: () => invoke("remote_add") }))
+    // (A computer that says it opens no files from outside -- an older LLeMbas there, or its files switched off: said, not tried.)
+    else if (computerOf(place)?.files === false) emptyTree(t("%(computer)s does not open its files from here: update LLeMbas there, or switch its files on in its settings.", { computer: placeName(place) }))
     else emptyTree(t("Choose the folder on %(computer)s to work in.", { computer: placeName(place) }), h("button", { type: "button", class: "btn btn--sm btn--primary", text: t("Choose a folder…"), onclick: chooseFolder }))
     aimChat()
     return
   }
   for (const id of ["work-mkdir", "work-mkfile", "work-refresh"]) $(id).hidden = false
+  $("work-filter").hidden = false
   const here = place
   const others = () => places().filter((p) => p.key !== here)
   const made = (source = {
@@ -241,7 +363,7 @@ function drawTree(force = true) {
     treeFiles: true,
     open: (e) => openFile(here, made, e),
     // The same as a drag onto another place's button, from the keyboard: the line's menu.
-    acrossItems: (e) => (isDir(e) ? [] : others().map((p) => ({ label: `${acrossWords(here, p.key)}…`, run: () => across([e], p.key) }))),
+    acrossItems: (e) => others().map((p) => ({ label: `${acrossWords(here, p.key)}…`, run: () => across([e], p.key) })),
     dirItems: () => [],
     fileItems: () => [],
     across: { words: (to) => t("%(what)s: the folder is asked for next", { what: acrossWords(here, to) }), drop: (entries, to) => across(entries, to) },
@@ -321,7 +443,7 @@ let toldUnsaved = -1
 
 /** Rust is told how many (it asks before Quit): only when the number changes. */
 function tellUnsaved() {
-  const n = unsaved().length
+  const n = unsaved().length + (viewerDirty() ? 1 : 0)
   if (n === toldUnsaved) return
   toldUnsaved = n
   invoke("set_unsaved", { count: n })
@@ -347,6 +469,20 @@ function activate(tab) {
   active = tab
   drawTabs()
   tab?.button.scrollIntoView({ block: "nearest", inline: "nearest" })
+  stillTheSame(tab)
+}
+
+/**
+ * A tab brought to the front: where its place can say whether the file is still what was read
+ * (a linked computer can), and it is not, that is said -- before a save finds it out.
+ */
+async function stillTheSame(tab) {
+  const inst = tab?.inst
+  if (!tab?.source.changed || !tab.file?.sha || !inst) return
+  try {
+    if (!(await tab.source.changed(tab.entry, tab.file.sha)) || tab.inst !== inst || !tabs.includes(tab)) return
+    tab.hooks.say(t("This file changed on the computer since you opened it. A save will ask before it writes over that."), true)
+  } catch {}
 }
 
 /** Draw a tab's file (again): read through its place, then the viewer's own drawing, opened to be edited. */
@@ -589,6 +725,9 @@ export function initWorkspace(context) {
     $(id).addEventListener("click", run)
   }
   tool("work-refresh", ICONS.refresh, () => pane?.refresh())
+  $("work-filter").addEventListener("input", filterTree)
+  // The viewer panel's own edit is one of the edits not saved (what Quit asks about).
+  onViewerDirty(tellUnsaved)
   tool("work-mkdir", ICONS.folder, () => pane?.newIn(pane.current(), true))
   tool("work-mkfile", ICONS.fileText, () => pane?.newIn(pane.current(), false))
   const part = (name, ico, label) => h("button", { type: "button", role: "tab", class: "tabs__tab", dataset: { pane: name }, "aria-selected": "false", onclick: () => showPane(name) }, icon(ico), h("span", { text: label }))

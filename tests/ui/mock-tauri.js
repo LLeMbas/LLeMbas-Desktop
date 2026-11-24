@@ -40,6 +40,7 @@
   const terminals = new Map() // terminal id -> { target, open }
   let nextTerminal = 0
   let nextStream = 0
+  let nextCarry = 0
   const calls = []
 
   function dispatch(name, payload) {
@@ -208,6 +209,25 @@
         return (config.commands || {}).model_image ?? ""
       case "terminal_word":
         return "lembas"
+      case "carry_start": {
+        // A file carried between places (src-tauri/src/carry.rs): the id at once, then its
+        // words as `carry` events. By the file's name (the last part of `from.path`), `carry: {
+        // name: { error } }` fails it; any other is done a moment later. `carryManual: true`
+        // says nothing after `reading`: the test says the rest (`__mock.emit("carry", …)`).
+        const id = ++nextCarry
+        const name = String(args.from?.path || "").split("/").pop()
+        const own = (config.carry || {})[name]
+        setTimeout(() => {
+          dispatch("carry", { id, state: "reading", done: 0, total: own?.total ?? 10 })
+          if (config.carryManual) return
+          if (own?.error) dispatch("carry", { id, state: "failed", error: own.error })
+          else dispatch("carry", { id, state: "done", name })
+        }, 0)
+        return id
+      }
+      case "carry_cancel":
+        setTimeout(() => dispatch("carry", { id: args.id, state: "cancelled" }), 0)
+        return null
       case "editor_call": {
         // The bundled CLI as the editor's helper (src-tauri/src/editor.rs): `editor: { method:
         // value }` answers at once (an array: one a call, the last one again after; `__error`

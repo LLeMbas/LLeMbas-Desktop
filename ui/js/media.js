@@ -182,13 +182,14 @@ function shown(kind, open, { name = "", mime = "", width = 0, height = 0 } = {})
 
 /** A 3D model: drawn when asked for, in a sealed frame. */
 function model(m) {
+  const kind = m.kind === "pdf" ? "pdf" : "model3d"
   const box = h("div", { class: "mcard__view mcard__view--model" })
   const show = h("button", {
     type: "button",
     class: "btn mcard__show",
     text: t("Preview"),
     onclick: () => {
-      const viewer = sealedViewer("model3d", { source: "server", node: m.node_id }, { name: m.name || "" })
+      const viewer = sealedViewer(kind, { source: "server", node: m.node_id }, { name: m.name || "" })
       closers.add(viewer.close)
       box.replaceChildren(viewer.el)
     },
@@ -197,7 +198,10 @@ function model(m) {
   return box
 }
 
-const PLAYERS = { image: "image", image_edit: "image", video: "video", music: "audio" }
+// (`audio`: a sound an agent showed, beside `music`, a track a model made.)
+const PLAYERS = { image: "image", image_edit: "image", video: "video", music: "audio", audio: "audio" }
+/** The kinds a parser has to read, drawn in a sealed frame once the person asks. */
+const SEALED = ["model3d", "pdf"]
 
 /** The card of a generated file: what it is, its name, Open in Files, Download. */
 export function mediaCard(m) {
@@ -207,7 +211,10 @@ export function mediaCard(m) {
   // there is kept, so a picture is not fetched twice and a player keeps its place.
   if (cards.has(key)) return cards.get(key)
   const player = PLAYERS[m.kind]
-  const view = player ? shown(player, () => invoke("media_open", { source: "server", kind: player, node: m.node_id }), m) : m.kind === "model3d" ? model(m) : null
+  // A picture, sound or video by the webview; a PDF and a 3D model in a sealed frame; text in
+  // the viewer beside the chat; an archive and anything else: what it is, and where to get it.
+  const view = player ? shown(player, () => invoke("media_open", { source: "server", kind: player, node: m.node_id }), m) : SEALED.includes(m.kind) ? model(m) : null
+  const read = m.kind === "text" && m.path ? h("button", { type: "button", class: "btn btn--sm mcard__read", text: t("Open in the viewer"), onclick: () => ctx.openFile?.(m) }) : null
   const said = h("p", { class: "mcard__said", role: "status" })
   const say = (text, error = false) => {
     said.textContent = text
@@ -235,7 +242,7 @@ export function mediaCard(m) {
       { class: "mcard__bar" },
       h("span", { class: "mcard__name", title: m.path || m.name || "" }, h("bdi", { text: m.name || "" })),
       h("span", { class: "mcard__facts", text: facts }),
-      h("span", { class: "mcard__do" }, h("button", { type: "button", class: "btn btn--sm mcard__files", text: t("Open in Files"), onclick: () => ctx.openInFiles(m) }), h("button", { type: "button", class: "btn btn--sm mcard__download", text: t("Download"), onclick: download })),
+      h("span", { class: "mcard__do" }, read, h("button", { type: "button", class: "btn btn--sm mcard__files", text: t("Open in Files"), onclick: () => ctx.openInFiles(m) }), h("button", { type: "button", class: "btn btn--sm mcard__download", text: t("Download"), onclick: download })),
     ),
     said,
   )

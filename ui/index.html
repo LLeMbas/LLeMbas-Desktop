@@ -120,8 +120,16 @@
             </div>
           </div>
           <p class="status fx__status" id="work-status" hidden></p>
+          <input type="search" class="work__filter" id="work-filter" placeholder="Find by name" aria-label="Find by name" autocomplete="off" spellcheck="false" data-i18n-placeholder data-i18n-aria-label>
           <p class="work__drop" id="work-drop" aria-hidden="true"></p>
           <aside class="fx__tree work__tree" id="work-tree" aria-label="Files" data-i18n-aria-label></aside>
+          <ul class="ftree work__found" id="work-found" aria-label="Found" data-i18n-aria-label hidden></ul>
+          <div class="work__carry" id="work-carry" role="status" hidden>
+            <span class="work__carry-name" id="work-carry-name"></span>
+            <span class="work__carry-far" id="work-carry-far"></span>
+            <button type="button" class="btn btn--sm" id="work-carry-cancel" data-i18n>Cancel</button>
+            <progress class="work__carry-bar" id="work-carry-bar" max="1" value="0"></progress>
+          </div>
           <div id="work-list" hidden></div>
           <div id="work-details" hidden></div>
         </section>

@@ -88,7 +88,7 @@ export function sealedViewer(kind, from, { name = "" } = {}) {
   }
   const feed = async () => {
     try {
-      const asked = [invoke("viewer_bytes", { source: from.source, path: from.path ?? null, root: from.root ?? null, node: from.node ?? null })]
+      const asked = [invoke("viewer_bytes", { source: from.source, path: from.path ?? null, root: from.root ?? null, node: from.node ?? null, device: from.device ?? null })]
       if (kind === "pdf") {
         libs ||= invoke("viewer_libs")
         asked.push(libs.catch((err) => ((libs = null), Promise.reject(err))))

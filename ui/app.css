@@ -2535,7 +2535,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .work__place.is-drop { color: var(--ink); background: var(--accent-soft); outline: var(--outline-w) solid var(--accent); outline-offset: calc(-1 * var(--outline-w)); }
 .work__body { display: grid; grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr); min-width: 0; min-height: 0; }
 /* (Not the Files page's `.fx`: that one folds its tree away by its own width, and here the tree is the whole of it.) */
-.work__files { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; border-right: var(--border-w) solid var(--border); background: var(--surface); }
+.work__files { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); min-width: 0; min-height: 0; border-right: var(--border-w) solid var(--border); background: var(--surface); }
 .work__files > .fx__bar { grid-row: 1; }
 .work__files > .fx__status { grid-row: 2; }
 .work__files.is-dragging { user-select: none; cursor: grabbing; }
@@ -2543,7 +2543,20 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
    a row that came and went would move the folders under the files being held over them. */
 .work__files { position: relative; }
 .work__files > .work__drop { position: absolute; left: 0; right: 0; bottom: 0; z-index: var(--z-raised); pointer-events: none; }
-.work__files > .work__tree { grid-row: 3; border-right: 0; }
+.work__files > .work__filter { grid-row: 3; }
+.work__files > .work__tree, .work__files > .work__found { grid-row: 4; border-right: 0; }
+.work__filter { min-width: 0; height: var(--control-h-sm); margin: var(--sp-2); padding: 0 var(--sp-2); font: var(--text-sm) var(--font-body); color: var(--ink); background: var(--bg); border: var(--border-w) solid var(--border); border-radius: var(--radius-md); }
+.work__filter[hidden], .work__found[hidden], .work__tree[hidden] { display: none; }
+.work__found { min-height: 0; overflow: auto; padding: var(--sp-2); }
+.work__hit { direction: ltr; }
+/* The transfer under way: its name and how far it is on one line with Cancel, the bar under
+   them -- laid over the foot of the files (as the drop's words are), so nothing moves for it. */
+.work__carry { position: absolute; left: 0; right: 0; bottom: 0; z-index: var(--z-raised); display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--sp-1) var(--sp-2); align-items: center; padding: var(--sp-2) var(--sp-3); font-size: var(--text-xs); background: var(--surface-raised); border-top: var(--border-w-thick) solid var(--accent); }
+.work__carry[hidden] { display: none; }
+.work__carry-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 600; }
+.work__carry-far { color: var(--ink-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.work__carry-bar { grid-column: 1 / -1; width: 100%; height: var(--sp-1); accent-color: var(--accent); }
+.work__carry-bar[hidden] { display: none; }
 .work__files .fx__bar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "where where" "crumbs tools"; padding: var(--sp-1) var(--sp-2); }
 .work__files .fx__where { max-width: none; }
 .work__drop { display: none; margin: 0; padding: var(--sp-2) var(--sp-3); font: var(--text-xs) / var(--leading-normal) var(--font-ui); color: var(--ink); background: var(--surface-raised); border-top: var(--border-w-thick) solid var(--accent); }
@@ -2677,6 +2690,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 @media (max-width: 48rem) {
   .work .ftree__row, .work .ftree__chevron, .work .ftree__more, .wtab__open, .wtab__close, .work__place, .work__panes .tabs__tab, .assist__pick, .wpanel__assist .tool { min-height: var(--tap-min); }
   .wtab__close, .work .ftree__more, .wpanel__assist .tool { min-width: var(--tap-min); }
+  .work__filter, #work-carry-cancel { min-height: var(--tap-min); }
   .wtab { grid-template-columns: minmax(0, 1fr) var(--tap-min); }
   .review__list { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .dhunk__where, .dhunk__said { grid-column: 1 / -1; }

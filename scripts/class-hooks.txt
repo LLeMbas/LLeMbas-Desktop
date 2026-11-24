@@ -86,3 +86,4 @@ wtab__rewrite       a hook for the tests; styled as .tool
 viewer__save        a hook for the tests (a tab's Save: the panel's has an id); styled as .btn
 viewer__reload      a hook for the tests; styled as .btn
 viewer__force       a hook for the tests; styled as .btn
+mcard__read         a hook for the tests; styled as .btn

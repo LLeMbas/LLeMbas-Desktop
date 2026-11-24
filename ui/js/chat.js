@@ -1553,18 +1553,16 @@ function renderCards(chat, cards) {
 }
 
 /**
- * The files an approval's edit would change, as the card's item carries them.
- *
- * 🚧 ASSUMED. The harness says them (spec 3.11.0, *Diffs*): `session/request_permission` carries
- * `content: [{ type: "diff", path, oldText: string | null, newText }]` for a client that said
- * `editor`. How the server hands them on in an `/api/v2` card is not written anywhere yet: this
- * reads `item.diffs` (and `item.content`, the device's own list), each `{ path, old_text | oldText,
- * new_text | newText }`. A card without them is drawn as it always was. The one place that reads them.
+ * The files an approval's edit would change, as the card's item carries them (`diffs` on an
+ * approval's item, the server's fixture event_ask_edit.json: each `{ path, old_text: string |
+ * null, new_text, deleted? }` -- no old text for a new file). The device's own list
+ * (`content`, harness spec 3.11.0 *Diffs*: `oldText`, `newText`) is read the same way. A card
+ * without them is drawn as it always was. The one place that reads them.
  */
 function editDiffs(item) {
   const list = Array.isArray(item.diffs) ? item.diffs : Array.isArray(item.content) ? item.content.filter((c) => c?.type === "diff") : []
   return list
-    .map((d) => ({ path: String(d?.path ?? ""), before: d?.old_text ?? d?.oldText ?? null, after: d?.new_text ?? d?.newText }))
+    .map((d) => ({ path: String(d?.path ?? ""), before: d?.old_text ?? d?.oldText ?? null, after: d?.new_text ?? d?.newText, deleted: d?.deleted === true || d?._meta?.lembas?.deleted === true }))
     .filter((d) => d.path && typeof d.after === "string" && (d.before === null || typeof d.before === "string"))
 }
 
@@ -1572,7 +1570,7 @@ function editDiffs(item) {
 function diffCard(d) {
   const hunks = hunksOf(d.before ?? "", d.after)
   const n = countOf(hunks)
-  const words = d.before === null ? t("A new file, %(add)s lines", { add: n.add }) : d.after === "" ? t("The file is deleted") : t("%(del)s lines out, %(add)s in", { del: n.del, add: n.add })
+  const words = d.before === null ? t("A new file, %(add)s lines", { add: n.add }) : d.deleted ? t("The file is deleted") : t("%(del)s lines out, %(add)s in", { del: n.del, add: n.add })
   return h(
     "div",
     { class: "ask__diff", dataset: { path: d.path } },
@@ -3082,10 +3080,9 @@ export function newChat(kind) {
  * a prompt*: lines from 1, the range inclusive). The agent is told it as data beside the
  * message; nothing is written into the person's words.
  *
- * 🚧 ASSUMED: the field. The spec says where a device takes it (`session/prompt`
- * `_meta.lembas.editor`); that `/api/v2` takes it as `editor` in the body of a message (and of
- * `POST /chats`) and hands it on is this app's reading until the server says. A server that
- * does not know the field ignores it. The one place that sends it.
+ * The server takes it as `editor` in the body of a message and of `POST /chats` (its fixture
+ * message_editor.json; this editor tells of no diagnostics) and hands it on to the computer. A
+ * server from before the field ignores it. The one place that sends it.
  */
 function withEditor(body) {
   const editor = ctx.editor?.()

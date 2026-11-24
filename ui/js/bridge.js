@@ -121,6 +121,47 @@ export async function openTerminal(target, cols, rows, { onOutput, onControl, on
   }
 }
 
+// --- A file carried from one place to another ------------------------------------------------------
+//
+// Rust reads and writes (src-tauri/src/carry.rs); the page hears how it goes as `carry` events
+// by the transfer's id: `reading` ({ done, total }), `sending`, and one last word -- `done`
+// ({ name }), `failed` ({ error }) or `cancelled`. As with a followed reply, a word can come
+// before `carry_start` has answered with the id: those wait.
+
+const carries = new Map()
+const earlyCarry = new Map()
+listen("carry", (e) => {
+  const f = e.payload || {}
+  const c = carries.get(f.id)
+  if (c) c(f)
+  else {
+    if (!earlyCarry.has(f.id)) earlyCarry.set(f.id, [])
+    earlyCarry.get(f.id).push(f)
+  }
+})
+
+/**
+ * Carry one file: `from` `{ place: "local"|"server"|"device", root?, device?, path }` (the
+ * file), `to` the same with `path` the folder it goes into. `said(frame)` for each word of how
+ * it goes. Answers `{ id, cancel(), done }` -- `done` resolves with `{ name }`, and rejects with
+ * `{ detail }` or, cancelled, `{ cancelled: true }`.
+ */
+export async function carry(from, to, said = () => {}) {
+  const id = await invoke("carry_start", { from, to })
+  let settle = null
+  const done = new Promise((resolve, reject) => (settle = { resolve, reject }))
+  const hear = (f) => {
+    said(f)
+    if (f.state === "done") (carries.delete(id), settle.resolve({ name: f.name || "" }))
+    else if (f.state === "failed") (carries.delete(id), settle.reject({ status: 0, detail: f.error || "" }))
+    else if (f.state === "cancelled") (carries.delete(id), settle.reject({ cancelled: true, detail: "" }))
+  }
+  carries.set(id, hear)
+  for (const f of earlyCarry.get(id) || []) hear(f)
+  earlyCarry.delete(id)
+  return { id, done, cancel: () => invoke("carry_cancel", { id }) }
+}
+
 /** A web link, in the system's browser. */
 export function openLink(url) {
   return invoke("open_external", { url }).catch(() => {})
