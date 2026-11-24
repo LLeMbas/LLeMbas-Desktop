@@ -990,7 +990,9 @@ export function deviceSource(device, root, name) {
         // deleted here is ever asked about: a path the answer names that was not among them is
         // nobody's to delete for good.
         const lost = (r?.results || []).filter((x) => !x.ok && x.reason === "no_trash" && paths.includes(x.path)).map((x) => x.path)
-        const first = several(r, paths.length)
+        // (Nor is a failure said of a path nobody asked about.)
+        const all = several(r, paths.length)
+        const first = { ...all, failed: all.failed.filter((f) => paths.includes(f.path)) }
         if (!lost.length) return first
         const yes = await ask({
           title: t("Delete for good?"),
