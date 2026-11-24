@@ -775,6 +775,51 @@ pub fn upload_to_device(
     send_file(app, token, &path, "files", name, bytes)
 }
 
+/// A linked computer's file as bytes, from `/api/v2` on (`GET /devices/{id}/fs/raw`): the
+/// computer named by a plain id, the file by its path there, percent-encoded whole. `inline`:
+/// under its own type where its bytes say it is a picture, sound or video (for the viewer).
+pub fn device_raw_path(device: &str, path: &str, inline: bool) -> Result<String, ApiError> {
+    let plain = !device.is_empty()
+        && device.len() <= 96
+        && device
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !plain {
+        return Err(ApiError::new(400, format!("Not a computer: {device}")));
+    }
+    if path.is_empty() || path.chars().any(|c| c.is_control()) {
+        return Err(ApiError::new(400, format!("Not a file: {path}")));
+    }
+    Ok(format!(
+        "/devices/{device}/fs/raw?path={}{}",
+        crate::terminal::encode(path),
+        if inline { "&inline=1" } else { "" }
+    ))
+}
+
+/// `raw` (a file's bytes on the app's door) opened to be read as it comes: the body, and the
+/// length the answer said it has, where it said.
+pub fn open_raw(
+    app: &str,
+    token: &str,
+    raw: &str,
+) -> Result<(Box<dyn Read + Send + Sync + 'static>, Option<u64>), ApiError> {
+    let res = agent(Duration::from_secs(120))
+        .get(&format!("{app}{}", checked_path(raw)?))
+        .set("authorization", &format!("Bearer {token}"))
+        .call()?;
+    let length = res
+        .header("content-length")
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    Ok((res.into_reader(), length))
+}
+
+/// What is read from `body`, written to `dest` as it comes (`save_stream`): whole under its
+/// name, or nothing at all.
+pub fn save_from(body: impl Read, length: Option<u64>, dest: &Dest) -> Result<u64, ApiError> {
+    save_stream(body, length, dest, DOWNLOAD_LIMIT)
+}
+
 /// The address an upload to a linked computer goes to, from `/api/v2` on: the computer named
 /// by a plain id (nothing of it can be a path or a query), the folder percent-encoded whole.
 pub fn device_upload_path(device: &str, dir: &str) -> Result<String, ApiError> {
@@ -811,7 +856,23 @@ mod device_upload_tests {
         }
         for bad in ["", "/home/a\nb", "/home/\u{0}"] {
             assert!(device_upload_path("token2", bad).is_err(), "{bad:?}");
+            assert!(
+                super::device_raw_path("token2", bad, false).is_err(),
+                "{bad:?}"
+            );
         }
+        assert_eq!(
+            super::device_raw_path("token2", "/home/user/a b/loaf.png", true).unwrap(),
+            "/devices/token2/fs/raw?path=%2Fhome%2Fuser%2Fa%20b%2Floaf.png&inline=1"
+        );
+        assert_eq!(
+            super::device_raw_path("token2", "/x", false).unwrap(),
+            "/devices/token2/fs/raw?path=%2Fx"
+        );
+        assert!(super::device_raw_path("to/ken", "/x", false).is_err());
+        assert!(
+            super::checked_path(&super::device_raw_path("t", "/a/../b c#d", true).unwrap()).is_ok()
+        );
     }
 }
 

@@ -988,7 +988,7 @@ pub fn write(
 /// one step -- written beside its place under a name of its own, then called what it should be,
 /// so nothing half-written and nothing empty is ever left under that name. `free`: a taken name
 /// gets a number (files dropped in from outside); otherwise a taken name is the refusal (a file
-/// brought over from another place). Never over anything, never among the CLI's own files, and
+/// that must have exactly this name). Never over anything, never among the CLI's own files, and
 /// only inside the agent's folders. Its path, from the folder the page named.
 pub fn bring_in(
     roots: &[String],
@@ -1020,22 +1020,6 @@ pub fn bring_in(
     fresh.file().write_all(bytes).map_err(failed)?;
     fresh.settle_new(&at).map_err(failed)?;
     Ok(relative(&base, &at))
-}
-
-/// A new text file with its text, whole or not at all (`bring_in`, the name never taken): what
-/// is carried over from another place. Too much text is refused before anything is made.
-pub fn make_text(
-    roots: &[String],
-    kept: &[PathBuf],
-    root: &str,
-    dir: &str,
-    name: &str,
-    text: &str,
-) -> Result<String, String> {
-    if text.len() as u64 > MAX_READ {
-        return Err("This is too much text to save from here.".into());
-    }
-    bring_in(roots, kept, root, dir, name, text.as_bytes(), false)
 }
 
 /// Where a file brought into `dir` under `name` would go: a free name there, never over
@@ -1861,19 +1845,14 @@ mod tests {
         let own = vec![p.join("src")];
         assert!(bring_in(&r, &own, &root, "src", "x.txt", b"x", true).is_err());
         assert!(bring_in(&r, &none, &root, "", ".lembas", b"x", true).is_err());
-        // Carried over from another place: the name as it is, trimmed, and a taken one is the refusal.
+        // Not numbered (`free` off): the name as it is, trimmed, and a taken one is the refusal.
         assert_eq!(
-            make_text(&r, &none, &root, "", " oven.py ", "bake()\n").unwrap(),
+            bring_in(&r, &none, &root, "", " oven.py ", b"bake()\n", false).unwrap(),
             "oven.py"
         );
-        assert_eq!(fs::read_to_string(p.join("oven.py")).unwrap(), "bake()\n");
-        let said = make_text(&r, &none, &root, "", "oven.py", "other").unwrap_err();
+        let said = bring_in(&r, &none, &root, "", "oven.py", b"other", false).unwrap_err();
         assert!(said.contains("already something called oven.py"), "{said}");
         assert_eq!(fs::read_to_string(p.join("oven.py")).unwrap(), "bake()\n");
-        // Too much text: refused before anything is made -- no empty file stays behind.
-        let much = "a".repeat(MAX_READ as usize + 1);
-        assert!(make_text(&r, &none, &root, "", "big.txt", &much).is_err());
-        assert!(!p.join("big.txt").exists());
         // Nothing half-written is left under any name.
         assert!(
             names(&p).iter().all(|n| !n.ends_with(".part")),

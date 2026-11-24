@@ -16,6 +16,7 @@
 //! - **A 2.0 server only.** Discovery is checked before anything else (`server::check`).
 
 mod agent;
+mod carry;
 mod cli;
 mod editor;
 mod files;
@@ -137,6 +138,8 @@ struct App {
     mic_until: Mutex<Option<std::time::Instant>>,
     /// The bundled CLI as the workspace editor's helper (`editor.rs`): a completion, a rewrite.
     editor: editor::Helper,
+    /// The files being carried from one place to another (`carry.rs`).
+    carries: carry::Jobs,
     /// How many edits the page says it holds unsaved (`set_unsaved`).
     unsaved: std::sync::atomic::AtomicU32,
 }
@@ -419,6 +422,7 @@ fn sign_out(handle: AppHandle) {
     server::forget_account(&app.config_dir);
     // The editor's helper asks the server under the CLI's own login: not for a window nobody is signed in to.
     app.editor.stop();
+    app.carries.cancel_all();
     app.watch.reset();
     app.terminals.close_all();
     app.python.clear();
@@ -1209,20 +1213,166 @@ async fn local_write(
     .await
 }
 
-/// A new text file with its text in `dir`, whole or not at all: a file carried over from another
-/// place. A taken name is refused; nothing empty is left where the text could not be written.
+/// One end of a transfer: a place (`local`, with the agent's folder `root`; `server`; `device`,
+/// with the computer's id) and a path there -- the file itself where it comes from, the folder
+/// it goes into where it lands.
+#[derive(Clone, serde::Deserialize)]
+struct Place {
+    place: String,
+    root: Option<String>,
+    device: Option<String>,
+    path: String,
+}
+
+/// What the page hears of a transfer (`carry` events): `reading` with how far it is, `sending`
+/// once it is read and goes to the server or a linked computer, and one last word -- `done`
+/// (with the name it has there), `failed` (with why), or `cancelled`.
+fn carry_said(handle: &AppHandle, id: u64, state: &str, more: Value) {
+    let mut frame = serde_json::json!({ "id": id, "state": state });
+    if let (Some(frame), Some(more)) = (frame.as_object_mut(), more.as_object()) {
+        for (k, v) in more {
+            frame.insert(k.clone(), v.clone());
+        }
+    }
+    let _ = handle.emit("carry", frame);
+}
+
+/// Carry one file from one place to another (`carry.rs`). Answers at once with the transfer's
+/// id; how it goes comes as `carry` events, and `carry_cancel` stops it. Any file, of any kind:
+/// its bytes are never looked at. On this computer it lands under a free name in one of the
+/// agent's folders, never over anything and never among the CLI's own files.
 #[tauri::command]
-async fn local_make_text(
-    handle: AppHandle,
-    root: String,
-    dir: String,
-    name: String,
-    text: String,
+fn carry_start(handle: AppHandle, from: Place, to: Place) -> Result<u64, ApiError> {
+    let app = handle.state::<App>();
+    let door = app.door();
+    let (roots, kept) = (app.roots(), app.kept());
+    let (id, stop) = app.carries.begin();
+    let h = handle.clone();
+    std::thread::spawn(move || {
+        let name = suggested(&from.path);
+        let outcome = carry_one(&h, id, &stop, &from, &to, &name, door, &roots, &kept);
+        h.state::<App>().carries.end(id);
+        match outcome {
+            Ok(named) => carry_said(&h, id, "done", serde_json::json!({ "name": named })),
+            Err(_) if stop.load(Ordering::SeqCst) => carry_said(&h, id, "cancelled", Value::Null),
+            Err(e) => {
+                if e.status == 401 {
+                    token_refused(&h);
+                }
+                carry_said(&h, id, "failed", serde_json::json!({ "error": e.detail }))
+            }
+        }
+    });
+    Ok(id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn carry_one(
+    handle: &AppHandle,
+    id: u64,
+    stop: &Arc<AtomicBool>,
+    from: &Place,
+    to: &Place,
+    name: &str,
+    door: Option<(String, String)>,
+    roots: &[String],
+    kept: &[PathBuf],
 ) -> Result<String, ApiError> {
-    on_local(&handle, move |roots, kept| {
-        files::make_text(roots, kept, &root, &dir, &name, &text).map_err(|e| ApiError::new(400, e))
-    })
-    .await
+    let signed = || {
+        door.clone()
+            .ok_or_else(|| ApiError::new(401, "Not signed in."))
+    };
+    let device_of = |p: &Place| p.device.clone().unwrap_or_default();
+    // Where it comes from: opened to be read as it comes, with its length where that is known.
+    let (body, total): (Box<dyn std::io::Read + Send>, Option<u64>) = match from.place.as_str() {
+        "local" => {
+            let root = from.root.as_deref().unwrap_or("");
+            let (_, at) =
+                files::resolve(roots, root, &from.path).map_err(|e| ApiError::new(400, e))?;
+            let (file, meta) = files::open_regular(&at, true)
+                .map_err(|e| ApiError::new(400, format!("{}: {e}", from.path)))?;
+            (
+                Box::new(file) as Box<dyn std::io::Read + Send>,
+                Some(meta.len()),
+            )
+        }
+        "server" => {
+            let (app_url, token) = signed()?;
+            let (body, length) = server::open_raw(
+                &app_url,
+                &token,
+                &server::raw_path(&from.path, None, false)?,
+            )?;
+            (Box::new(body) as Box<dyn std::io::Read + Send>, length)
+        }
+        "device" => {
+            let (app_url, token) = signed()?;
+            let raw = server::device_raw_path(&device_of(from), &from.path, false)?;
+            let (body, length) = server::open_raw(&app_url, &token, &raw)?;
+            (Box::new(body) as Box<dyn std::io::Read + Send>, length)
+        }
+        _ => return Err(ApiError::new(400, "No such place.")),
+    };
+    carry_said(
+        handle,
+        id,
+        "reading",
+        serde_json::json!({ "done": 0, "total": total }),
+    );
+    let told = handle.clone();
+    let mut watched = carry::Watched::new(body, stop.clone(), move |done| {
+        carry_said(
+            &told,
+            id,
+            "reading",
+            serde_json::json!({ "done": done, "total": total }),
+        );
+    });
+    match to.place.as_str() {
+        // Onto this computer: written beside its place as it comes, named once it is whole.
+        "local" => {
+            let root = to.root.as_deref().unwrap_or("");
+            let (base, dest) = files::incoming(roots, kept, root, &to.path, name)
+                .map_err(|e| ApiError::new(400, e))?;
+            let check: server::Check = &|at| files::may_write(kept, at);
+            let landing = server::Dest {
+                at: &dest,
+                new: true,
+                check: Some(check),
+            };
+            server::save_from(&mut watched, total, &landing)?;
+            Ok(files::relative_to(&base, &dest))
+        }
+        // To the server or a linked computer: read whole, then sent as one upload.
+        "server" | "device" => {
+            let bytes = carry::read_whole(&mut watched, server::UPLOAD_LIMIT)
+                .map_err(|e| ApiError::new(0, format!("{name}: {e}")))?
+                .ok_or_else(|| ApiError::new(413, "This file is too large to send."))?;
+            if stop.load(Ordering::SeqCst) {
+                return Err(ApiError::new(0, "cancelled"));
+            }
+            carry_said(
+                handle,
+                id,
+                "sending",
+                serde_json::json!({ "done": bytes.len(), "total": bytes.len() }),
+            );
+            let (app_url, token) = signed()?;
+            if to.place == "server" {
+                server::upload_to_library(&app_url, &token, &to.path, name, &bytes)?;
+            } else {
+                server::upload_to_device(&app_url, &token, &device_of(to), &to.path, name, &bytes)?;
+            }
+            Ok(name.to_string())
+        }
+        _ => Err(ApiError::new(400, "No such place.")),
+    }
+}
+
+/// Stop a transfer (the person's Cancel): what was being written here goes, unnamed.
+#[tauri::command]
+fn carry_cancel(app: tauri::State<'_, App>, id: u64) {
+    app.carries.cancel(id);
 }
 
 /// Copy the files just dropped on the window into one of the agent's folders, into `dir` there.
@@ -1461,6 +1611,7 @@ async fn local_download(
 /// wherever it is now), a file a message carries ("attachment", by `attachment`, its id), or
 /// one in a folder of the agent's ("local", `root` and `path`). The address to give an `<img>`,
 /// `<audio>` or `<video>`.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 fn media_open(
     app: tauri::State<'_, App>,
@@ -1470,7 +1621,25 @@ fn media_open(
     root: Option<String>,
     node: Option<String>,
     attachment: Option<String>,
+    device: Option<String>,
 ) -> Result<String, ApiError> {
+    // A linked computer's file ("device", `device` and `path`): its bytes through the server,
+    // served to the page exactly as a file of the server's tree is.
+    if source == "device" {
+        let (Some(device), Some(path)) = (device, path) else {
+            return Err(ApiError::new(400, "No such place."));
+        };
+        let Some(shown) = media::Shown::parse(&kind) else {
+            return Err(ApiError::new(
+                400,
+                format!("Not something to draw or play: {kind}"),
+            ));
+        };
+        let held = media::Source::Server {
+            raw: server::device_raw_path(&device, &path, true)?,
+        };
+        return Ok(media::url(&app.media.hold(held, shown)));
+    }
     let Some(shown) = media::Shown::parse(&kind) else {
         return Err(ApiError::new(
             400,
@@ -1579,11 +1748,20 @@ async fn viewer_bytes(
     path: Option<String>,
     root: Option<String>,
     node: Option<String>,
+    device: Option<String>,
 ) -> Result<tauri::ipc::Response, ApiError> {
     let h = handle.clone();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, ApiError> {
         let app = h.state::<App>();
         match (source.as_str(), path, root, node) {
+            // A linked computer's file (`device` and `path`), through the server.
+            ("device", Some(path), _, _) => {
+                let raw = server::device_raw_path(device.as_deref().unwrap_or(""), &path, false)?;
+                let Some((app_url, token)) = app.door() else {
+                    return Err(ApiError::new(401, "Not signed in."));
+                };
+                server::request_bytes(&app_url, &token, &raw, media::WHOLE)
+            }
             ("server", path, _, node) => {
                 let raw = match (node, path) {
                     (Some(node), _) => server::raw_node(&node, false)?,
@@ -2969,7 +3147,8 @@ pub fn run() {
             viewer_bytes,
             library_upload_dropped,
             local_take_dropped,
-            local_make_text,
+            carry_start,
+            carry_cancel,
             set_unsaved,
             device_upload_dropped,
             editor_call,
@@ -3051,6 +3230,7 @@ pub fn run() {
                 watch: watch::Watch::default(),
                 dropped: Mutex::new(Vec::new()),
                 editor: editor::Helper::default(),
+                carries: carry::Jobs::default(),
                 unsaved: std::sync::atomic::AtomicU32::new(0),
                 mic_until: Mutex::new(None),
             });
