@@ -53,6 +53,7 @@
       <div class="side__nav">
         <button type="button" class="navrow" id="nav-scheduled" data-view="scheduled"><span class="navrow__icon"></span><span data-i18n>Scheduled</span></button>
         <button type="button" class="navrow navrow--counted" id="nav-reports" data-view="reports" hidden><span class="navrow__icon"></span><span data-i18n>Reports</span><span class="navrow__count" id="reports-count" hidden></span></button>
+        <button type="button" class="navrow" id="nav-workspace" data-view="workspace"><span class="navrow__icon"></span><span data-i18n>Workspace</span></button>
         <button type="button" class="navrow" id="nav-files" data-view="files"><span class="navrow__icon"></span><span data-i18n>Files</span></button>
         <button type="button" class="navrow" id="nav-archived" data-view="archived"><span class="navrow__icon"></span><span data-i18n>Archived</span></button>
         <button type="button" class="navrow" id="nav-memory" data-view="memory"><span class="navrow__icon"></span><span data-i18n>Memory</span></button>
@@ -98,6 +99,40 @@
         </form>
       </div>
     </main>
+
+    <section class="page work" id="page-workspace" hidden aria-labelledby="work-title">
+      <header class="head work__head">
+        <h1 class="head__title" id="work-title" data-i18n>Workspace</h1>
+        <div class="tabs work__places" id="work-places" role="tablist" aria-label="Where the files are" data-i18n-aria-label></div>
+        <div class="head__tools work__tools" id="work-tools"></div>
+        <div class="tabs work__panes" id="work-panes" role="tablist" aria-label="Parts of the workspace" data-i18n-aria-label></div>
+        <p class="status work__note" id="work-note" role="status" hidden></p>
+      </header>
+      <div class="work__body">
+        <section class="work__files" id="work-files" aria-label="Files" data-i18n-aria-label data-drag="false">
+          <div class="fx__bar">
+            <div class="fx__where" id="work-where"></div>
+            <nav class="crumbs" id="work-crumbs" aria-label="Where you are" data-i18n-aria-label></nav>
+            <div class="fx__tools">
+              <button type="button" class="tool" id="work-mkdir" aria-label="New folder" title="New folder" data-i18n-aria-label data-i18n-title></button>
+              <button type="button" class="tool" id="work-mkfile" aria-label="New file" title="New file" data-i18n-aria-label data-i18n-title></button>
+              <button type="button" class="tool" id="work-refresh" aria-label="Read again" title="Read again" data-i18n-aria-label data-i18n-title></button>
+            </div>
+          </div>
+          <p class="status fx__status" id="work-status" hidden></p>
+          <p class="work__drop" id="work-drop" aria-hidden="true"></p>
+          <aside class="fx__tree work__tree" id="work-tree" aria-label="Files" data-i18n-aria-label></aside>
+          <div id="work-list" hidden></div>
+          <div id="work-details" hidden></div>
+        </section>
+        <section class="work__editor" id="work-editor" aria-label="Open files" data-i18n-aria-label>
+          <div class="work__tabs" id="work-tabs" role="tablist" aria-label="Open files" data-i18n-aria-label hidden></div>
+          <div class="work__panels" id="work-panels">
+            <div class="fx__empty work__none" id="work-none"><p data-i18n>Open a file from the tree: it is shown here, and one that can be written is edited here.</p></div>
+          </div>
+        </section>
+      </div>
+    </section>
 
     <section class="page" id="page-files" hidden aria-labelledby="files-title">
       <header class="head">

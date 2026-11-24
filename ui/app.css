@@ -1863,7 +1863,7 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 
 /* The folder tree: a chevron opens a folder, its name lists it. */
 .ftree, .ftree ul { list-style: none; margin: 0; padding: 0; }
-.ftree__line { display: grid; grid-template-columns: calc(var(--depth, 0) * var(--sp-3)) 1.25rem minmax(0, 1fr); align-items: center; }
+.ftree__line { display: grid; grid-template-columns: calc(var(--depth, 0) * var(--sp-3)) 1.25rem minmax(0, 1fr) auto; align-items: center; }
 .ftree__line::before { content: ""; }
 .ftree__chevron { display: grid; place-items: center; width: 1.25rem; height: var(--control-h-sm); padding: 0; color: var(--ink-faint); background: transparent; border: 0; cursor: pointer; }
 .ftree__chevron .icon { width: 12px; height: 12px; transition: transform var(--dur-1) var(--ease-out); }
@@ -2506,4 +2506,182 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
   .setup .field { grid-template-rows: auto auto auto; }
   .tasks-list { --task-cols: var(--task-icon) minmax(0, 1fr) auto; --task-open: 1 / 3; }
   .task__last { display: none; }
+}
+
+/* --- The workspace -------------------------------------------------------------------------- */
+/* One view for a folder: the files and the open tabs in the page's own column, the chat in the
+   panel's column (the same chat, the same element), the terminal in a row of its own under the
+   files. Every part has its track by name; a part that is closed leaves its track at nothing. */
+
+.shell[data-view="workspace"] { grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: "side main panel" "side term panel"; }
+.shell[data-view="workspace"], .shell[data-view="workspace"][data-viewer="true"], .shell[data-view="workspace"][data-activity="true"], .shell[data-view="workspace"][data-terminal="true"] { --panel-col: 0px; }
+.shell[data-view="workspace"][data-wchat="true"][data-wchat="true"] { --panel-col: minmax(var(--inspector-width-min), 34%); }
+.shell[data-view="workspace"] > .main { grid-area: panel; grid-row: 1 / -1; border-left: var(--border-w) solid var(--border); }
+.shell[data-view="workspace"][data-wchat="false"] > .main { display: none; }
+.shell[data-view="workspace"] > .termpanel { grid-area: term; height: min(18rem, 40vh); border-left: 0; border-top: var(--border-w) solid var(--border); }
+.shell[data-view="workspace"] > .viewer, .shell[data-view="workspace"] > .activity { grid-area: main; grid-row: 1 / -1; z-index: var(--z-panel); border-left: 0; }
+
+.work { container: work / inline-size; }
+.head.work__head { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "title places tools"; }
+.work__head > .head__title { grid-area: title; }
+.work__places { grid-area: places; justify-self: start; max-width: 100%; overflow-x: auto; grid-auto-columns: max-content; }
+.work__tools { grid-area: tools; }
+.work__panes { grid-area: panes; display: none; }
+/* (A row of the head's own, across it; no row at all while there is nothing to say.) */
+.work__note { grid-column: 1 / -1; margin: 0; color: var(--warning); }
+.work__note[hidden] { display: none; }
+.work__place { max-width: 14rem; }
+.work__place-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.work__place.is-drop { color: var(--ink); background: var(--accent-soft); outline: var(--outline-w) solid var(--accent); outline-offset: calc(-1 * var(--outline-w)); }
+.work__body { display: grid; grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr); min-width: 0; min-height: 0; }
+/* (Not the Files page's `.fx`: that one folds its tree away by its own width, and here the tree is the whole of it.) */
+.work__files { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; border-right: var(--border-w) solid var(--border); background: var(--surface); }
+.work__files > .fx__bar { grid-row: 1; }
+.work__files > .fx__status { grid-row: 2; }
+.work__files.is-dragging { user-select: none; cursor: grabbing; }
+/* What a drop from outside would do: laid over the foot of the tree, never a row of its own --
+   a row that came and went would move the folders under the files being held over them. */
+.work__files { position: relative; }
+.work__files > .work__drop { position: absolute; left: 0; right: 0; bottom: 0; z-index: var(--z-raised); pointer-events: none; }
+.work__files > .work__tree { grid-row: 3; border-right: 0; }
+.work__files .fx__bar { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "where where" "crumbs tools"; padding: var(--sp-1) var(--sp-2); }
+.work__files .fx__where { max-width: none; }
+.work__drop { display: none; margin: 0; padding: var(--sp-2) var(--sp-3); font: var(--text-xs) / var(--leading-normal) var(--font-ui); color: var(--ink); background: var(--surface-raised); border-top: var(--border-w-thick) solid var(--accent); }
+.work__files[data-drag="true"] > .work__drop { display: block; }
+.work__files[data-drag="true"] > .work__tree { outline: var(--outline-w) dashed var(--accent); outline-offset: calc(-1 * var(--outline-w)); }
+.work__folder { display: inline-grid; grid-template-columns: 1rem minmax(0, 1fr); gap: var(--sp-2); align-items: center; max-width: 100%; }
+.work__folder-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* A line of a tree that lists files: the same four tracks on every line -- depth, the chevron's
+   (empty for a file), the name, the menu -- so names stand in one column at each depth. */
+.ftree__gap { width: 1.25rem; }
+.ftree__more { opacity: 0; }
+.ftree__line:hover .ftree__more, .ftree__more:focus-visible, .ftree__more[aria-expanded="true"] { opacity: 1; }
+@media (hover: none) { .ftree__more { opacity: 1; } }
+.ftree__row--file { font-weight: 400; }
+
+/* What is dragged, and what a drop where it is held would do: two lines of one box. */
+.fdrag { display: grid; }
+.fdrag__what, .fdrag__does { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.fdrag__does { color: var(--accent); font-weight: 600; }
+.fdrag__does:empty { display: none; }
+
+/* The open files: a strip of tabs (it scrolls by itself, never the page), and the one in front. */
+.work__editor { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--bg); }
+.work__tabs { grid-row: 1; display: flex; min-width: 0; overflow-x: auto; overscroll-behavior: contain; border-bottom: var(--border-w) solid var(--border); background: var(--surface); }
+.work__tabs[hidden] { display: none; }
+.work__panels { grid-row: 2; display: grid; min-width: 0; min-height: 0; }
+.work__none[hidden] { display: none; }
+.wtab { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) var(--control-h-sm); align-items: center; max-width: 16rem; border-right: var(--border-w) solid var(--border); }
+.wtab__open { display: grid; grid-template-columns: minmax(0, 1fr) 0.75rem; gap: var(--sp-1); align-items: center; min-width: 0; height: var(--control-h); padding: 0 var(--sp-1) 0 var(--sp-3); font: var(--text-sm) var(--font-body); text-align: left; color: var(--ink-muted); background: transparent; border: 0; cursor: pointer; }
+.wtab__open[aria-selected="true"] { color: var(--ink); background: var(--bg); box-shadow: inset 0 calc(-1 * var(--border-w-thick)) 0 var(--accent); }
+.wtab__open:focus-visible { outline: var(--outline-w) solid var(--accent); outline-offset: calc(-1 * var(--outline-w)); }
+.wtab__name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wtab__mark { font-size: var(--text-xs); color: var(--warning); }
+.wtab__close { display: grid; place-items: center; width: var(--control-h-sm); height: var(--control-h-sm); padding: 0; color: var(--ink-faint); background: transparent; border: 0; border-radius: var(--radius-sm); cursor: pointer; }
+.wtab__close:hover { color: var(--ink); background: var(--surface-hover); }
+.wtab__close .icon { width: 12px; height: 12px; }
+
+/* A tab's file: its path and what can be done, the line for a save, a word from the helper, the
+   file, and -- while a rewrite waits for its answers -- the changes. Each a row by name. */
+.wpanel { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.wpanel[hidden] { display: none; }
+.wpanel > .wpanel__head { grid-row: 1; }
+.wpanel > .viewer__bar { grid-row: 2; }
+.wpanel > .wpanel__said { grid-row: 3; }
+.wpanel > .wpanel__body { grid-row: 4; }
+.wpanel > .review { grid-row: 5; }
+.wpanel__head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--sp-2); align-items: center; min-height: var(--control-h); padding: var(--sp-1) var(--sp-3); border-bottom: var(--border-w) solid var(--border); }
+.wpanel__path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; direction: rtl; text-align: left; font: var(--text-xs) var(--font-mono); color: var(--ink-muted); }
+.wpanel__assist { display: flex; gap: var(--sp-1); }
+.wpanel__assist[hidden] { display: none; }
+.wpanel__said { margin: 0; padding: var(--sp-1) var(--sp-3); font-size: var(--text-xs); color: var(--ink-muted); border-bottom: var(--border-w) solid var(--border); }
+.wpanel__said:empty { display: none; }
+.wpanel__said.is-error { color: var(--warning); }
+.wpanel__body { min-width: 0; min-height: 0; overflow: auto; }
+.wpanel__loading { padding: var(--sp-4); }
+.wpanel[data-review="true"] > .wpanel__body { opacity: var(--opacity-dim); }
+/* What the helper offers at the cursor, before it is taken. */
+.cm-ghost { color: var(--ink-faint); font-style: italic; white-space: pre-wrap; }
+
+/* Changes to take or leave. A change's head is four tracks -- which one, what was said of it,
+   Reject, Accept -- the same on every change, so the buttons stand in two columns. */
+.review { min-width: 0; max-height: 50vh; overflow: auto; overscroll-behavior: contain; border-top: var(--border-w-thick) solid var(--accent); background: var(--surface); }
+.review[hidden] { display: none; }
+.review__head { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; padding: var(--sp-2) var(--sp-3); background: var(--surface); border-bottom: var(--border-w) solid var(--border); }
+.review__title { flex: 1 1 12rem; min-width: 0; font: 600 var(--text-sm) var(--font-ui); }
+.review__model, .review__left { font-size: var(--text-xs); color: var(--ink-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 12rem; }
+.review__left:empty { display: none; }
+.review__writing { margin: 0; max-height: 12rem; overflow: auto; padding: var(--sp-3); font: var(--text-xs) / var(--leading-normal) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-muted); }
+.review__list { list-style: none; margin: 0; padding: var(--sp-2) var(--sp-3) var(--sp-3); display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: var(--sp-2) var(--sp-2); }
+.dhunk { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; row-gap: var(--sp-1); min-width: 0; }
+.dhunk__head { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; }
+.dhunk__where { font: 600 var(--text-xs) var(--font-ui); color: var(--ink-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dhunk__said { font-size: var(--text-xs); color: var(--ink-muted); white-space: nowrap; }
+.dhunk[data-state="accepted"] .dhunk__said { color: var(--success); }
+.dhunk[data-state="rejected"] .dhunk__said { color: var(--danger); }
+.dhunk[data-state="rejected"] .dhunk__lines { opacity: var(--opacity-dim); }
+.dhunk__yes[aria-pressed="true"], .dhunk__no[aria-pressed="true"] { color: var(--ink); background: var(--surface-active); border-color: var(--border-strong); }
+.dhunk > .dhunk__lines { grid-column: 1 / -1; }
+.dhunk__lines { min-width: 0; overflow-x: auto; font: var(--text-xs) / var(--leading-normal) var(--font-mono); background: var(--code-bg); border: var(--border-w) solid var(--code-border); border-radius: var(--radius-sm); }
+.dline { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr); min-width: max-content; }
+.dline__sign { text-align: center; color: var(--ink-faint); user-select: none; }
+.dline__text { white-space: pre; padding-right: var(--sp-2); }
+.dline.is-same { color: var(--ink-muted); }
+.dline.is-add { color: var(--ink); background: var(--success-soft); }
+.dline.is-del { color: var(--ink); background: var(--danger-soft); }
+.dline.is-add .dline__sign { color: var(--success); }
+.dline.is-del .dline__sign { color: var(--danger); }
+
+/* An edit the agent asks to make, on its card: the file, how much, and the pieces. */
+.ask__diff { display: grid; gap: var(--sp-1); min-width: 0; }
+.ask__diff-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); align-items: baseline; margin: 0; }
+.ask__diff-path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--text-xs) var(--font-mono); }
+.ask__diff-count { font-size: var(--text-xs); color: var(--ink-muted); white-space: nowrap; }
+.ask__diff-body { display: grid; gap: var(--sp-2); max-height: var(--h-block); overflow: auto; }
+
+/* The two model settings: two buttons of one row, each a label over the model it stands on. */
+.assist { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 9rem); gap: var(--sp-1); }
+.assist__pick { display: grid; grid-template-rows: auto auto; justify-items: start; min-width: 0; height: var(--control-h); padding: 0 var(--sp-2); text-align: left; color: var(--ink); background: transparent; border: var(--border-w) solid var(--border); border-radius: var(--radius-md); cursor: pointer; }
+.assist__pick:hover { background: var(--surface-hover); }
+.assist__pick[data-quick="true"] { border-color: var(--accent); }
+.assist__label { font: var(--text-xs) var(--font-ui); color: var(--ink-faint); white-space: nowrap; }
+.assist__value { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 var(--text-xs) var(--font-ui); }
+
+/* By the page's own width: the tools go under the title before anything is cut. */
+@container work (max-width: 52rem) {
+  .head.work__head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title tools" "places places"; row-gap: var(--sp-2); }
+}
+
+/* A narrow window: one part at a time -- Files, Editor, Chat, Terminal -- chosen at the top.
+   The workspace's head stays; the chat and the terminal take the row under it. */
+@media (max-width: 64rem) {
+  .shell[data-view="workspace"] { grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "side main panel" "side pane panel"; }
+  .shell[data-view="workspace"][data-wchat="true"][data-wchat="true"] { --panel-col: 0px; }
+  .shell[data-view="workspace"][data-wpane="files"] > .work, .shell[data-view="workspace"][data-wpane="editor"] > .work { grid-row: 1 / -1; }
+  .shell[data-view="workspace"] > .main, .shell[data-view="workspace"][data-wchat="false"] > .main { grid-area: pane; display: none; border-left: 0; }
+  .shell[data-view="workspace"][data-wpane="chat"] > .main:not([hidden]) { display: grid; }
+  .shell[data-view="workspace"] > .termpanel { grid-area: pane; height: auto; border-top: 0; display: none; }
+  .shell[data-view="workspace"][data-wpane="terminal"] > .termpanel:not([hidden]) { display: grid; }
+  .shell[data-view="workspace"] > .viewer, .shell[data-view="workspace"] > .activity { grid-area: main; grid-row: 1 / -1; }
+  .shell[data-view="workspace"][data-wpane="chat"] .work__body, .shell[data-view="workspace"][data-wpane="terminal"] .work__body { display: none; }
+  .shell[data-view="workspace"][data-wpane="chat"] > .work, .shell[data-view="workspace"][data-wpane="terminal"] > .work { grid-template-rows: auto; }
+  .work__body { grid-template-columns: minmax(0, 1fr); }
+  .shell[data-wpane="files"] .work__editor, .shell[data-wpane="editor"] .work__files { display: none; }
+  .work__files { border-right: 0; }
+  .head.work__head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title tools" "places places" "panes panes"; row-gap: var(--sp-2); }
+  .work__panes { display: grid; width: 100%; }
+  #work-chat, #work-terminal { display: none; }
+  .work__places { width: 100%; }
+}
+@media (max-width: 48rem) {
+  .work .ftree__row, .work .ftree__chevron, .work .ftree__more, .wtab__open, .wtab__close, .work__place, .work__panes .tabs__tab, .assist__pick, .wpanel__assist .tool { min-height: var(--tap-min); }
+  .wtab__close, .work .ftree__more, .wpanel__assist .tool { min-width: var(--tap-min); }
+  .wtab { grid-template-columns: minmax(0, 1fr) var(--tap-min); }
+  .review__list { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .dhunk__where, .dhunk__said { grid-column: 1 / -1; }
+  .dhunk__yes, .dhunk__no { min-height: var(--tap-min); }
+  .assist { grid-auto-columns: minmax(0, 1fr); width: 100%; }
+  .head.work__head { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "tools" "places" "panes"; }
+  .work__tools { justify-content: stretch; }
 }

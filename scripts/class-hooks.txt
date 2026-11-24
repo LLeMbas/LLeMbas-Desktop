@@ -78,3 +78,11 @@ msg__waits          a waiting message's line saying why it waits, for the tests;
 msg__waitbar        a waiting message's two buttons; styled as .msg__editbar
 msg__send           a hook for the tests; styled as .btn
 msg__discard        a hook for the tests; styled as .btn
+review__stop        a hook for the tests; styled as .btn
+review__none        a hook for the tests; styled as .btn
+review__all         a hook for the tests; styled as .btn
+wtab__complete      a hook for the tests; styled as .tool
+wtab__rewrite       a hook for the tests; styled as .tool
+viewer__save        a hook for the tests (a tab's Save: the panel's has an id); styled as .btn
+viewer__reload      a hook for the tests; styled as .btn
+viewer__force       a hook for the tests; styled as .btn

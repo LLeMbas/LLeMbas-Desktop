@@ -174,9 +174,21 @@ export function initAttach(context) {
   listen("drag", (e) => {
     $("composer").dataset.drag = String(!!e.payload && usable())
   })
+  // (In the workspace the chat stands beside the files: a drop is the chat's only on the chat.)
+  let at = null
+  listen("drop-at", (e) => {
+    at = e.payload && typeof e.payload === "object" ? e.payload : null
+  })
+  const onChat = () => {
+    if ($("shell").dataset.view !== "workspace" || !Number.isFinite(Number(at?.x))) return true
+    const hit = document.elementFromPoint(Number(at.x), Number(at.y))
+    return !!hit && $("main").contains(hit)
+  }
   listen("drop", (e) => {
     $("composer").dataset.drag = "false"
-    if (!usable()) return
+    const mine = onChat()
+    at = null
+    if (!usable() || !mine) return
     const names = Array.isArray(e.payload) ? e.payload : []
     track(names, () => invoke("attach_dropped", { chat: ctx.chat() || null }))
   })

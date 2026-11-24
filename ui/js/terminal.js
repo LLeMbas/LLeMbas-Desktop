@@ -480,6 +480,12 @@ function drop() {
  * server took that shell over, so the socket stays as it is.
  */
 export function aimTerminal(next) {
+  aim(next)
+  // (Whoever shows a button for the terminal somewhere else -- the workspace -- draws it for this.)
+  ctx.aimed?.()
+}
+
+function aim(next) {
   const key = next ? (next.chat ? `chat:${next.chat}` : `device:${next.device}:${next.directory}`) : ""
   const before = target
   target = next ? { ...next, key } : null
@@ -722,8 +728,8 @@ function copyOut() {
   )
 }
 
-export function initTerminal({ onLayout, composer, deviceName }) {
-  ctx = { layout: onLayout || (() => {}), composer: composer || (() => {}), deviceName: deviceName || (() => "") }
+export function initTerminal({ onLayout, composer, deviceName, onAim }) {
+  ctx = { layout: onLayout || (() => {}), composer: composer || (() => {}), deviceName: deviceName || (() => ""), aimed: onAim || (() => {}) }
   $("terminal-end").replaceChildren(icon(ICONS.stop))
   $("terminal-end").hidden = true
   $("terminal-end").addEventListener("click", endShell)

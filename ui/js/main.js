@@ -12,6 +12,7 @@ import { renderSettings, initSettings, scrollToSection } from "./settings.js"
 import { initViewer, onViewer, closeViewer, closeViewerKeeping, keptEdit, dropKeptEdit, restoreEdit } from "./viewer.js"
 import { initExplorer, showLocal, showFilesTab, openServerFile, revealServerFile } from "./explorer.js"
 import { initList, refreshList, markCurrent, replySaid, noteChat, dropChat, resetList } from "./list.js"
+import { chatFor, knownFolders } from "./chat.js"
 import { initChat, openChat, readAgain, replyStarted, replyFollowed, eventsOpened, newChat, closeChat, openChatId, mediaFor, mediaJobEnded, alertIn, chatMenu, statusChanged, draftKind, onThisComputer, modelsChanged, intoComposer, terminalWaiting } from "./chat.js"
 import { initPython } from "./python.js"
 import { pythonChanged } from "./chat.js"
@@ -30,10 +31,11 @@ import { canDraw, openDraw } from "./draw.js"
 import { closePopover } from "./popup.js"
 import { noteSubagentsCap, forChat } from "./models.js"
 import { initMedia } from "./media.js"
+import { initWorkspace, showWorkspace, workspaceChanged, workspaceTools, editorContext } from "./workspace.js"
 
 let status = null
 let view = "" // "setup" | "app"
-let page = "chat" // "chat" | "files" | "scheduled" | "archived" | "memory" | "settings"
+let page = "chat" // "chat" | "workspace" | "files" | "scheduled" | "archived" | "memory" | "settings"
 let me = null
 let models = []
 let devices = [] // this account's linked devices
@@ -96,6 +98,7 @@ function route() {
     localPane()
     statusChanged()
     accountButton()
+    workspaceChanged()
   }
 }
 
@@ -137,7 +140,8 @@ function stopApp() {
   closeViewerKeeping()
   keptFor = keptEdit() ? who : ""
   stopReports()
-  if (page === "reports") showPage("chat")
+  // (The workspace's tabs are one person's: it is entered anew, and shows them only to that person.)
+  if (page === "reports" || page === "workspace") showPage("chat")
 }
 
 let modelsAt = 0 // when /models was last read
@@ -183,7 +187,9 @@ function showPage(name) {
   page = name
   closePopover()
   $("shell").dataset.view = name
-  $("main").hidden = name !== "chat"
+  // (The workspace has the chat beside its files: the same chat, in the panel's column.)
+  $("main").hidden = name !== "chat" && name !== "workspace"
+  $("page-workspace").hidden = name !== "workspace"
   $("page-files").hidden = name !== "files"
   $("page-scheduled").hidden = name !== "scheduled"
   $("page-reports").hidden = name !== "reports"
@@ -192,11 +198,15 @@ function showPage(name) {
   $("page-memory").hidden = name !== "memory"
   $("settings").hidden = name !== "settings"
   for (const b of document.querySelectorAll(".navrow[data-view]")) b.setAttribute("aria-current", String(b.dataset.view === name))
-  if (name !== "chat") {
-    showPanel(false)
-    showTerminal(false)
-  }
+  if (name !== "chat") showPanel(false)
+  if (name !== "chat" && name !== "workspace") showTerminal(false)
   if (narrow()) sideOpen(false)
+}
+
+/** The workspace: a folder's files, tabs, chat and terminal in one view. */
+function showWork() {
+  showPage("workspace")
+  showWorkspace()
 }
 
 /** This computer's tree: the open agent chat's folder when it runs here, else the one chosen. */
@@ -277,6 +287,7 @@ function commands() {
     { label: t("Scheduled"), run: () => (showPage("scheduled"), showScheduled()) },
     ...scheduledCommands(),
     ...reportsCommands(),
+    { label: t("Workspace"), run: showWork },
     { label: t("Files"), run: () => showFiles() },
     { label: t("Archived"), run: showArchivedPage },
     { label: t("Memory"), run: () => showMemoryPage() },
@@ -360,6 +371,8 @@ async function boot() {
     },
     // The report a chat continues, where this window opened it from one.
     reportOf: (chat) => reportOf(chat),
+    // What is open in the workspace, told to the agent with a message sent from beside it.
+    editor: () => editorContext(),
     // Archived or deleted: the list without it, and a new chat where it was open.
     gone: (chat) => {
       if (!openChatId() || openChatId() === chat.id) {
@@ -385,6 +398,15 @@ async function boot() {
     openMemory: (id) => showMemoryPage(id),
   })
   initScheduled({ status: () => status, models: () => models, me: () => me, thisDevices, openChat: (id) => showChat(id), openReport: (id) => openReports(id), show: () => showPage("scheduled") })
+  initWorkspace({
+    status: () => status,
+    devices: () => devices,
+    thisDevices,
+    models: () => models,
+    chatFor,
+    knownFolders,
+    shown: () => view === "app" && page === "workspace",
+  })
   onViewer((on) => {
     $("shell").dataset.viewer = String(on)
   })
@@ -393,8 +415,10 @@ async function boot() {
     onLayout: (on) => {
       $("shell").dataset.terminal = String(on)
       if (on && panelOpen()) showPanel(false)
+      workspaceTools()
     },
     composer: intoComposer,
+    onAim: () => workspaceTools(),
     deviceName: (id) => devices.find((d) => d.id === id)?.name || "",
   })
   initActivity({
@@ -431,6 +455,8 @@ async function boot() {
     showPage("scheduled")
     showScheduled()
   })
+  $("nav-workspace").querySelector(".navrow__icon").replaceChildren(icon(ICONS.edit))
+  $("nav-workspace").addEventListener("click", showWork)
   $("nav-files").querySelector(".navrow__icon").replaceChildren(icon(ICONS.folder))
   $("nav-files").addEventListener("click", () => showFiles())
   $("nav-archived").querySelector(".navrow__icon").replaceChildren(icon(ICONS.archive))
@@ -484,7 +510,7 @@ async function boot() {
     renderBar(status)
     route()
     // The agent came up or went: which devices are linked changes with it.
-    if (started && before && before.agent.state !== status.agent.state) loadDevices().then(() => (refreshList(), statusChanged()))
+    if (started && before && before.agent.state !== status.agent.state) loadDevices().then(() => (refreshList(), statusChanged(), workspaceChanged()))
   })
   // A reply started in one of the person's chats (the server's `reply` frame, handed on by
   // Rust): the open chat's is the chat's to follow; any chat's shows in the list -- the running

@@ -31,6 +31,7 @@ import { scopePopover } from "./scope.js"
 import { pickDirectory } from "./dirpick.js"
 import { readAloudButton } from "./voice.js"
 import { mediaCard, jobCard, pictureCard, attachmentTile, forgetMedia } from "./media.js"
+import { hunksOf, hunkBlock, countOf } from "./diff.js"
 
 const MODES = ["manual", "edit", "auto", "plan"]
 
@@ -1551,6 +1552,35 @@ function renderCards(chat, cards) {
   box.hidden = !box.children.length
 }
 
+/**
+ * The files an approval's edit would change, as the card's item carries them.
+ *
+ * 🚧 ASSUMED. The harness says them (spec 3.11.0, *Diffs*): `session/request_permission` carries
+ * `content: [{ type: "diff", path, oldText: string | null, newText }]` for a client that said
+ * `editor`. How the server hands them on in an `/api/v2` card is not written anywhere yet: this
+ * reads `item.diffs` (and `item.content`, the device's own list), each `{ path, old_text | oldText,
+ * new_text | newText }`. A card without them is drawn as it always was. The one place that reads them.
+ */
+function editDiffs(item) {
+  const list = Array.isArray(item.diffs) ? item.diffs : Array.isArray(item.content) ? item.content.filter((c) => c?.type === "diff") : []
+  return list
+    .map((d) => ({ path: String(d?.path ?? ""), before: d?.old_text ?? d?.oldText ?? null, after: d?.new_text ?? d?.newText }))
+    .filter((d) => d.path && typeof d.after === "string" && (d.before === null || typeof d.before === "string"))
+}
+
+/** One file's change on a card: its path, how much goes and comes, and every changed piece -- each line as text. */
+function diffCard(d) {
+  const hunks = hunksOf(d.before ?? "", d.after)
+  const n = countOf(hunks)
+  const words = d.before === null ? t("A new file, %(add)s lines", { add: n.add }) : d.after === "" ? t("The file is deleted") : t("%(del)s lines out, %(add)s in", { del: n.del, add: n.add })
+  return h(
+    "div",
+    { class: "ask__diff", dataset: { path: d.path } },
+    h("p", { class: "ask__diff-head" }, h("bdi", { class: "ask__diff-path", title: d.path, text: d.path }), h("span", { class: "ask__diff-count", text: words })),
+    hunks.length ? h("div", { class: "ask__diff-body", tabindex: "0", role: "region", "aria-label": d.path }, hunks.map(hunkBlock)) : null,
+  )
+}
+
 // The server's mark for "the answer is what was typed beside it" (services/interaction.py OTHER):
 // sent only where typed words go with picked options; alone, they are the answer as they are.
 const OTHER = "__other__"
@@ -1597,9 +1627,13 @@ function cardOf(chat, card) {
         })
         part.append(edit)
       } else {
-        // What it wants to do (a tool's own title), then its input as the device sent it.
+        // What it wants to do (a tool's own title), then -- an edit asked for in the mode where
+        // every edit is asked -- what would change in each file, to accept or reject as it is
+        // drawn; else its input as the device sent it.
         part.append(h("p", { class: "ask__what", text: item.title }))
-        if (item.detail) part.append(h("pre", { class: "call__pre", text: item.detail }))
+        const diffs = editDiffs(item)
+        if (diffs.length) part.append(...diffs.map(diffCard))
+        else if (item.detail) part.append(h("pre", { class: "call__pre", text: item.detail }))
         detailShown = true
       }
     } else if (item.kind === "plan") {
@@ -3042,8 +3076,51 @@ export function newChat(kind) {
   $("composer-text").focus()
 }
 
+/**
+ * What the person has in front of them in the workspace, with the message: the open file, where
+ * the cursor is, what is selected, the other open files (harness spec 3.11.0, *Editor context in
+ * a prompt*: lines from 1, the range inclusive). The agent is told it as data beside the
+ * message; nothing is written into the person's words.
+ *
+ * 🚧 ASSUMED: the field. The spec says where a device takes it (`session/prompt`
+ * `_meta.lembas.editor`); that `/api/v2` takes it as `editor` in the body of a message (and of
+ * `POST /chats`) and hands it on is this app's reading until the server says. A server that
+ * does not know the field ignores it. The one place that sends it.
+ */
+function withEditor(body) {
+  const editor = ctx.editor?.()
+  if (editor && typeof editor === "object" && Object.keys(editor).length) body.editor = editor
+  return body
+}
+
+/**
+ * The chat for a folder (the workspace's, beside its files): the newest agent chat that works
+ * in `dir` on `device` ("" for this computer) where the list has one, else a new one there; for
+ * the server's files (`kind: "chat"`) a new chat on the server unless one is open already.
+ */
+export function chatFor({ kind, device = "", dir = "" }) {
+  if (kind !== "agent") {
+    if (open?.chat?.kind === "chat" || (draft && draft.kind === "chat")) return Promise.resolve()
+    newChat("chat")
+    return Promise.resolve()
+  }
+  const ids = device ? [device] : ctx.thisDevices()
+  const same = (c) => c?.kind === "agent" && !!c.device && ids.includes(c.device.token_id) && c.device.directory === dir
+  if (same(open?.chat)) return Promise.resolve()
+  const found = listed().find(same)
+  if (found) return openChat(found.id)
+  if (draft && draft.kind === "agent" && draft.dir === dir && (device ? draft.device === device : draftHere())) return Promise.resolve()
+  newChat("agent")
+  draft.device = device && !ctx.thisDevices().includes(device) ? device : ""
+  draft.dir = dir
+  renderHello()
+  renderChips()
+  renderNotice()
+  return Promise.resolve()
+}
+
 async function createChat(text, attachments) {
-  const body = { text }
+  const body = withEditor({ text })
   if (attachments.length) body.attachments = attachments
   // An agent chat names a model only when the person picked one: without it the server starts on
   // the folder's usual model, asking the computer itself -- and has the last word. An effort is
@@ -3123,7 +3200,7 @@ async function submit() {
     if (draft) await createChat(text, files)
     else if (open?.chat?.id) {
       const id = open.chat.id
-      let body = { text }
+      let body = withEditor({ text })
       if (files.length) body.attachments = files
       if (open.chat.kind === "chat") body = takePicture(body)
       const r = await asking(post(`/chats/${encodeURIComponent(id)}/messages`, body), id)
