@@ -758,6 +758,38 @@ pub fn upload_to_library(
     send_file(app, token, &path, "files", name, bytes)
 }
 
+/// Send one file to a linked computer, into the directory `dir` there, through the server's
+/// relay. ASSUMED: the route (`POST /devices/{id}/fs/upload?path=`, multipart `files`, as the
+/// library's upload) is the app's reading of the editor round's contract -- "`/api/v2` routes
+/// for the apps to browse and edit a linked computer's files (... upload, download)" -- and no
+/// such route was in the server when this was written. A server without it answers 404, which
+/// the page says. The one place this address is spelled on this side.
+pub fn upload_to_device(
+    app: &str,
+    token: &str,
+    device: &str,
+    dir: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<Value, ApiError> {
+    let plain = !device.is_empty()
+        && device.len() <= 96
+        && device
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !plain {
+        return Err(ApiError::new(400, format!("Not a computer: {device}")));
+    }
+    if dir.is_empty() || dir.chars().any(|c| c.is_control()) {
+        return Err(ApiError::new(400, format!("Not a folder: {dir}")));
+    }
+    let path = format!(
+        "/devices/{device}/fs/upload?path={}",
+        crate::terminal::encode(dir)
+    );
+    send_file(app, token, &path, "files", name, bytes)
+}
+
 // --- The person's files, as bytes --------------------------------------------------------------
 //
 // A download is written to disk as it arrives and never held whole: not in this process, and

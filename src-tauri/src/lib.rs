@@ -17,6 +17,7 @@
 
 mod agent;
 mod cli;
+mod editor;
 mod files;
 mod kinds;
 mod media;
@@ -134,6 +135,8 @@ struct App {
     /// Until when the page's own Dictate button may have the microphone (`voice_arm`): a request
     /// for it at any other moment is refused.
     mic_until: Mutex<Option<std::time::Instant>>,
+    /// The bundled CLI as the workspace editor's helper (`editor.rs`): a completion, a rewrite.
+    editor: editor::Helper,
 }
 
 struct TrayItems {
@@ -1198,6 +1201,133 @@ async fn local_write(
         )
     })
     .await
+}
+
+/// Copy the files just dropped on the window into one of the agent's folders, into `dir` there.
+/// Each drop can be taken once. Only ordinary files, each under a name that is free in the
+/// folder (never over anything), and never among the CLI's own files; a folder is said as one.
+#[tauri::command]
+async fn local_take_dropped(
+    handle: AppHandle,
+    root: String,
+    dir: String,
+) -> Result<LibraryUpload, ApiError> {
+    use std::io::Write as _;
+    let paths = std::mem::take(&mut *handle.state::<App>().dropped.lock().unwrap());
+    on_local(&handle, move |roots, kept| {
+        let mut out = LibraryUpload {
+            listing: None,
+            sent: 0,
+            failed: Vec::new(),
+        };
+        for path in paths {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".into());
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let taken = read_for_upload(&path).and_then(|bytes| {
+                let wrote = || -> Result<(), String> {
+                    let (_, dest) = files::incoming(roots, kept, &root, &dir, &name)?;
+                    let mut fresh = files::Fresh::beside(&dest).map_err(|e| e.to_string())?;
+                    fresh.file().write_all(&bytes).map_err(|e| e.to_string())?;
+                    fresh.settle_new(&dest).map_err(|e| e.to_string())
+                };
+                wrote().map_err(|e| ("unwritable", e))
+            });
+            match taken {
+                Ok(()) => out.sent += 1,
+                Err((reason, message)) => out.failed.push(Uploaded {
+                    name,
+                    size,
+                    attachment: None,
+                    error: Some(message),
+                    reason: Some(reason),
+                }),
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
+/// Send the files just dropped on the window to a linked computer, into `dir` there, through
+/// the server (`server::upload_to_device`). Each drop can be sent once.
+#[tauri::command]
+async fn device_upload_dropped(
+    handle: AppHandle,
+    device: String,
+    dir: String,
+) -> Result<LibraryUpload, ApiError> {
+    let paths = std::mem::take(&mut *handle.state::<App>().dropped.lock().unwrap());
+    let Some((app_url, token)) = handle.state::<App>().door() else {
+        return Err(ApiError::new(401, "Not signed in."));
+    };
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = LibraryUpload {
+            listing: None,
+            sent: 0,
+            failed: Vec::new(),
+        };
+        for path in paths {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".into());
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let sent = match read_for_upload(&path) {
+                Ok(bytes) => {
+                    server::upload_to_device(&app_url, &token, &device, &dir, &name, &bytes)
+                        .map_err(|e| {
+                            if e.status == 401 {
+                                token_refused(&h);
+                            }
+                            (None, e.detail)
+                        })
+                }
+                Err((reason, message)) => Err((Some(reason), message)),
+            };
+            match sent {
+                Ok(listing) => {
+                    out.listing = Some(listing);
+                    out.sent += 1;
+                }
+                Err((reason, message)) => out.failed.push(Uploaded {
+                    name,
+                    size,
+                    attachment: None,
+                    error: Some(message),
+                    reason,
+                }),
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// One request to the bundled CLI as the editor's helper (`editor.rs`): a completion, a
+/// selection rewritten, the models, the editor's settings. The pieces of a rewrite come as
+/// `editor` events that name the id the page put into its params.
+#[tauri::command]
+async fn editor_call(handle: AppHandle, method: String, params: Value) -> Result<Value, ApiError> {
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let page = h.clone();
+        h.state::<App>().editor.call(&method, params, move |note| {
+            let _ = page.emit("editor", note);
+        })
+    })
+    .await
+    .map_err(|e| ApiError::new(0, e.to_string()))?
+}
+
+/// The completion -- or, `edit`, the rewrite -- asked for under the page's `id` is no longer wanted.
+#[tauri::command]
+fn editor_cancel(app: tauri::State<'_, App>, id: String, edit: bool) {
+    app.editor.cancel(&id, edit);
 }
 
 /// Send files of the agent's folders into the person's library on the server, into `dir`.
@@ -2772,6 +2902,10 @@ pub fn run() {
             viewer_libs,
             viewer_bytes,
             library_upload_dropped,
+            local_take_dropped,
+            device_upload_dropped,
+            editor_call,
+            editor_cancel,
             file_save_as,
             files_zip_save,
             sealed_open,
@@ -2848,6 +2982,7 @@ pub fn run() {
                 python: python::Runtime::default(),
                 watch: watch::Watch::default(),
                 dropped: Mutex::new(Vec::new()),
+                editor: editor::Helper::default(),
                 mic_until: Mutex::new(None),
             });
             // Without a tray (no AppIndicator library, no StatusNotifier host) the app still
@@ -2927,6 +3062,7 @@ pub fn run() {
     };
     app.run(|handle, event| {
         if let RunEvent::Exit = event {
+            handle.state::<App>().editor.stop();
             handle.state::<App>().agent.stop();
         }
     });
