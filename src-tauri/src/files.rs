@@ -984,6 +984,60 @@ pub fn write(
     read_as(roots, kept, root, path).map_err(refused)
 }
 
+/// Put a whole new file into `dir`: `bytes` under `name` (as `plain_name` has it, trimmed), in
+/// one step -- written beside its place under a name of its own, then called what it should be,
+/// so nothing half-written and nothing empty is ever left under that name. `free`: a taken name
+/// gets a number (files dropped in from outside); otherwise a taken name is the refusal (a file
+/// brought over from another place). Never over anything, never among the CLI's own files, and
+/// only inside the agent's folders. Its path, from the folder the page named.
+pub fn bring_in(
+    roots: &[String],
+    kept: &[PathBuf],
+    root: &str,
+    dir: &str,
+    name: &str,
+    bytes: &[u8],
+    free: bool,
+) -> Result<String, String> {
+    let name = plain_name(name)?;
+    let (base, parent) = folder(roots, kept, root, dir)?;
+    let at = if free {
+        parent.join(free_name(&parent, name))
+    } else {
+        parent.join(name)
+    };
+    may_write(kept, &at)?;
+    if !free && taken(&at) {
+        return Err(format!("There is already something called {name} here."));
+    }
+    let failed = |e: std::io::Error| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => {
+            format!("There is already something called {name} here.")
+        }
+        _ => format!("{name}: {e}"),
+    };
+    let mut fresh = Fresh::beside(&at).map_err(failed)?;
+    fresh.file().write_all(bytes).map_err(failed)?;
+    fresh.settle_new(&at).map_err(failed)?;
+    Ok(relative(&base, &at))
+}
+
+/// A new text file with its text, whole or not at all (`bring_in`, the name never taken): what
+/// is carried over from another place. Too much text is refused before anything is made.
+pub fn make_text(
+    roots: &[String],
+    kept: &[PathBuf],
+    root: &str,
+    dir: &str,
+    name: &str,
+    text: &str,
+) -> Result<String, String> {
+    if text.len() as u64 > MAX_READ {
+        return Err("This is too much text to save from here.".into());
+    }
+    bring_in(roots, kept, root, dir, name, text.as_bytes(), false)
+}
+
 /// Where a file brought into `dir` under `name` would go: a free name there, never over
 /// something. For a download from the server into a folder of the agent's.
 pub fn incoming(
@@ -1761,6 +1815,71 @@ mod tests {
         assert!(!home.join("big (3)").exists());
         let out = copy_whole(&[], &big, &big, &home.join("big (3)"), false).unwrap();
         assert_eq!(out, LeftOut { own: 1, special: 0 });
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_file_brought_in_is_whole_or_not_there_under_a_plain_name_inside_a_root() {
+        let d = scratch("bring");
+        let (r, p) = (roots(&d), d.join("project"));
+        let root = r[0].clone();
+        let none: Vec<PathBuf> = Vec::new();
+        // Dropped in: under its own name, trimmed; a taken name gets a number, nothing is written over.
+        assert_eq!(
+            bring_in(&r, &none, &root, "", " notes.txt ", b"one", true).unwrap(),
+            "notes.txt"
+        );
+        assert_eq!(fs::read(p.join("notes.txt")).unwrap(), b"one");
+        assert_eq!(
+            bring_in(&r, &none, &root, "", "README.md", b"two", true).unwrap(),
+            "README (2).md"
+        );
+        assert_eq!(
+            fs::read_to_string(p.join("README.md")).unwrap(),
+            "# Waybread\n"
+        );
+        assert_eq!(
+            bring_in(&r, &none, &root, "src", "lib.rs", b"", true).unwrap(),
+            "src/lib.rs"
+        );
+        // A name that is a path, or no name: refused, and nothing is made anywhere.
+        for bad in ["../outside/x.txt", "a/b.txt", "..", "", "a\\b", "a\nb"] {
+            assert!(
+                bring_in(&r, &none, &root, "", bad, b"x", true).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(!d.join("outside/x.txt").exists());
+        // A folder outside the roots, one that is not there, a file named as the folder: refused.
+        assert!(bring_in(&r, &none, &root, "../outside", "x.txt", b"x", true).is_err());
+        assert!(bring_in(&r, &none, &root, "nowhere", "x.txt", b"x", true).is_err());
+        assert!(bring_in(&r, &none, &root, "README.md", "x.txt", b"x", true).is_err());
+        let elsewhere = d.join("outside").to_string_lossy().into_owned();
+        assert!(bring_in(&r, &none, &elsewhere, "", "x.txt", b"x", true).is_err());
+        assert_eq!(names(&d.join("outside")), vec!["secret.txt"]);
+        // Never among the CLI's own files.
+        let own = vec![p.join("src")];
+        assert!(bring_in(&r, &own, &root, "src", "x.txt", b"x", true).is_err());
+        assert!(bring_in(&r, &none, &root, "", ".lembas", b"x", true).is_err());
+        // Carried over from another place: the name as it is, trimmed, and a taken one is the refusal.
+        assert_eq!(
+            make_text(&r, &none, &root, "", " oven.py ", "bake()\n").unwrap(),
+            "oven.py"
+        );
+        assert_eq!(fs::read_to_string(p.join("oven.py")).unwrap(), "bake()\n");
+        let said = make_text(&r, &none, &root, "", "oven.py", "other").unwrap_err();
+        assert!(said.contains("already something called oven.py"), "{said}");
+        assert_eq!(fs::read_to_string(p.join("oven.py")).unwrap(), "bake()\n");
+        // Too much text: refused before anything is made -- no empty file stays behind.
+        let much = "a".repeat(MAX_READ as usize + 1);
+        assert!(make_text(&r, &none, &root, "", "big.txt", &much).is_err());
+        assert!(!p.join("big.txt").exists());
+        // Nothing half-written is left under any name.
+        assert!(
+            names(&p).iter().all(|n| !n.ends_with(".part")),
+            "{:?}",
+            names(&p)
+        );
         fs::remove_dir_all(&d).unwrap();
     }
 

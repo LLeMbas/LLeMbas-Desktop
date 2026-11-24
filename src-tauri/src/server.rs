@@ -772,6 +772,13 @@ pub fn upload_to_device(
     name: &str,
     bytes: &[u8],
 ) -> Result<Value, ApiError> {
+    let path = device_upload_path(device, dir)?;
+    send_file(app, token, &path, "files", name, bytes)
+}
+
+/// The address an upload to a linked computer goes to, from `/api/v2` on: the computer named
+/// by a plain id (nothing of it can be a path or a query), the folder percent-encoded whole.
+pub fn device_upload_path(device: &str, dir: &str) -> Result<String, ApiError> {
     let plain = !device.is_empty()
         && device.len() <= 96
         && device
@@ -783,11 +790,30 @@ pub fn upload_to_device(
     if dir.is_empty() || dir.chars().any(|c| c.is_control()) {
         return Err(ApiError::new(400, format!("Not a folder: {dir}")));
     }
-    let path = format!(
+    Ok(format!(
         "/devices/{device}/fs/upload?path={}",
         crate::terminal::encode(dir)
-    );
-    send_file(app, token, &path, "files", name, bytes)
+    ))
+}
+
+#[cfg(test)]
+mod device_upload_tests {
+    use super::device_upload_path;
+
+    #[test]
+    fn an_upload_to_a_linked_computer_names_a_plain_id_and_an_encoded_folder() {
+        assert_eq!(
+            device_upload_path("token-2_a", "/home/user/my project/a&b?c#d").unwrap(),
+            "/devices/token-2_a/fs/upload?path=%2Fhome%2Fuser%2Fmy%20project%2Fa%26b%3Fc%23d"
+        );
+        for bad in ["", "a/b", "../x", "a?b", "a b", "a%2F", &"a".repeat(97)] {
+            let e = device_upload_path(bad, "/home/user").unwrap_err();
+            assert_eq!(e.status, 400, "{bad:?}");
+        }
+        for bad in ["", "/home/a\nb", "/home/\u{0}"] {
+            assert!(device_upload_path("token2", bad).is_err(), "{bad:?}");
+        }
+    }
 }
 
 // --- The person's files, as bytes --------------------------------------------------------------

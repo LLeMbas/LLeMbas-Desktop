@@ -137,6 +137,8 @@ struct App {
     mic_until: Mutex<Option<std::time::Instant>>,
     /// The bundled CLI as the workspace editor's helper (`editor.rs`): a completion, a rewrite.
     editor: editor::Helper,
+    /// How many edits the page says it holds unsaved (`set_unsaved`).
+    unsaved: std::sync::atomic::AtomicU32,
 }
 
 struct TrayItems {
@@ -299,6 +301,7 @@ async fn set_server(handle: AppHandle, address: String) -> Result<Status, String
     let before = app.settings().server;
     app.update(|s| s.server = Some(d.base.clone()))?;
     if before.as_deref() != Some(d.base.as_str()) {
+        app.editor.stop();
         app.agent.stop();
         app.watch.reset();
         app.terminals.close_all();
@@ -414,6 +417,8 @@ fn sign_out(handle: AppHandle) {
     let app = handle.state::<App>();
     let account = app.account.lock().unwrap().take();
     server::forget_account(&app.config_dir);
+    // The editor's helper asks the server under the CLI's own login: not for a window nobody is signed in to.
+    app.editor.stop();
     app.watch.reset();
     app.terminals.close_all();
     app.python.clear();
@@ -430,6 +435,7 @@ fn token_refused(handle: &AppHandle) {
     let app = handle.state::<App>();
     if app.account.lock().unwrap().take().is_some() {
         server::forget_account(&app.config_dir);
+        app.editor.stop();
         app.terminals.close_all();
         app.python.clear();
         app.sealed.clear_pages();
@@ -1203,6 +1209,22 @@ async fn local_write(
     .await
 }
 
+/// A new text file with its text in `dir`, whole or not at all: a file carried over from another
+/// place. A taken name is refused; nothing empty is left where the text could not be written.
+#[tauri::command]
+async fn local_make_text(
+    handle: AppHandle,
+    root: String,
+    dir: String,
+    name: String,
+    text: String,
+) -> Result<String, ApiError> {
+    on_local(&handle, move |roots, kept| {
+        files::make_text(roots, kept, &root, &dir, &name, &text).map_err(|e| ApiError::new(400, e))
+    })
+    .await
+}
+
 /// Copy the files just dropped on the window into one of the agent's folders, into `dir` there.
 /// Each drop can be taken once. Only ordinary files, each under a name that is free in the
 /// folder (never over anything), and never among the CLI's own files; a folder is said as one.
@@ -1212,7 +1234,6 @@ async fn local_take_dropped(
     root: String,
     dir: String,
 ) -> Result<LibraryUpload, ApiError> {
-    use std::io::Write as _;
     let paths = std::mem::take(&mut *handle.state::<App>().dropped.lock().unwrap());
     on_local(&handle, move |roots, kept| {
         let mut out = LibraryUpload {
@@ -1227,13 +1248,9 @@ async fn local_take_dropped(
                 .unwrap_or_else(|| "file".into());
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             let taken = read_for_upload(&path).and_then(|bytes| {
-                let wrote = || -> Result<(), String> {
-                    let (_, dest) = files::incoming(roots, kept, &root, &dir, &name)?;
-                    let mut fresh = files::Fresh::beside(&dest).map_err(|e| e.to_string())?;
-                    fresh.file().write_all(&bytes).map_err(|e| e.to_string())?;
-                    fresh.settle_new(&dest).map_err(|e| e.to_string())
-                };
-                wrote().map_err(|e| ("unwritable", e))
+                files::bring_in(roots, kept, &root, &dir, &name, &bytes, true)
+                    .map(|_| ())
+                    .map_err(|e| ("unwritable", e))
             });
             match taken {
                 Ok(()) => out.sent += 1,
@@ -1325,9 +1342,60 @@ async fn editor_call(handle: AppHandle, method: String, params: Value) -> Result
 }
 
 /// The completion -- or, `edit`, the rewrite -- asked for under the page's `id` is no longer wanted.
-#[tauri::command]
+/// (Off the main thread, like every command that may wait: the helper's pipe can be slow.)
+#[tauri::command(async)]
 fn editor_cancel(app: tauri::State<'_, App>, id: String, edit: bool) {
     app.editor.cancel(&id, edit);
+}
+
+/// How many edits the page holds that were not saved (the workspace's tabs, the viewer): what
+/// Quit asks about before the app goes.
+#[tauri::command]
+fn set_unsaved(app: tauri::State<'_, App>, count: u32) {
+    app.unsaved.store(count, Ordering::SeqCst);
+}
+
+/// What Quit asks first, where edits were not saved; nothing where there are none.
+fn quit_question(unsaved: u32) -> Option<String> {
+    match unsaved {
+        0 => None,
+        1 => Some("One file you edited is not saved. Quit anyway? The edit is lost.".into()),
+        n => Some(format!(
+            "{n} files you edited are not saved. Quit anyway? The edits are lost."
+        )),
+    }
+}
+
+/// Quit: the helper and the agent stop, the app goes -- after a yes, where edits were not saved.
+fn quit(h: &AppHandle) {
+    let leave = |h: &AppHandle| {
+        h.state::<App>().editor.stop();
+        h.state::<App>().agent.stop();
+        h.exit(0);
+    };
+    let Some(question) = quit_question(h.state::<App>().unsaved.load(Ordering::SeqCst)) else {
+        return leave(h);
+    };
+    show(h);
+    let again = h.clone();
+    h.dialog()
+        .message(question)
+        .title("LLeMbas")
+        .kind(MessageDialogKind::Warning)
+        .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+            "Quit".into(),
+            "Cancel".into(),
+        ))
+        .show(move |yes| {
+            if yes {
+                let h = again.clone();
+                let _ = again.run_on_main_thread(move || {
+                    h.state::<App>().editor.stop();
+                    h.state::<App>().agent.stop();
+                    h.exit(0);
+                });
+            }
+        });
 }
 
 /// Send files of the agent's folders into the person's library on the server, into `dir`.
@@ -2288,6 +2356,7 @@ async fn install_update(handle: AppHandle) -> Result<(), String> {
         .download_and_install(|_, _| {}, || {})
         .await
         .map_err(|e| format!("The update could not be installed: {e}"))?;
+    handle.state::<App>().editor.stop();
     handle.state::<App>().agent.stop();
     handle.restart()
 }
@@ -2381,10 +2450,7 @@ fn on_menu(h: &AppHandle, id: &str) {
             show(h);
             let _ = h.emit("open-settings", ());
         }
-        "quit" => {
-            h.state::<App>().agent.stop();
-            h.exit(0);
-        }
+        "quit" => quit(h),
         _ => {}
     }
 }
@@ -2903,6 +2969,8 @@ pub fn run() {
             viewer_bytes,
             library_upload_dropped,
             local_take_dropped,
+            local_make_text,
+            set_unsaved,
             device_upload_dropped,
             editor_call,
             editor_cancel,
@@ -2983,6 +3051,7 @@ pub fn run() {
                 watch: watch::Watch::default(),
                 dropped: Mutex::new(Vec::new()),
                 editor: editor::Helper::default(),
+                unsaved: std::sync::atomic::AtomicU32::new(0),
                 mic_until: Mutex::new(None),
             });
             // Without a tray (no AppIndicator library, no StatusNotifier host) the app still

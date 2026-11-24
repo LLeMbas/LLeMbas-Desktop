@@ -14,7 +14,9 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -47,16 +49,44 @@ type Answer = Result<Value, ApiError>;
 type Waiting = Arc<Mutex<HashMap<u64, Sender<Answer>>>>;
 
 struct Running {
-    child: Child,
-    stdin: ChildStdin,
+    child: Mutex<Child>,
+    stdin: Mutex<ChildStdin>,
     waiting: Waiting,
-    next: u64,
+    next: AtomicU64,
+}
+
+impl Running {
+    fn alive(&self) -> bool {
+        matches!(self.child.lock().unwrap().try_wait(), Ok(None))
+    }
+
+    fn kill(&self) {
+        let mut child = self.child.lock().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 /// The CLI as the editor's helper: started when first asked, started again when it has gone.
+///
+/// Two locks, on purpose. `running` is held only for as long as it takes to look at what runs
+/// or to put it there -- never while the CLI is started and greeted, which may take as long as
+/// the greeting is waited for: a cancel sent meanwhile finds nothing running and returns at
+/// once. `starting` is what makes two requests that both find nothing start one CLI, not two.
 #[derive(Default)]
 pub struct Helper {
-    running: Mutex<Option<Running>>,
+    running: Mutex<Option<Arc<Running>>>,
+    starting: Mutex<()>,
+    /// What is run in the CLI's place, and how long it is waited for (the tests' stand-in).
+    stand_in: Option<StandIn>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+struct StandIn {
+    program: PathBuf,
+    args: Vec<String>,
+    greeting: Duration,
+    patience: Duration,
 }
 
 pub fn allowed(method: &str) -> bool {
@@ -67,6 +97,9 @@ pub fn allowed(method: &str) -> bool {
 fn patience(method: &str) -> Duration {
     Duration::from_secs(if method == "_lembas/edit" { 600 } else { 60 })
 }
+
+/// How long the CLI may take to answer the greeting.
+const GREETING: Duration = Duration::from_secs(30);
 
 /// An id of the page's own for a request: a short plain name.
 pub fn plain_id(id: &str) -> bool {
@@ -106,9 +139,10 @@ pub fn refusal(error: &Value) -> ApiError {
     ApiError::new(400, message)
 }
 
-fn send(stdin: &mut ChildStdin, message: &Value) -> std::io::Result<()> {
+fn send(stdin: &Mutex<ChildStdin>, message: &Value) -> std::io::Result<()> {
     let mut line = message.to_string();
     line.push('\n');
+    let mut stdin = stdin.lock().unwrap();
     stdin.write_all(line.as_bytes())?;
     stdin.flush()
 }
@@ -148,21 +182,27 @@ fn read(stdout: ChildStdout, waiting: &Waiting, notify: &dyn Fn(Value)) {
 }
 
 /// Start the CLI and greet it as an editor (`clientCapabilities._meta.lembas.editor`).
-fn start(notify: impl Fn(Value) + Send + 'static) -> Result<Running, ApiError> {
+fn start(
+    program: PathBuf,
+    args: &[String],
+    greeting: Duration,
+    notify: impl Fn(Value) + Send + 'static,
+) -> Result<Running, ApiError> {
     let failed =
         |why: String| ApiError::new(0, format!("The LLeMbas CLI could not be started: {why}"));
-    let mut child = Command::new(cli::binary())
-        .args(["serve", "--stdio"])
+    let mut child = Command::new(program)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| failed(e.to_string()))?;
-    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+    let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
         let _ = child.kill();
         let _ = child.wait();
         return Err(failed("no way to talk to it".into()));
     };
+    let stdin = Mutex::new(stdin);
     let waiting: Waiting = Arc::default();
     let (tx, rx) = mpsc::channel();
     waiting.lock().unwrap().insert(HANDSHAKE, tx);
@@ -178,8 +218,8 @@ fn start(notify: impl Fn(Value) + Send + 'static) -> Result<Running, ApiError> {
             "clientInfo": { "name": "LLeMbas Desktop", "version": env!("CARGO_PKG_VERSION") },
         },
     });
-    let greeted = match send(&mut stdin, &hello) {
-        Ok(()) => match rx.recv_timeout(Duration::from_secs(30)) {
+    let greeted = match send(&stdin, &hello) {
+        Ok(()) => match rx.recv_timeout(greeting) {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => Err(e),
             Err(_) => Err(failed("it did not answer".into())),
@@ -192,14 +232,52 @@ fn start(notify: impl Fn(Value) + Send + 'static) -> Result<Running, ApiError> {
         return Err(e);
     }
     Ok(Running {
-        child,
+        child: Mutex::new(child),
         stdin,
         waiting,
-        next: HANDSHAKE,
+        next: AtomicU64::new(HANDSHAKE),
     })
 }
 
 impl Helper {
+    /// What runs now, where it still does.
+    fn current(&self) -> Option<Arc<Running>> {
+        self.running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|r| r.alive())
+            .cloned()
+    }
+
+    /// The CLI to ask: the one that runs, or a new one -- started and greeted with the lock on
+    /// the running one let go, so nothing waits for the greeting but another start.
+    fn ready(&self, notify: impl Fn(Value) + Send + 'static) -> Result<Arc<Running>, ApiError> {
+        if let Some(r) = self.current() {
+            return Ok(r);
+        }
+        let _one = self.starting.lock().unwrap();
+        // (Started by whoever held `starting` before this one: that is the one.)
+        if let Some(r) = self.current() {
+            return Ok(r);
+        }
+        let fresh = match &self.stand_in {
+            Some(s) => start(s.program.clone(), &s.args, s.greeting, notify),
+            None => start(
+                cli::binary(),
+                &["serve".to_string(), "--stdio".to_string()],
+                GREETING,
+                notify,
+            ),
+        }?;
+        let fresh = Arc::new(fresh);
+        let old = self.running.lock().unwrap().replace(fresh.clone());
+        if let Some(old) = old {
+            old.kill();
+        }
+        Ok(fresh)
+    }
+
     /// Ask the CLI: `method` with `params`. Waits for the answer. `notify` gets the pieces of a
     /// rewrite (named by the id the page put into the rewrite's params).
     pub fn call(
@@ -214,63 +292,54 @@ impl Helper {
                 format!("Not one of the editor's methods: {method}"),
             ));
         }
+        let r = self.ready(notify)?;
         let (tx, rx) = mpsc::channel();
-        let id;
-        {
-            let mut guard = self.running.lock().unwrap();
-            let gone = match guard.as_mut() {
-                Some(r) => !matches!(r.child.try_wait(), Ok(None)),
-                None => true,
-            };
-            if gone {
-                *guard = Some(start(notify)?);
-            }
-            let Some(r) = guard.as_mut() else {
-                return Err(ApiError::new(0, "The LLeMbas CLI is not running."));
-            };
-            r.next += 1;
-            id = r.next;
-            r.waiting.lock().unwrap().insert(id, tx);
-            let request = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-            if let Err(e) = send(&mut r.stdin, &request) {
-                r.waiting.lock().unwrap().remove(&id);
-                return Err(ApiError::new(0, e.to_string()));
-            }
+        let id = r.next.fetch_add(1, Ordering::SeqCst) + 1;
+        r.waiting.lock().unwrap().insert(id, tx);
+        let request = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        if let Err(e) = send(&r.stdin, &request) {
+            r.waiting.lock().unwrap().remove(&id);
+            return Err(ApiError::new(0, e.to_string()));
         }
-        match rx.recv_timeout(patience(method)) {
+        let wait = self
+            .stand_in
+            .as_ref()
+            .map_or_else(|| patience(method), |s| s.patience);
+        match rx.recv_timeout(wait) {
             Ok(answer) => answer,
             Err(_) => {
-                if let Some(r) = self.running.lock().unwrap().as_ref() {
-                    r.waiting.lock().unwrap().remove(&id);
-                }
+                r.waiting.lock().unwrap().remove(&id);
                 Err(ApiError::new(0, "The LLeMbas CLI did not answer in time."))
             }
         }
     }
 
     /// Tell the CLI that the completion (or, `edit`, the rewrite) asked for under the page's
-    /// `id` is no longer wanted. Its request is still answered by the CLI (with nothing); where
-    /// the CLI is not running there is nothing to tell.
+    /// `id` is no longer wanted. Its request is still answered by the CLI (with nothing). Where
+    /// no CLI runs -- one not yet greeted included -- there is nothing to tell, and this
+    /// returns at once.
     pub fn cancel(&self, id: &str, edit: bool) {
         if !plain_id(id) {
             return;
         }
-        if let Some(r) = self.running.lock().unwrap().as_mut() {
-            let method = if edit {
-                "_lembas/edit/cancel"
-            } else {
-                "_lembas/complete/cancel"
-            };
-            let note = json!({ "jsonrpc": "2.0", "method": method, "params": { "id": id } });
-            let _ = send(&mut r.stdin, &note);
-        }
+        let Some(r) = self.running.lock().unwrap().clone() else {
+            return;
+        };
+        let method = if edit {
+            "_lembas/edit/cancel"
+        } else {
+            "_lembas/complete/cancel"
+        };
+        let note = json!({ "jsonrpc": "2.0", "method": method, "params": { "id": id } });
+        let _ = send(&r.stdin, &note);
     }
 
-    /// Stop the CLI (the app is closing, or the person signed out).
+    /// Stop the CLI: the app is closing or starting again, the person signed out, the sign-in
+    /// was refused, another server was chosen. Whoever waits for an answer is told it stopped.
     pub fn stop(&self) {
-        if let Some(mut r) = self.running.lock().unwrap().take() {
-            let _ = r.child.kill();
-            let _ = r.child.wait();
+        let old = self.running.lock().unwrap().take();
+        if let Some(r) = old {
+            r.kill();
         }
     }
 }
@@ -310,5 +379,122 @@ mod tests {
         assert_eq!((said.status, said.detail.as_str()), (400, "Not logged in."));
         let empty = refusal(&json!({ "code": -32000, "message": " " }));
         assert_eq!(empty.detail, "The LLeMbas CLI refused.");
+    }
+
+    /// A stand-in for the CLI, in the shell: it answers the greeting (after `slow` seconds),
+    /// answers `_lembas/models` with its own process id, never answers `_lembas/complete`, and
+    /// goes away when asked for `_lembas/editor/settings`.
+    #[cfg(unix)]
+    fn stand_in(slow: &str, patience: Duration) -> Helper {
+        let script = [
+            "while IFS= read -r line; do",
+            r#"  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\)[,}].*/\1/p')"#,
+            r#"  case "$line" in"#,
+            &format!(
+                r#"    *'"initialize"'*) sleep {slow}; printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$id" ;;"#
+            ),
+            r#"    *'"_lembas/models"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"pid":%s}}\n' "$id" "$$" ;;"#,
+            r#"    *'"_lembas/editor/settings"'*) exit 0 ;;"#,
+            "  esac",
+            "done",
+        ]
+        .join("\n");
+        Helper {
+            stand_in: Some(StandIn {
+                program: PathBuf::from("sh"),
+                args: vec!["-c".into(), script],
+                greeting: Duration::from_secs(10),
+                patience,
+            }),
+            ..Helper::default()
+        }
+    }
+
+    #[cfg(unix)]
+    fn pid_of(h: &Helper) -> u64 {
+        let answer = h.call("_lembas/models", json!({}), |_| {}).unwrap();
+        answer["pid"].as_u64().unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_is_started_once_and_started_again_when_it_has_gone() {
+        let h = stand_in("0", Duration::from_secs(10));
+        let first = pid_of(&h);
+        assert_eq!(pid_of(&h), first, "one CLI for one request after another");
+        // It goes away under a request: that request is told, and the next one finds a new CLI.
+        let gone = h
+            .call("_lembas/editor/settings", json!({}), |_| {})
+            .unwrap_err();
+        assert_eq!(gone.detail, "The LLeMbas CLI stopped.");
+        let second = pid_of(&h);
+        assert_ne!(second, first);
+        // Stopped from here (signed out): the same.
+        h.stop();
+        assert_ne!(pid_of(&h), second);
+        h.stop();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_request_never_answered_ends_in_words_and_the_cli_goes_on() {
+        let h = stand_in("0", Duration::from_millis(300));
+        let before = pid_of(&h);
+        let began = std::time::Instant::now();
+        let late = h
+            .call(
+                "_lembas/complete",
+                json!({ "id": "c1", "prefix": "x" }),
+                |_| {},
+            )
+            .unwrap_err();
+        assert_eq!(late.detail, "The LLeMbas CLI did not answer in time.");
+        assert!(began.elapsed() < Duration::from_secs(5));
+        assert_eq!(pid_of(&h), before, "the CLI was not started again for it");
+        // What is not the editor's is never sent at all.
+        let other = h.call("session/prompt", json!({}), |_| {}).unwrap_err();
+        assert_eq!(other.status, 400);
+        h.stop();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cancel_does_not_wait_for_a_cli_that_is_still_being_greeted() {
+        let h = Arc::new(stand_in("2", Duration::from_secs(10)));
+        let asking = h.clone();
+        let first = std::thread::spawn(move || pid_of(&asking));
+        // (The first request is at the greeting by now, which takes two seconds.)
+        std::thread::sleep(Duration::from_millis(400));
+        let began = std::time::Instant::now();
+        h.cancel("c1", false);
+        h.cancel("e1", true);
+        assert!(
+            began.elapsed() < Duration::from_millis(500),
+            "a cancel waited {:?} for the greeting",
+            began.elapsed()
+        );
+        // A second request meanwhile waits for the same CLI: one is started, not two.
+        let second = pid_of(&h);
+        assert_eq!(first.join().unwrap(), second);
+        h.stop();
+    }
+
+    #[test]
+    fn a_cli_that_cannot_be_started_is_said() {
+        let h = Helper {
+            stand_in: Some(StandIn {
+                program: PathBuf::from("/nonexistent/llembas-no-such-cli"),
+                args: Vec::new(),
+                greeting: Duration::from_millis(200),
+                patience: Duration::from_millis(200),
+            }),
+            ..Helper::default()
+        };
+        let e = h.call("_lembas/models", json!({}), |_| {}).unwrap_err();
+        assert!(
+            e.detail.starts_with("The LLeMbas CLI could not be started"),
+            "{}",
+            e.detail
+        );
     }
 }
