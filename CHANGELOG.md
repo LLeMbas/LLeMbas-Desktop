@@ -36,6 +36,10 @@ relays them. With older ones each of those says so in words and the rest works.
   goes; a transfer that fails or is cancelled leaves nothing half-written where it was going. A
   folder is made there and everything in it carried, and one line at the end says what went and
   what did not, each with why.
+- One transfer runs at a time, and everything chosen is counted before anything is carried: more
+  than 2000 files and folders begins nothing. What only partly went is called a part, never
+  "transferred"; a Cancel that came too late for a file says so. Quit, a sign-in that ends and
+  another server stop a transfer and leave nothing half-written.
 - **A linked computer's files are seen like any others.** Its pictures, sound, video, PDFs and 3D
   models open in the same viewers. A file that runs code, on a computer that lets nobody change
   such files from outside, opens read-only and says so. Where that computer has no trash for a

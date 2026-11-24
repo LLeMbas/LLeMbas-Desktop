@@ -219,8 +219,13 @@ export function explorer(el, source) {
       load: () => fetchDir(path),
       draw: (answer) => {
         const all = answer.entries || []
-        // (Never forgotten when a folder is read again: a line still on the screen is always
-        // one the tree knows, whichever folder was read last.)
+        // What the tree knows of this folder is what it holds now: a name that is gone from it
+        // (deleted, renamed, moved) is known no longer -- with everything that was under it.
+        const fresh = new Set(all.map((e) => e.path))
+        for (const [at] of known) {
+          const under = dirOf(at) === path || (path === source.top() && dirOf(at) === source.ask(path))
+          if (under && !fresh.has(at)) for (const [k] of known) if (k === at || k.startsWith(`${at}/`)) known.delete(k)
+        }
         for (const e of all) known.set(e.path, e)
         for (const e of all.filter(isDir)) ul.append(twig(e, depth))
         if (source.treeFiles) {
@@ -668,6 +673,7 @@ export function explorer(el, source) {
   /** Read again: the list, the tree as it is open, the file chosen. */
   const refresh = () => {
     pending.clear()
+    known.clear()
     const at = current ?? source.top()
     drawTree()
     return go(at)
@@ -767,6 +773,8 @@ export function localSource(root) {
       if (!r || !Array.isArray(r.entries)) throw { detail: t("The server's answer could not be read.") }
       return {
         path: r.path ?? path,
+        // (`more`: the folder holds more than was listed.)
+        more: r.more === true,
         entries: r.entries.map((e) => ({ ...e, updated_at: e.modified ? new Date(e.modified * 1000).toISOString() : null })),
       }
     },
@@ -962,7 +970,7 @@ export function deviceSource(device, root, name) {
       const r = await get(DEVICE_FILES.list(device, path || top))
       if (!r || !Array.isArray(r.entries)) throw { detail: r?.error || t("The server's answer could not be read.") }
       // (An entry the computer lets nobody change from here is offered no change: `fixed`.)
-      return { path: r.path ?? path, entries: r.entries.map((e) => (e.writable === false ? { ...e, fixed: true } : e)) }
+      return { path: r.path ?? path, more: r.truncated === true || r.more === true, entries: r.entries.map((e) => (e.writable === false ? { ...e, fixed: true } : e)) }
     },
     preview: read,
     open,
@@ -978,20 +986,25 @@ export function deviceSource(device, root, name) {
       remove: async (paths) => {
         const r = await post(DEVICE_FILES.act(device, "delete"), { paths })
         // What that computer has no trash for was not deleted: for good only on the person's
-        // word, asked once, naming each file.
-        const lost = (r?.results || []).filter((x) => !x.ok && x.reason === "no_trash").map((x) => x.path)
-        if (!lost.length) return several(r, paths.length)
+        // word, asked once, naming each file by its whole path. Only what was asked to be
+        // deleted here is ever asked about: a path the answer names that was not among them is
+        // nobody's to delete for good.
+        const lost = (r?.results || []).filter((x) => !x.ok && x.reason === "no_trash" && paths.includes(x.path)).map((x) => x.path)
+        const first = several(r, paths.length)
+        if (!lost.length) return first
         const yes = await ask({
           title: t("Delete for good?"),
-          text: t("%(computer)s has no trash for: %(names)s. Deleting cannot be undone.", { computer: where, names: lost.map(baseName).join(", ") }),
+          text: t("%(computer)s has no trash for: %(names)s. Deleting cannot be undone.", { computer: where, names: lost.join(", ") }),
           ok: t("Delete for good"),
           cancel: t("Cancel"),
           danger: true,
         })
-        const first = several(r, paths.length)
-        if (!yes) return { done: first.done, failed: first.failed.filter((f) => !lost.includes(f.path)), said: t("Not deleted: %(names)s.", { names: lost.map(baseName).join(", ") }) }
+        const others = first.failed.filter((f) => !lost.includes(f.path))
+        // What happened, in its own words: to the trash, for good, not at all.
+        const trashed = first.done ? t("Moved to the trash: %(n)s.", { n: first.done }) : ""
+        if (!yes) return { done: first.done, failed: others, said: [trashed, t("Not deleted: %(names)s.", { names: lost.map(baseName).join(", ") })].filter(Boolean).join(" ") }
         const again = several(await post(DEVICE_FILES.act(device, "delete"), { paths: lost, permanent: true }), lost.length)
-        return { done: first.done + again.done, failed: [...first.failed.filter((f) => !lost.includes(f.path)), ...again.failed] }
+        return { done: first.done + again.done, failed: [...others, ...again.failed], said: [trashed, t("Deleted for good: %(n)s.", { n: again.done })].filter(Boolean).join(" ") }
       },
     },
   }

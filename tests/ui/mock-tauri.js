@@ -226,7 +226,9 @@
         return id
       }
       case "carry_cancel":
-        setTimeout(() => dispatch("carry", { id: args.id, state: "cancelled" }), 0)
+        // Stopped -- or, `carryLate: true`, a cancel that came too late: the whole of the file
+        // had gone, and the transfer ends as done.
+        setTimeout(() => dispatch("carry", config.carryLate ? { id: args.id, state: "done", name: "" } : { id: args.id, state: "cancelled" }), 0)
         return null
       case "editor_call": {
         // The bundled CLI as the editor's helper (src-tauri/src/editor.rs): `editor: { method:

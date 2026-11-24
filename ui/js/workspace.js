@@ -100,11 +100,19 @@ function acrossWords(from, to) {
 /** A place as Rust's `carry` names it. */
 const placeOf = (key, src) => ({ place: key === "local" ? "local" : key === "server" ? "server" : "device", root: src.root ?? null, device: src.device ?? null })
 
-/** The most files and folders one carrying of a folder takes: more is said, not begun. */
+/** The most files and folders one carrying takes, everything chosen and everything under it counted: more is said, and nothing is begun. */
 const FOLDER_MOST = 2000
+/** How deep a folder is walked: past this it is taken for a folder that leads back into itself. */
+const FOLDER_DEEP = 40
 
-/** How far the transfer under way is, at the foot of the files, with Cancel. */
-function showCarry(name, frame, job, batch) {
+/** The carrying under way: one at a time, with the one line that says how far it is and its own Cancel. */
+let carrying = null
+
+/** Whose the window is: a carrying begun for one person never goes on for another. */
+const whoNow = () => `${ctx.status()?.server || ""}|${ctx.status()?.account?.email || ctx.status()?.account?.name || ""}`
+
+/** How far the transfer under way is, at the foot of the files. */
+function showCarry(name, frame) {
   const box = $("work-carry")
   box.hidden = false
   const total = Number(frame?.total)
@@ -117,24 +125,31 @@ function showCarry(name, frame, job, batch) {
   bar.hidden = !(Number.isFinite(total) && total > 0)
   bar.max = total > 0 ? total : 1
   bar.value = Math.min(done, total > 0 ? total : 1)
-  $("work-carry-cancel").onclick = () => {
-    batch.cancelled = true
-    job.cancel()
-  }
+}
+
+/** Whether the carrying may go on: not cancelled, and still the same person's window. */
+function goesOn(batch) {
+  if (!batch.cancelled && whoNow() !== batch.who) batch.cancelled = batch.left = true
+  return !batch.cancelled
 }
 
 /** One file from a place into a folder of another: counted into `batch` as gone, not gone (with why), or cancelled. */
 async function carryFile(here, there, path, dir, name, batch) {
-  if (batch.cancelled) return
+  if (!goesOn(batch)) return
   try {
-    let job = null
-    job = await carry({ ...here, path }, { ...there, path: dir }, (f) => job && showCarry(name, f, job, batch))
-    showCarry(name, { state: "reading" }, job, batch)
+    showCarry(name, { state: "reading" })
+    const job = (batch.job = await carry({ ...here, path }, { ...there, path: dir }, (f) => batch.job === job && showCarry(name, f)))
+    // (Cancel pressed while it was being asked for: told now.)
+    if (batch.cancelled) job.cancel()
     await job.done
     batch.sent++
+    // Cancelled, and it went all the same: the whole of it had gone before it could be stopped.
+    if (batch.cancelled) batch.late.push(name)
   } catch (err) {
     if (err?.cancelled) batch.cancelled = true
     else batch.failed.push({ path: name, error: why(err) })
+  } finally {
+    batch.job = null
   }
 }
 
@@ -149,71 +164,114 @@ async function makeFolder(key, target, dir, name) {
   return r?.path || `${String(dir).replace(/\/$/, "")}/${name}`
 }
 
-/** A folder and all in it: made there, then walked and carried, folder by folder. */
-async function carryFolder(src, here, to, target, there, dir, entry, batch) {
-  if (batch.cancelled) return
-  let made
+/**
+ * What would be carried, looked at whole before anything is: every file and folder chosen and
+ * everything under the folders, counted as it is listed. `{ file }`, `{ dir, children, partial,
+ * error }` (`partial`: the folder holds more than its listing said) or `{ skip }` (what cannot be
+ * carried). Past `FOLDER_MOST` entries, or `FOLDER_DEEP` folders down (a link that leads back
+ * into the folder it is in), `count.over` is set and the looking stops.
+ */
+async function planOf(src, entry, into, count, depth, batch) {
+  if (count.over || !goesOn(batch)) return
+  if (++count.n > FOLDER_MOST || depth > FOLDER_DEEP) return void (count.over = true)
+  if (entry.outside || entry.kind === "other" || entry.kind === "mount") return void into.push({ skip: entry })
+  if (!isDir(entry)) return void into.push({ file: entry })
+  const node = { dir: entry, children: [], partial: false, error: "" }
+  into.push(node)
   try {
-    made = await makeFolder(to, target, dir, entry.name)
-    batch.folders++
+    const listing = await src.list(src.ask(entry.path))
+    node.partial = listing.more === true || listing.truncated === true
+    for (const e of listing.entries || []) await planOf(src, e, node.children, count, depth + 1, batch)
   } catch (err) {
-    return void batch.failed.push({ path: `${entry.name}/`, error: why(err) })
+    node.error = why(err)
   }
-  let listing
-  try {
-    listing = await src.list(src.ask(entry.path))
-  } catch (err) {
-    return void batch.failed.push({ path: `${entry.name}/`, error: why(err) })
-  }
-  for (const e of listing.entries || []) {
-    if (batch.cancelled) return
-    if (++batch.seen > FOLDER_MOST) {
-      if (!batch.over) batch.failed.push({ path: `${entry.name}/`, error: t("More than %(n)s files and folders: the rest was not carried.", { n: FOLDER_MOST }) })
-      batch.over = true
-      return
+}
+
+/** Carry what was planned into `dir`: a folder is made there first, then what is in it. */
+async function carryPlan(nodes, here, to, target, there, dir, batch) {
+  for (const node of nodes) {
+    if (!goesOn(batch)) return
+    if (node.skip) batch.failed.push({ path: node.skip.name, error: t("Not a file or a folder that can be carried.") })
+    else if (node.file) await carryFile(here, there, node.file.path, dir, node.file.name, batch)
+    else {
+      let made
+      try {
+        made = await makeFolder(to, target, dir, node.dir.name)
+        batch.folders++
+      } catch (err) {
+        batch.failed.push({ path: `${node.dir.name}/`, error: why(err) })
+        continue
+      }
+      await carryPlan(node.children, here, to, target, there, made, batch)
+      // What its listing did not hold was not carried: said, never passed over.
+      if (node.error) batch.failed.push({ path: `${node.dir.name}/`, error: node.error })
+      if (node.partial) batch.failed.push({ path: `${node.dir.name}/`, error: t("This folder holds more than was listed: the rest of it was not carried.") })
     }
-    // (A link that leads out of the folder, and what is neither a file nor a folder, stay where they are.)
-    if (e.outside || e.kind === "other" || e.kind === "mount") batch.failed.push({ path: e.name, error: t("Not a file or a folder that can be carried.") })
-    else if (isDir(e)) await carryFolder(src, here, to, target, there, made, e, batch)
-    else await carryFile(here, there, e.path, made, e.name, batch)
   }
 }
 
 /**
  * What was chosen, into a folder of another place: asked for by walking to it, then carried --
- * any file, whatever it holds, and a folder with all in it -- with how far it is and Cancel at
- * the foot of the files, and one line at the end of what went and what did not.
+ * any file, whatever it holds, and a folder with all in it. One carrying at a time: a second
+ * is refused in words while one is under way. Everything is counted before anything is made;
+ * more than the bound begins nothing. How far it is, and Cancel, at the foot of the files; one
+ * line at the end of what went and what did not -- "transferred" only where all of it did.
  */
 async function across(entries, to) {
   const from = place
   const src = source
   const mine = pane
   if (!mine || !src || to === from) return
+  const busy = () => (carrying ? (mine.say(t("A transfer is still under way: wait for it, or cancel it first."), true), true) : false)
+  if (busy()) return
   // (What was dragged is no longer known to the tree: said as that, not as something else.)
   if (!entries.length) return mine.say(t("That is no longer in the tree: read the folder again."), true)
   const target = sourceOf(to)
   if (!target) return mine.say(t("Choose a folder in %(place)s first.", { place: placeName(to) }), true)
   const way = wayOf(from, to)
   const dir = await pickFolder({ source: target, start: target.top(), title: way === "upload" ? t("Upload to which folder?") : way === "download" ? t("Download to which folder?") : t("Transfer to which folder?"), ok: way === "upload" ? t("Upload here") : way === "download" ? t("Download here") : t("Transfer here") })
-  if (dir === null || dir === undefined) return
-  const batch = { sent: 0, folders: 0, failed: [], cancelled: false, seen: 0, over: false }
+  if (dir === null || dir === undefined || busy()) return
+  const batch = (carrying = { sent: 0, folders: 0, failed: [], late: [], cancelled: false, left: false, job: null, who: whoNow() })
+  $("work-carry-cancel").onclick = () => {
+    batch.cancelled = true
+    batch.job?.cancel()
+  }
   const here = placeOf(from, src)
   const there = placeOf(to, target)
+  const where = way === "transfer" ? placeName(to) : baseName(dir) || target.rootName()
   mine.say("")
-  for (const e of entries) {
-    if (batch.cancelled) break
-    if (isDir(e)) await carryFolder(src, here, to, target, there, dir, e, batch)
-    else await carryFile(here, there, e.path, dir, e.name, batch)
+  try {
+    // Counted first, the whole of it: over the bound, nothing is begun.
+    showCarry(t("Counting…"), { state: "reading" })
+    const plan = []
+    const count = { n: 0, over: false }
+    for (const e of entries) await planOf(src, e, plan, count, 0, batch)
+    if (count.over) return mine.say(t("More than %(n)s files and folders, or folders that lead back into themselves: nothing was begun.", { n: FOLDER_MOST }), true)
+    if (goesOn(batch)) await carryPlan(plan, here, to, target, there, dir, batch)
+  } finally {
+    carrying = null
+    $("work-carry").hidden = true
   }
-  $("work-carry").hidden = true
-  // One line of what went, then what did not, each with why.
-  const where = baseName(dir) || target.rootName()
+  // (Another person's window by now: nothing of this is theirs to read.)
+  if (batch.left) return
+  // One line of what went, then what did not, each with why. "Uploaded", "downloaded",
+  // "transferred" only where all of it went; a part is called a part.
   const n = batch.sent
-  const went = way === "upload" ? t("Uploaded to %(folder)s: %(n)s.", { folder: where, n }) : way === "download" ? t("Downloaded to %(folder)s: %(n)s.", { folder: where, n }) : t("Transferred to %(place)s: %(n)s.", { place: placeName(to), n })
+  const whole = !batch.failed.length && !batch.cancelled
+  const went = !whole
+    ? n
+      ? t("Only part went to %(place)s: %(n)s.", { place: where, n })
+      : t("Nothing went to %(place)s.", { place: where })
+    : way === "upload"
+    ? t("Uploaded to %(folder)s: %(n)s.", { folder: where, n })
+    : way === "download"
+    ? t("Downloaded to %(folder)s: %(n)s.", { folder: where, n })
+    : t("Transferred to %(place)s: %(n)s.", { place: where, n })
   const lines = [batch.cancelled ? `${t("Cancelled.")} ${went}` : went]
   if (batch.folders) lines[0] += ` ${t("Folders made: %(n)s.", { n: batch.folders })}`
+  if (batch.late.length) lines.push(t("Cancel came too late for %(names)s: it had already gone.", { names: batch.late.join(", ") }))
   if (batch.failed.length) lines.push(t("Not carried: %(n)s.", { n: batch.failed.length }), ...batch.failed.map((f) => `${f.path}: ${f.error}`))
-  mine.say(lines.join("\n"), batch.failed.length > 0 || batch.cancelled)
+  mine.say(lines.join("\n"), !whole)
 }
 
 // --- The tree ------------------------------------------------------------------------------------------

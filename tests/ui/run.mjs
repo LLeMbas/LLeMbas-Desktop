@@ -3230,6 +3230,9 @@ test("S3: the commands do what the app's own controls do: effort, mode, compact,
   assert.deepEqual((await p.evaluate(() => window.__mock.api("PATCH", "/chats/chat2")))[0].args.body, { mode: "plan" })
   await run("/terminal")
   await p.waitForSelector("#terminal:not([hidden])")
+  // (The panel takes the keyboard a frame after it shows -- once its screen is loaded and its
+  // shell asked for: typed before that, the next command's Enter would land in the terminal.)
+  await p.waitForFunction(() => window.__mock.terminals().length === 1 && !!document.activeElement?.closest("#terminal"))
   await run("/terminal")
   await p.waitForSelector("#terminal", { state: "hidden" })
   // /temp: a new chat on the server that keeps nothing; /new: a new one.
@@ -10190,12 +10193,12 @@ test("WS14: any file is carried between any two places as it is, by the app and 
   await p.click("#work-carry-cancel")
   await p.waitForFunction(() => document.getElementById("work-status").textContent.startsWith("Cancelled."))
   assert.deepEqual(await callsOf(p, "carry_cancel"), [{ id: 2 }])
-  assert.equal(await p.textContent("#work-status"), "Cancelled. Transferred to Server: 0.")
+  assert.equal(await p.textContent("#work-status"), "Cancelled. Nothing went to Server.")
   // Failed: why, by its name; nothing is made ahead of it by the page.
   await carryTo(`${DEV}/oven.py`, "Transfer to This computer…")
   await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "carry_start").length === 3)
   await said({ id: 3, state: "failed", error: "There is not enough room on the disk for this file." })
-  await statusSays(p, "work-status", "Transferred to This computer: 0.\nNot carried: 1.\noven.py: There is not enough room on the disk for this file.")
+  await statusSays(p, "work-status", "Nothing went to This computer.\nNot carried: 1.\noven.py: There is not enough room on the disk for this file.")
   assert.equal((await callsOf(p, "local_make")).length, 0)
   assert.equal((await callsOf(p, "local_write")).length, 0)
   assert.deepEqual(p.errors, [])
@@ -10246,7 +10249,7 @@ test("WS16: a whole folder goes from one place to another: it is made there, wal
           { name: "deep", path: `${DEV}/src/deep`, kind: "dir", size: 0, file_kind: null, writable: true },
           { name: "away", path: `${DEV}/src/away`, kind: "dir", size: 0, file_kind: null, link: "/srv", outside: true, writable: false },
         ] },
-        [`GET /devices/token2/fs${q(`${DEV}/src/deep`)}`]: { device: "token2", path: `${DEV}/src/deep`, parent: `${DEV}/src`, writable: true, truncated: false, entries: [{ name: "loaf.png", path: `${DEV}/src/deep/loaf.png`, kind: "file", size: 9, file_kind: "image", writable: true }] },
+        [`GET /devices/token2/fs${q(`${DEV}/src/deep`)}`]: { device: "token2", path: `${DEV}/src/deep`, parent: `${DEV}/src`, writable: true, truncated: true, entries: [{ name: "loaf.png", path: `${DEV}/src/deep/loaf.png`, kind: "file", size: 9, file_kind: "image", writable: true }] },
       },
       {},
       { carry: { "big.iso": { error: "This file is too large to send." } } },
@@ -10260,8 +10263,9 @@ test("WS16: a whole folder goes from one place to another: it is made there, wal
   await wsMenu(p, `${DEV}/src`, "Transfer to Server…")
   await p.waitForSelector("dialog[open] #fpick-use:not([disabled])")
   await p.click("dialog[open] #fpick-use")
-  await p.waitForFunction(() => document.getElementById("work-status").textContent.startsWith("Transferred to Server"))
-  assert.equal(await p.textContent("#work-status"), "Transferred to Server: 2. Folders made: 2.\nNot carried: 2.\nbig.iso: This file is too large to send.\naway: Not a file or a folder that can be carried.")
+  await p.waitForFunction(() => document.getElementById("work-status").textContent.includes("Not carried"))
+  // Not "Transferred": a part went, and it is called a part. The folder whose listing was cut short says so.
+  assert.equal(await p.textContent("#work-status"), "Only part went to Server: 2. Folders made: 2.\nNot carried: 3.\nbig.iso: This file is too large to send.\ndeep/: This folder holds more than was listed: the rest of it was not carried.\naway: Not a file or a folder that can be carried.")
   // The folders made at the destination, the one inside the other; each file into its own.
   assert.deepEqual(await bodies(p, "POST", "/files/mkdir"), [{ path: HOME, name: "src" }, { path: `${HOME}/src`, name: "deep" }])
   const dev = (path) => ({ place: "device", root: DEV, device: "token2", path })
@@ -10322,9 +10326,10 @@ test("WS17: a linked computer's pictures, sound and PDFs open in a tab in the sa
   assert.deepEqual(p.errors, [])
 })
 
-test("WS18: on a computer that has no trash for a file, deleting says so and asks whether to delete it for good, naming the file; Cancel deletes nothing more, Delete for good sends exactly that file again as permanent", async () => {
+test("WS18: on a computer that has no trash for a file, deleting says so and asks whether to delete it for good, naming the file by its whole path; Cancel deletes nothing more; Delete for good sends exactly the files that were asked about -- never another path the answer names -- and says what happened: deleted for good, not moved to the trash", async () => {
   const none = fixture("device_fs_no_trash")
-  const first = { ...fixture("device_fs_batch"), done: 0, failed: 1, results: [{ path: `${DEV}/oven.py`, ok: false, error: none.detail, reason: none.reason }] }
+  // (The computer's answer names a path nobody asked to delete as well.)
+  const first = { ...fixture("device_fs_batch"), done: 0, failed: 2, results: [{ path: `${DEV}/oven.py`, ok: false, error: none.detail, reason: none.reason }, { path: "/etc/hosts", ok: false, error: none.detail, reason: none.reason }] }
   const p = await page(ws({ "POST /devices/token2/fs/delete": first }))
   await wsOpen(p)
   await p.click('#work-places [data-place="device:token2"]')
@@ -10334,7 +10339,7 @@ test("WS18: on a computer that has no trash for a file, deleting says so and ask
     await wsMenu(p, `${DEV}/oven.py`, "Delete")
     await p.click("dialog[open] .btn--danger")
     await p.waitForFunction(() => document.querySelector("dialog[open] .dialog__title")?.textContent === "Delete for good?")
-    assert.match(await p.textContent("dialog[open]"), /laptop has no trash for: oven\.py\. Deleting cannot be undone\./)
+    assert.equal(await p.textContent("dialog[open] .muted"), `laptop has no trash for: ${DEV}/oven.py. Deleting cannot be undone.`)
   }
   await del()
   await p.click("dialog[open] .btn:not(.btn--danger)")
@@ -10346,7 +10351,7 @@ test("WS18: on a computer that has no trash for a file, deleting says so and ask
   await p.click("dialog[open] .btn--danger")
   await p.waitForFunction(() => window.__mock.api("POST", "/devices/token2/fs/delete").length === 3)
   assert.deepEqual((await bodies(p, "POST", "/devices/token2/fs/delete")).at(-1), { paths: [`${DEV}/oven.py`], permanent: true })
-  await statusSays(p, "work-status", "Moved to the trash.")
+  await statusSays(p, "work-status", "Deleted for good: 1.")
   assert.deepEqual(p.errors, [])
 })
 
@@ -10363,6 +10368,20 @@ test("WS19: the filter above the tree finds a file by its name: on a linked comp
   await p.waitForSelector('.wtab__open[aria-selected="true"] >> text=README.md')
   await p.fill("#work-filter", "zzz")
   await p.waitForFunction(() => document.querySelector("#work-found .fnote")?.textContent === "Nothing among the folders opened in the tree is called that.")
+  // Deleted: gone from what the tree knows, and so from what the filter finds.
+  await p.fill("#work-filter", "")
+  await p.waitForSelector("#work-tree:not([hidden])")
+  await p.evaluate(() => {
+    const top = window.__mockConfig.commands.local_list[""]
+    top.entries = top.entries.filter((e) => e.name !== "README.md")
+    window.__mockConfig.commands.local_delete = [{ path: "README.md", ok: true }]
+  })
+  await wsMenu(p, "README.md", "Delete")
+  await p.click("dialog[open] .btn--danger")
+  await p.waitForSelector(wsLine("README.md"), { state: "detached" })
+  await p.fill("#work-filter", "read")
+  await p.waitForFunction(() => document.querySelector("#work-found .fnote")?.textContent === "Nothing among the folders opened in the tree is called that.")
+  assert.equal(await p.$$eval("#work-found .work__hit", (l) => l.length), 0)
   await p.fill("#work-filter", "")
   await p.waitForSelector("#work-tree:not([hidden])")
   assert.ok(await p.isHidden("#work-found"))
@@ -10415,6 +10434,66 @@ test("WS20: a file open in a tab that changed on the linked computer meanwhile s
   await v.click("dialog[open] .btn--danger")
   await v.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "set_unsaved").at(-1)?.args.count === 0)
   assert.deepEqual(v.errors, [])
+})
+
+test("WS21: one carrying at a time, counted before it begins: a second asked for while one is under way is refused in words and Cancel stops the one that runs; a cancel that came too late is said as that; more than the bound begins nothing at all; and a carrying begun for one person does not go on once another has the window", async () => {
+  const many = Array.from({ length: 2001 }, (_, n) => ({ name: `f${n}.txt`, path: `${DEV}/src/f${n}.txt`, kind: "file", size: 1, file_kind: "text", writable: true }))
+  const two = (dir) => ({ device: "token2", path: dir, parent: DEV, writable: true, truncated: false, entries: [{ name: "a.txt", path: `${dir}/a.txt`, kind: "file", size: 1, file_kind: "text", writable: true }, { name: "b.txt", path: `${dir}/b.txt`, kind: "file", size: 1, file_kind: "text", writable: true }] })
+  const p = await page(ws({ "POST /files/mkdir": F4_HOME, [`GET /devices/token2/fs${q(`${DEV}/src`)}`]: two(`${DEV}/src`) }, {}, { carryManual: true }))
+  await wsOpen(p)
+  await p.click('#work-places [data-place="device:token2"]')
+  await wsFolder(p)
+  await p.waitForSelector(wsLine(`${DEV}/loaf.png`))
+  const send = async (path, item = "Transfer to Server…") => {
+    await wsMenu(p, path, item)
+    await p.waitForSelector("dialog[open] #fpick-use:not([disabled])")
+    await p.click("dialog[open] #fpick-use")
+    await p.waitForSelector("dialog[open]", { state: "detached" })
+  }
+  const started = () => p.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "carry_start").length)
+  const said = (frame) => p.evaluate((f) => window.__mock.emit("carry", f), frame)
+  // One under way; a second is refused before anything is asked, and nothing of the first changes.
+  await send(`${DEV}/loaf.png`)
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "carry_start").length === 1)
+  await said({ id: 1, state: "reading", done: 5, total: 10 })
+  await wsMenu(p, `${DEV}/oven.py`, "Transfer to Server…")
+  await statusSays(p, "work-status", "A transfer is still under way: wait for it, or cancel it first.")
+  assert.equal(await p.$$eval("dialog[open]", (l) => l.length), 0)
+  assert.equal(await started(), 1)
+  assert.equal(await p.textContent("#work-carry-name"), "loaf.png")
+  // Cancel is the running one's.
+  await p.click("#work-carry-cancel")
+  await p.waitForFunction(() => document.getElementById("work-status").textContent.startsWith("Cancelled."))
+  assert.deepEqual(await callsOf(p, "carry_cancel"), [{ id: 1 }])
+  // A cancel that came too late: the file had gone; said as that, and counted as gone.
+  await p.evaluate(() => (window.__mockConfig.carryLate = true))
+  await send(`${DEV}/loaf.png`)
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "carry_start").length === 2)
+  await said({ id: 2, state: "sending", done: 10, total: 10 })
+  await p.click("#work-carry-cancel")
+  await statusSays(p, "work-status", "Cancelled. Only part went to Server: 1.\nCancel came too late for loaf.png: it had already gone.")
+  await p.evaluate(() => (window.__mockConfig.carryLate = false))
+  // A folder of two, and another person takes the window after the first file: the second is never asked for.
+  await send(`${DEV}/src`)
+  await p.waitForFunction(() => window.__mock.calls.filter((c) => c.cmd === "carry_start").length === 3)
+  await p.evaluate((st) => ((window.__mockConfig.status = st), window.__mock.emit("status", st)), status({ account: { name: "Bo Example", email: "bo@example.org" } }))
+  await said({ id: 3, state: "done", name: "a.txt" })
+  await p.waitForFunction(() => document.getElementById("work-carry").hidden)
+  await p.waitForTimeout(100)
+  assert.equal(await started(), 3, "the rest of the folder is not carried under another account")
+  assert.deepEqual(p.errors, [])
+  // More than the bound, top to bottom: said, and nothing is begun -- no folder made, no file asked for.
+  const big = await page(ws({ "POST /files/mkdir": F4_HOME, [`GET /devices/token2/fs${q(`${DEV}/src`)}`]: { device: "token2", path: `${DEV}/src`, parent: DEV, writable: true, truncated: false, entries: many } }))
+  await wsOpen(big)
+  await big.click('#work-places [data-place="device:token2"]')
+  await wsFolder(big)
+  await wsMenu(big, `${DEV}/src`, "Transfer to Server…")
+  await big.waitForSelector("dialog[open] #fpick-use:not([disabled])")
+  await big.click("dialog[open] #fpick-use")
+  await statusSays(big, "work-status", "More than 2000 files and folders, or folders that lead back into themselves: nothing was begun.")
+  assert.equal(await big.evaluate(() => window.__mock.calls.filter((c) => c.cmd === "carry_start").length), 0)
+  assert.equal(await big.evaluate(() => window.__mock.api("POST", "/files/mkdir").length), 0)
+  assert.deepEqual(big.errors, [])
 })
 
 // --- Run ----------------------------------------------------------------------------------------
