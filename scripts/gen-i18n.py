@@ -45,6 +45,10 @@ KEYS = (
     "Settings",
     # chat.js
     "Waiting for the reply before it",
+    "It is not known whether this reached the computer. Send it again, or discard it.",
+    "The computer has this message and takes it in with its next turn.",
+    "Send now",
+    "Discard this message?",
     "The reply to this was not recorded.",
     "%(n)s tokens",
     "Thought",

@@ -74,3 +74,7 @@ mcard__files        a hook for the tests: Open in Files; styled as .btn
 mcard__download     a hook for the tests: Download; styled as .btn
 mjob__cancel        a hook for the tests: Cancel; styled as .btn
 msg__unrecorded     a hook for the tests: the line on a reply that was never written; styled as .msg__note
+msg__waits          a waiting message's line saying why it waits, for the tests; styled as .msg__note
+msg__waitbar        a waiting message's two buttons; styled as .msg__editbar
+msg__send           a hook for the tests; styled as .btn
+msg__discard        a hook for the tests; styled as .btn

@@ -475,7 +475,11 @@ function shake(by) {
   shook.push({ at: performance.now(), by })
   if (shook.length > 12) shook.shift()
 }
-/** When the header or the dock was last drawn into: something put in or taken out, shown or hidden, folded -- not what is typed, nor a line's words. */
+/**
+ * When the header or the dock was last drawn into: something put into the header or taken out
+ * of it, folded or unfolded; a part of the dock shown, hidden, added or removed. Not what is
+ * typed, not the message box growing, not a line's words, not what goes on inside a part.
+ */
 let drawnInto = -Infinity
 /** How near (px) a move has to be to a size for that size to be what explains it. */
 const EXPLAINS = 2
@@ -489,28 +493,27 @@ const UNSEEN_THEIRS = 4
 /**
  * Whether a size the page can point at explains a move up nobody was seen to make. An engine
  * that cuts the thread back while it lays the window out leaves it where its end would be were
- * its room taller by what is being laid out: `amount` is how much taller that is. It is
- * explained by a size that was measured changing just now, by as much; or -- where the header or
- * the dock was just drawn into, which measures as no change at all once it is over -- by the
- * header's height, the dock's, or both (seen under WebKit: the thread at its end left 59 px
- * above it, the header's height, when the chat's settings were drawn into the header). Any
- * other amount is not the layout's.
+ * its room taller: `amount` is how much taller that is. It is explained by a size that was
+ * measured changing just now, by as much. Or, where the header or the dock was just drawn
+ * into -- which measures as no change at all once it is over -- by being no more than the
+ * header and the dock together: all the room the thread could have been given for a moment.
+ * (Seen under WebKit: a thread at its end left 59 px above it at 1280 px, 95 at 390, when the
+ * header was drawn into, every size as before. Neither is the height of anything on the page,
+ * so no exact size is asked for; what WebKit lays out in between was not found.) A move
+ * further than that is not the layout's, whatever is being drawn.
  */
 function explained(amount, now) {
-  const near = (size) => size > 0.5 && Math.abs(amount - size) <= EXPLAINS
-  if (shook.some((s) => now - s.at <= SHAKEN && near(s.by))) return true
+  if (shook.some((s) => now - s.at <= SHAKEN && Math.abs(amount - s.by) <= EXPLAINS)) return true
   if (now - drawnInto > SHAKEN) return false
-  const head = $("chat-head").getBoundingClientRect().height
-  const dock = $("dock").getBoundingClientRect().height
-  return near(head) || near(dock) || near(head + dock)
+  return amount <= $("chat-head").getBoundingClientRect().height + $("dock").getBoundingClientRect().height + EXPLAINS
 }
 
 /**
  * A move up by `moved` px that no layout need have made (the thread could still stand where it
  * stood): is it the person's? Yes with their hand on the thread. Yes too unless the page can
- * point at the size that explains it by its amount (`explained`): whatever else moved it -- a
+ * point at a size that explains it by its amount (`explained`): whatever else moved it -- a
  * reader's own way of scrolling, the browser's search, anything this page hears nothing of --
- * was not the layout, however much the page is changing around the thread at that moment. A
+ * was not the layout, whatever is typed or written around the thread at that moment. A
  * move that is explained is the engine's: it is put back, and says nothing of what the person
  * wants. Even then a way of scrolling nothing is heard of is not held fast: the fourth such
  * move in a row, each a frame or a few after the one before, is taken for theirs.
@@ -717,10 +720,16 @@ function initFollowing() {
     }
   })
   const into = new MutationObserver(() => (drawnInto = performance.now()))
-  for (const id of ["chat-head", "dock"]) {
-    around.observe($(id))
-    into.observe($(id), { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "data-fold", "data-unfold", "data-open", "data-running"] })
-  }
+  for (const id of ["chat-head", "dock"]) around.observe($(id))
+  // (The header: whatever is put into it or folded. The dock: its parts coming and going,
+  // shown and hidden, and the cards -- not what happens inside the message box or a strip.)
+  into.observe($("chat-head"), { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden", "data-fold", "data-unfold"] })
+  into.observe($("dock"), { childList: true })
+  for (const part of $("dock").children) into.observe(part, { attributes: true, attributeFilter: ["hidden", "data-open"] })
+  into.observe($("cards"), { childList: true })
+  // And the window itself laid out anew: another size, a panel beside the thread opened or closed.
+  for (const id of ["shell", "main"]) into.observe($(id), { attributes: true })
+  window.addEventListener("resize", () => (drawnInto = performance.now()))
   // What changes a size without a frame of a reply: a picture that arrived, a block opened, the
   // dock grown by a card or a longer message, the window; and the thread back on the screen
   // after another page, with what was written meanwhile.
@@ -792,13 +801,63 @@ export function fileTile(a) {
   return tile
 }
 
+/** Why a message of the person's waits, in a line on it (`origin`: the server's word for why). */
+function waitingWords(m) {
+  if (m.origin === "unsure") return t("It is not known whether this reached the computer. Send it again, or discard it.")
+  if (m.origin === "carried") return t("The computer has this message and takes it in with its next turn.")
+  return t("Waiting for the reply before it")
+}
+
+/**
+ * What can be done with a message that waits (`queued`: it has not been given to a model): sent
+ * now, or discarded -- the server's two actions for it. Never edited: the server refuses that,
+ * since on a linked computer the old words may still be held there. What the server says to a
+ * refusal (a reply is being written; the message no longer waits) is said on the message.
+ */
+function waitingActions(el, m) {
+  const said = h("p", { class: "msg__note is-error", role: "alert", hidden: true })
+  const send = h("button", { type: "button", class: "btn btn--sm msg__send", text: t("Send now") })
+  const discard = h("button", { type: "button", class: "btn btn--sm msg__discard", text: t("Discard") })
+  const act = async (what) => {
+    const id = open?.chat?.id
+    if (!id) return
+    if (what === "discard" && !(await ask({ title: t("Discard this message?"), ok: t("Discard"), cancel: t("Cancel"), danger: true }))) return
+    send.disabled = discard.disabled = true
+    said.hidden = true
+    try {
+      const r = await asking(post(`/chats/${encodeURIComponent(id)}/messages/${encodeURIComponent(m.id)}/${what}`), id)
+      if (open?.chat?.id !== id) return
+      mark()
+      if (what === "discard") el.remove()
+      else {
+        // As a message just sent: the message as it now is, and its reply followed.
+        if (r?.message) el.replaceWith(row(r.message, open.chat))
+        if (r?.reply?.id) follower(open.chat, r.reply.id)
+      }
+      if (what === "send") toBottom()
+      else settle()
+      ctx.changed(open.chat)
+    } catch (err) {
+      if (!el.isConnected) return
+      mark()
+      said.textContent = why(err)
+      said.hidden = false
+      send.disabled = discard.disabled = false
+      settle()
+    }
+  }
+  send.addEventListener("click", () => act("send"))
+  discard.addEventListener("click", () => act("discard"))
+  return [h("div", { class: "msg__editbar msg__waitbar" }, discard, send), said]
+}
+
 function userMessage(m) {
   const el = h(
     "article",
-    { class: `msg msg--user${m.queued ? " is-queued" : ""}${m.machine ? " is-machine" : ""}`, dataset: { id: m.id } },
+    { class: `msg msg--user${m.queued ? " is-queued" : ""}${m.machine ? " is-machine" : ""}`, dataset: { id: m.id, ...(m.queued && m.origin ? { waits: String(m.origin) } : {}) } },
     m.attachments?.length ? h("ul", { class: "tiles msg__files" }, m.attachments.map(fileTile)) : null,
     m.text ? h("div", { class: "msg__bubble" }, h("div", { class: "msg__text", text: m.text })) : null,
-    m.queued ? h("p", { class: "msg__note", text: t("Waiting for the reply before it") }) : null,
+    m.queued ? h("p", { class: "msg__note msg__waits", text: waitingWords(m) }) : null,
   )
   // A background job's report is not the person's to rewrite (the server refuses it too).
   if (!m.machine) {
@@ -806,10 +865,12 @@ function userMessage(m) {
       h(
         "div",
         { class: "msg__actions" },
-        action(ICONS.edit, t("Edit message"), () => startEdit(el, m)),
+        // (A message that waits is sent or discarded, not rewritten: the server refuses the edit.)
+        m.queued ? null : action(ICONS.edit, t("Edit message"), () => startEdit(el, m)),
         action(ICONS.copy, t("Copy"), (e) => copyText(m.text || "", e.currentTarget)),
       ),
     )
+    if (m.queued) el.append(...waitingActions(el, m))
   }
   return el
 }
@@ -1241,7 +1302,13 @@ class Live {
         )
         break
       case "steered":
-        for (const id of data.ids || []) document.querySelector(`.msg--user[data-id="${CSS.escape(id)}"]`)?.classList.remove("is-queued")
+        // Taken into the reply: they wait no longer, and are drawn as messages that were sent.
+        for (const id of data.ids || []) {
+          const el = $("messages").querySelector(`:scope > .msg--user[data-id="${CSS.escape(id)}"]`)
+          const m = el && shownAs.get(el)
+          if (m?.queued) el.replaceWith(row({ ...m, queued: false, origin: "", progress: null, complete: true }, this.chat))
+          else el?.classList.remove("is-queued")
+        }
         break
       case "done":
         this.done = true
@@ -2562,6 +2629,9 @@ const note = (text) => alertIn(text, true)
 /** Which reading of a chat is the latest: an older one's answer, or its failure, is dropped. */
 let reads = 0
 
+/** The message a row shows, as it was drawn from. */
+const shownAs = new WeakMap()
+
 /** A row was drawn from this: the message as the server sent it. A chat read again keeps the rows that still say the same. */
 const drawnFrom = new WeakMap()
 
@@ -2583,6 +2653,7 @@ function drawnOf(m, chat, before) {
 function row(m, chat, last = null, before = null) {
   const el = m.role === "user" ? userMessage(m) : assistantMessage(m, chat, last, before)
   drawnFrom.set(el, drawnOf(m, chat, before))
+  shownAs.set(el, m)
   return el
 }
 

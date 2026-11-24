@@ -26,6 +26,13 @@ after 2.0.0-beta.17); with an older server everything is as it was.
   computer's own note and holds nothing, where the note is one an older server kept: it did not
   write such replies down, and the row stood blank. An empty reply to a note the server marks as
   followed is simply the reply.
+- **A message that waits says why, and can be sent now or discarded.** A message that has not
+  been given to a model yet -- sent while a reply was being written, or handed to the linked
+  computer when the connection dropped -- says which it is: waiting for the reply before it,
+  held by the computer for its next turn, or not known to have reached the computer at all.
+  **Send now** and **Discard** are on the message. Such a message is no longer offered for
+  editing (the server refuses that); what the server says when it cannot send or discard it is
+  said on the message. Needs a server after 2.0.0-beta.17.
 
 ### Changed
 
