@@ -290,7 +290,7 @@ fn status(app: &App) -> Status {
         .map(|a| {
             let id = a.id();
             let agent_linked = cli_linked.as_ref().is_some_and(|(base, email)| {
-                base == a.server.trim_end_matches('/') && (email.is_empty() || email == a.email)
+                base == a.server.trim_end_matches('/') && (email.is_empty() || email == &a.email)
             });
             AccountSummary {
                 active: active_id.as_deref() == Some(id.as_str()),

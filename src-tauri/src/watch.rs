@@ -271,6 +271,7 @@ const NOTES_KEPT: i32 = 200;
 
 impl Notes {
     /// Remember a notification about to be shown; its id.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn add(&self, note: Note) -> i32 {
         self.add_for(None, note)
     }
