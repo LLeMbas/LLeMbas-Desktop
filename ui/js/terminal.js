@@ -138,22 +138,44 @@ function build() {
   term.parser.registerOscHandler(7, onWhere)
   term.onData(typeIn)
   // Ctrl+C is the shell's interrupt; copy and paste are the shifted pair, as in every terminal.
+  // Calling `e.preventDefault()` stops the webview from also firing its own native Ctrl+Shift+V
+  // paste event into xterm's textarea (which otherwise pastes the clipboard a second time); the
+  // short capture-phase guard catches any WebKitGTK accelerator that still dispatches `paste`.
+  let pastedAt = 0
+  $("terminal-screen").addEventListener(
+    "paste",
+    (ev) => {
+      if (performance.now() - pastedAt < 250) {
+        ev.preventDefault()
+        ev.stopImmediatePropagation()
+      }
+    },
+    true,
+  )
   term.attachCustomKeyEventHandler((e) => {
     if (!e.ctrlKey || !e.shiftKey || e.type !== "keydown") return true
     if (osc && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      e.preventDefault()
       visit(e.key === "ArrowUp" ? -1 : 1)
       return false
     }
     const key = e.key.toLowerCase()
     if (key === "c") {
+      e.preventDefault()
       const text = term.getSelection()
       if (text) navigator.clipboard.writeText(text).catch(() => {})
       return false
     }
     if (key === "v") {
+      e.preventDefault()
+      pastedAt = performance.now()
       navigator.clipboard
         .readText()
-        .then(typeIn)
+        .then((text) => {
+          if (!text) return
+          if (typeof term.paste === "function") term.paste(text)
+          else typeIn(text)
+        })
         .catch(() => say(t("The clipboard could not be read."), true))
       return false
     }
