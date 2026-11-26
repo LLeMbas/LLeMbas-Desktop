@@ -4,6 +4,16 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.0-beta.17] — 2026-11-26
+
+### Fixed
+
+- **Mid-run approval mode switching stays in sync and no longer reverts.**
+  Wrapped chat settings PATCH requests (`save` / `saveChat`) in `asking()` so
+  concurrent chat reads never clobber `open.chat.mode`, read live `open.chat`
+  after awaiting model lists in `renderChips()`, and handled live `mode` SSE
+  frames from the server during active agent runs.
+
 ## [1.0.0-beta.16] — 2026-11-26
 
 ### Added
