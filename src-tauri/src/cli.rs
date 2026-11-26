@@ -111,6 +111,31 @@ pub fn linked_to(server: &str) -> bool {
     linked_in(&config_dir(), server)
 }
 
+/// The single LLeMbas instance the CLI is currently signed in to, as `(base_url, email)`.
+/// `None` when the CLI has no stored login.
+pub fn linked_instance() -> Option<(String, String)> {
+    linked_instance_in(&config_dir())
+}
+
+fn linked_instance_in(config: &Path) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(config.join("lembas.json")).ok()?;
+    let v = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let all = v.get("instances")?.as_object()?;
+    all.values().find_map(|i| {
+        let base = i
+            .get("base_url")
+            .and_then(|b| b.as_str())
+            .map(|b| b.trim_end_matches('/').to_string())
+            .filter(|b| !b.is_empty())?;
+        let email = i
+            .get("email")
+            .and_then(|e| e.as_str())
+            .unwrap_or("")
+            .to_string();
+        Some((base, email))
+    })
+}
+
 fn linked_in(config: &Path, server: &str) -> bool {
     let Ok(text) = std::fs::read_to_string(config.join("lembas.json")) else {
         return false;

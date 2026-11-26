@@ -22,6 +22,7 @@ import { initAttach, allowAttach } from "./attach.js"
 import { initPalette, openPalette } from "./palette.js"
 import { initActivity, showPanel, togglePanel, panelOpen } from "./activity.js"
 import { initAgent, link } from "./agent.js"
+import { initAccounts, openAddAccount, openAccountSwitcher } from "./accounts.js"
 import { initScheduled, showScheduled, scheduledCommands } from "./scheduled.js"
 import { initReports, showReports, reportsCommands, reportOf, startReports, stopReports } from "./reports.js"
 import { initArchived, showArchived } from "./archived.js"
@@ -44,13 +45,19 @@ let currentChat = null
 
 const SIDE_KEY = "lembas.side"
 
-const remembered = (() => {
+function devicesKey() {
+  return who ? `lembas.thisDevices:${who}` : "lembas.thisDevices"
+}
+
+function readRemembered() {
   try {
+    const scoped = localStorage.getItem(devicesKey())
+    if (scoped) return JSON.parse(scoped)
     return JSON.parse(localStorage.getItem("lembas.thisDevices") || "[]")
   } catch {
     return []
   }
-})()
+}
 
 /**
  * The device ids that are this computer: a linked device whose host is this computer's name (the
@@ -58,6 +65,7 @@ const remembered = (() => {
  * agent is off and the device is not linked right now.
  */
 function thisDevices() {
+  const remembered = readRemembered()
   let changed = false
   for (const d of devices) {
     if (status?.host && d.host === status.host && !remembered.includes(d.id)) {
@@ -68,7 +76,7 @@ function thisDevices() {
   if (changed) {
     remembered.splice(0, Math.max(0, remembered.length - 8))
     try {
-      localStorage.setItem("lembas.thisDevices", JSON.stringify(remembered))
+      localStorage.setItem(devicesKey(), JSON.stringify(remembered))
     } catch {}
   }
   return remembered.slice()
@@ -77,20 +85,36 @@ function thisDevices() {
 // --- Views ------------------------------------------------------------------------------------
 
 let who = "" // the server and the account the app last showed: `server|email`
+let activeWho = "" // the account currently booted in startApp()
 let keptFor = "" // whose the edit kept by the viewer is
 
 function route() {
   const ready = status.checked && status.discovery && !status.refused && status.account
   const want = ready ? "app" : "setup"
-  if (ready) who = `${status.server || ""}|${status.account.email || status.account.name || ""}`
+  const nextWho = ready ? `${status.server || ""}|${status.account.email || status.account.name || ""}` : ""
+  if (ready) who = nextWho
   if (want !== view) {
     view = want
     $("setup").hidden = want !== "setup"
     $("shell").hidden = want !== "app"
     // The sidebar's button keeps its place in the title bar, unseen while there is no sidebar.
     $("side-toggle").style.visibility = want === "app" ? "" : "hidden"
-    if (want === "app") startApp()
-    else stopApp()
+    if (want === "app") {
+      activeWho = nextWho
+      startApp()
+    } else {
+      activeWho = ""
+      stopApp()
+    }
+  } else if (want === "app" && nextWho && nextWho !== activeWho) {
+    // Switched directly from one signed-in account/instance to another.
+    stopApp()
+    activeWho = nextWho
+    me = null
+    models = []
+    devices = []
+    currentChat = null
+    startApp()
   }
   if (view === "setup") renderSetup(status)
   if (view === "app") {
@@ -292,6 +316,8 @@ function commands() {
     { label: t("Archived"), run: showArchivedPage },
     { label: t("Memory"), run: () => showMemoryPage() },
     { label: t("Settings"), run: () => showSettings(true) },
+    { label: t("Switch account or instance…"), run: () => openAccountSwitcher($("host"), status, (section) => showSettings(true, section)) },
+    { label: t("Add account or instance…"), run: () => openAddAccount() },
   ]
   if (canDraw(me)) out.push({ label: t("Draw a picture"), run: openDraw })
   if (openChatId()) out.push({ label: panelOpen() ? t("Close the activity panel") : t("Open the activity panel"), run: togglePanel })
@@ -323,6 +349,7 @@ function sideOpen(on) {
 
 async function boot() {
   initAgent()
+  initAccounts(() => status)
   initBar({ status: () => status, openSettings: (section) => showSettings(true, section) })
   initViewer()
   initExplorer()

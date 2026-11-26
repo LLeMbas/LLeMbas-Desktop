@@ -6,6 +6,7 @@
 import { $, h, icon, ICONS } from "./dom.js"
 import { invoke, listen, win } from "./bridge.js"
 import { agentBlock, onAgentChange } from "./agent.js"
+import { openAccountSwitcher } from "./accounts.js"
 import { popover, closePopover } from "./popup.js"
 
 const WORDS = {
@@ -49,8 +50,19 @@ export function renderBar(s) {
   try {
     host = s.server ? new URL(s.server).host : ""
   } catch {}
-  $("host").textContent = host
-  $("host").title = s.server || ""
+  const hostEl = $("host")
+  hostEl.textContent = host
+  hostEl.title = s.account ? [s.discovery?.name || host, s.account.email, s.server].filter(Boolean).join(" · ") : s.server || ""
+  hostEl.classList.toggle("bar__host--btn", !!s.account)
+  if (s.account) {
+    hostEl.setAttribute("role", "button")
+    hostEl.setAttribute("tabindex", "0")
+    hostEl.setAttribute("aria-haspopup", "menu")
+  } else {
+    hostEl.removeAttribute("role")
+    hostEl.removeAttribute("tabindex")
+    hostEl.removeAttribute("aria-haspopup")
+  }
   const state = pillState(s)
   const reason = agentWhy(s.agent)
   $("agent").dataset.state = state
@@ -126,6 +138,17 @@ export function initBar(context) {
   $("update").addEventListener("click", () => invoke("update_app"))
   $("menu").addEventListener("click", (e) => menuAt(e.currentTarget))
   $("agent").addEventListener("click", toggleAgent)
+  const openHostSwitcher = () => {
+    const s = ctx?.status?.()
+    if (s?.account) openAccountSwitcher($("host"), s, (section) => ctx.openSettings(section))
+  }
+  $("host").addEventListener("click", openHostSwitcher)
+  $("host").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault()
+      openHostSwitcher()
+    }
+  })
   onAgentChange(() => pop?.redraw())
   listen("maximized", (e) => maximized(!!e.payload))
   win.isMaximized().then(maximized).catch(() => maximized(false))

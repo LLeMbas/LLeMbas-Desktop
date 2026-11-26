@@ -10498,6 +10498,53 @@ test("WS21: one carrying at a time, counted before it begins: a second asked for
   assert.deepEqual(big.errors, [])
 })
 
+test("ACC: switching accounts, setting default and adding another instance", async () => {
+  const accA = { id: "ada@example.org@https://ai.example", server: "https://ai.example", instance_name: "Home", email: "ada@example.org", name: "Ada Example", active: true, default: true, agent_linked: true }
+  const accB = { id: "bo@work.example@https://work.example", server: "https://work.example", instance_name: "Work", email: "bo@work.example", name: "Bo Work", active: false, default: false, agent_linked: false }
+  const p = await page({
+    status: status({
+      accounts: [accA, accB],
+      default_account: accA.id,
+      agent_linked_server: accA.server,
+    }),
+    routes: baseRoutes(),
+    commands: {
+      switch_account: { ok: true },
+      set_default_account: { ok: true },
+      remove_account: { ok: true },
+      probe_server: { base: "https://third.example", name: "Third", version: "2.0.0", one_approval: false },
+      add_sign_in: null,
+    },
+  })
+  // Titlebar host opens quick account switcher showing both accounts and Default badge.
+  await p.click("#host")
+  await p.waitForSelector('.menu [role="menuitemradio"]')
+  const labels = await p.locator('.menu [role="menuitemradio"]').allTextContents()
+  assert.ok(labels.some((t) => t.includes("Home") && t.includes("Default")), `expected Home Default in ${labels}`)
+  assert.ok(labels.some((t) => t.includes("Work")), `expected Work in ${labels}`)
+  // Clicking Work invokes switch_account with Work's id.
+  await p.locator('.menu [role="menuitemradio"]', { hasText: "Work" }).click()
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "switch_account"))
+  assert.deepEqual(await callsOf(p, "switch_account"), [{ id: accB.id }])
+
+  // Open Settings -> Accounts: list shows both rows, Set as default works, Add dialog probes server.
+  await p.click("#settings-btn")
+  await p.waitForSelector('#set-account .acc__row[data-account="bo@work.example@https://work.example"]')
+  await p.locator('#set-account .acc__row[data-account="bo@work.example@https://work.example"] button', { hasText: "Set as default" }).click()
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "set_default_account"))
+  assert.deepEqual(await callsOf(p, "set_default_account"), [{ id: accB.id }])
+
+  await p.click("#add-account-btn")
+  await p.waitForSelector("#add-account-dialog[open]")
+  await p.fill("#add-account-address", "third.example")
+  await p.locator('#add-account-dialog button[type="submit"]').click()
+  await p.waitForFunction(() => window.__mock.calls.some((c) => c.cmd === "probe_server"))
+  assert.deepEqual(await callsOf(p, "probe_server"), [{ address: "third.example" }])
+  await p.locator("#add-account-dialog button", { hasText: "Cancel" }).click()
+  await p.waitForFunction(() => !document.getElementById("add-account-dialog"))
+  assert.deepEqual(p.errors, [])
+})
+
 // --- Run ----------------------------------------------------------------------------------------
 
 const only = process.argv[2] || ""

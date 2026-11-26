@@ -221,6 +221,8 @@ label, .label { font: var(--text-sm) / var(--leading-tight) var(--font-body); co
   display: flex;
   align-items: center;
 }
+.bar__host--btn { cursor: pointer; }
+.bar__host--btn:hover { color: var(--ink); background: var(--surface-hover); }
 .bar__btn { display: grid; place-items: center; }
 /* The agent's chip: a dot and a short word, a pill inside the bar's height. */
 .bar > .bar__agent {
@@ -2223,6 +2225,14 @@ details[open] > summary .step__chev .icon { transform: rotate(90deg); }
 .set__intro { font-size: var(--text-sm); color: var(--ink-muted); }
 .set__line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-4); align-items: center; padding-top: var(--sp-3); border-top: var(--border-w) solid var(--border); }
 .set__card > .set__line:first-child { padding-top: 0; border-top: 0; }
+.acc__list { display: grid; gap: var(--sp-2); }
+.acc__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-3); align-items: center; padding-top: var(--sp-3); border-top: var(--border-w) solid var(--border); }
+.acc__row:first-child { padding-top: 0; border-top: 0; }
+.acc__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.acc__badge { padding: 1px var(--sp-2); font-size: var(--text-xs); font-weight: 500; border-radius: var(--radius-full); background: var(--surface-hover); color: var(--ink-muted); }
+.acc__badge--def { background: var(--accent-soft); color: var(--accent); }
+.acc__actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: flex-end; }
+.acc__known { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .set__words { display: grid; gap: var(--sp-1); min-width: 0; }
 .set__label { font-size: var(--text-sm); font-weight: 600; overflow-wrap: anywhere; }
 .set__hint { font-size: var(--text-xs); color: var(--ink-muted); }

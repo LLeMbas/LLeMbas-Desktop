@@ -6,6 +6,7 @@
 import { $, h, clear, icon, ICONS } from "./dom.js"
 import { invoke, listen, get, openLink } from "./bridge.js"
 import { agentBlock, onAgentChange, link } from "./agent.js"
+import { accountList, openAddAccount, switchAccount } from "./accounts.js"
 import { localTheme, chooseTheme, accountTheme, accountThemes, chosenLanguage, chooseLanguage, accountLanguage } from "./look.js"
 import { why } from "./bridge.js"
 import { mayLeave } from "./viewer.js"
@@ -62,28 +63,96 @@ export function renderSettings(s) {
     nav.append(h("button", { type: "button", class: "navrow", dataset: { id }, onclick: () => scrollToSection(id) }, h("span", { class: "navrow__icon" }, icon(ico)), h("span", { text: title() })))
   }
   const box = clear($("settings-body"))
-  const who = s.account ? [s.account.name, s.account.email].filter(Boolean).join(" · ") : ""
+  const list = accountList(s)
+  const accountRows = list.map((a) => {
+    const label = a.instance_name || a.server
+    const sub = [a.name, a.email, a.server].filter(Boolean).join(" · ")
+    const badges = [
+      a.default ? h("span", { class: "acc__badge acc__badge--def", text: t("Default") }) : null,
+      a.active ? h("span", { class: "acc__badge", text: t("In use") }) : null,
+    ]
+    const controls = h(
+      "div",
+      { class: "acc__actions" },
+      !a.active
+        ? h("button", {
+            type: "button",
+            class: "btn btn--sm btn--primary",
+            text: t("Switch"),
+            onclick: () => switchAccount(a.id).catch(() => {}),
+          })
+        : null,
+      !a.default
+        ? h("button", {
+            type: "button",
+            class: "btn btn--sm",
+            text: t("Set as default"),
+            onclick: () => invoke("set_default_account", { id: a.id }).catch(() => {}),
+          })
+        : null,
+      a.active
+        ? h("button", {
+            type: "button",
+            class: "btn btn--sm",
+            id: "sign-out",
+            text: t("Sign out"),
+            onclick: async () => (await mayLeave()) && (await workspaceMayLeave()) && invoke("sign_out"),
+          })
+        : h("button", {
+            type: "button",
+            class: "btn btn--sm",
+            text: t("Sign out"),
+            onclick: () => invoke("remove_account", { id: a.id }).catch(() => {}),
+          }),
+    )
+    return h(
+      "div",
+      { class: "acc__row", dataset: { account: a.id, active: String(!!a.active), default: String(!!a.default) } },
+      h(
+        "div",
+        { class: "set__words" },
+        h("p", { class: "set__label acc__meta" }, h("bdi", { text: label }), badges),
+        h("p", { class: "set__hint", text: sub }),
+      ),
+      controls,
+    )
+  })
   box.append(
     section(
       "account",
-      t("Account"),
-      line(t("Server"), s.discovery ? `LLeMbas ${s.discovery.version}` : "", h("bdi", { class: "set__value", text: s.server || "" })),
-      line(
-        who ? t("Signed in as %(who)s.", { who }) : t("Sign in"),
-        t("Signing out gives the app's sign-in up on the server; the agent's link stays. Sign out to use another server."),
-        // Signing out closes what is open (and is how another server is chosen): an edit in the
-        // viewer that was not saved is asked about first, never dropped without a word.
-        h("button", { type: "button", class: "btn btn--sm", id: "sign-out", text: t("Sign out"), onclick: async () => (await mayLeave()) && (await workspaceMayLeave()) && invoke("sign_out") }),
+      t("Accounts"),
+      h("p", {
+        class: "set__intro",
+        text: t("Switch between accounts and LLeMbas instances. The default account opens when the app starts."),
+      }),
+      h("div", { class: "acc__list" }, accountRows),
+      h(
+        "div",
+        { class: "set__buttons" },
+        h("button", {
+          type: "button",
+          class: "btn btn--sm btn--primary",
+          id: "add-account-btn",
+          text: t("Add account or instance…"),
+          onclick: () => openAddAccount(),
+        }),
       ),
     ),
   )
 
   // The agent: what it says, and the one thing to do about it; then start or stop, link again.
+  const linkedElsewhere = !s.linked && s.agent_linked_server && s.agent_linked_server !== s.server
   box.append(
     section(
       "agent",
       t("Agent"),
       h("p", { class: "set__intro", text: t("The agent lets agent chats on your server work in this computer's projects. It is the LLeMbas CLI, built in, running in the background while the app runs.") }),
+      linkedElsewhere
+        ? h("p", {
+            class: "set__hint",
+            text: t("This computer's agent is currently linked to %(server)s. Linking here replaces that link.", { server: s.agent_linked_server }),
+          })
+        : null,
       agentBlock(s),
       h(
         "div",
@@ -171,8 +240,9 @@ export function renderSettings(s) {
         : null,
     ),
   )
-  if (s.account && appsFor !== s.server) askApps(s.server)
-  if (s.account && mcpFor !== s.server) askMcp(s.server)
+  const scopeKey = s.account ? `${s.server || ""}|${s.account.email || s.account.name || ""}` : ""
+  if (s.account && appsFor !== scopeKey) askApps(scopeKey)
+  if (s.account && mcpFor !== scopeKey) askMcp(scopeKey)
 }
 
 // --- The MCP servers and their sign-ins (GET /mcp) --------------------------------------------------
@@ -201,7 +271,10 @@ async function askMcp(server) {
   if (!$("settings").hidden) renderSettings(current())
 }
 
-const mcpShown = (s) => !!s.account && mcpFor === s.server && !!mcp?.length
+const mcpShown = (s) => {
+  const scopeKey = s.account ? `${s.server || ""}|${s.account.email || s.account.name || ""}` : ""
+  return !!s.account && mcpFor === scopeKey && !!mcp?.length
+}
 
 /** A sign-in page, only where it is a page of the instance the app is signed in to. */
 function signinPage(s, url) {
@@ -254,7 +327,7 @@ function mcpSection(s) {
     t("MCP servers"),
     h("p", { class: "set__intro", text: t("Tools from other services that your chats on the server may use. Signing in to one happens in your browser, on your server.") }),
     rows,
-    h("div", { class: "set__buttons" }, h("button", { type: "button", class: "btn btn--sm", id: "mcp-refresh", text: t("Read again"), onclick: () => askMcp(s.server) })),
+    h("div", { class: "set__buttons" }, h("button", { type: "button", class: "btn btn--sm", id: "mcp-refresh", text: t("Read again"), onclick: () => askMcp(`${s.server || ""}|${s.account?.email || s.account?.name || ""}`) })),
   )
 }
 

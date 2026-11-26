@@ -264,6 +264,7 @@ fn later(a: &str, b: &str) -> bool {
 pub struct Notes {
     next: Mutex<i32>,
     by_id: Mutex<HashMap<i32, Note>>,
+    accounts: Mutex<HashMap<i32, String>>,
 }
 
 const NOTES_KEPT: i32 = 200;
@@ -271,17 +272,31 @@ const NOTES_KEPT: i32 = 200;
 impl Notes {
     /// Remember a notification about to be shown; its id.
     pub fn add(&self, note: Note) -> i32 {
+        self.add_for(None, note)
+    }
+
+    /// Remember a notification along with the account id (`email@server`) it belongs to.
+    pub fn add_for(&self, account: Option<String>, note: Note) -> i32 {
         let mut next = self.next.lock().unwrap();
         *next = next.checked_add(1).unwrap_or(1);
         let id = *next;
         let mut by_id = self.by_id.lock().unwrap();
         by_id.insert(id, note);
         by_id.retain(|k, _| *k > id - NOTES_KEPT);
+        let mut accounts = self.accounts.lock().unwrap();
+        if let Some(acc) = account {
+            accounts.insert(id, acc);
+        }
+        accounts.retain(|k, _| *k > id - NOTES_KEPT);
         id
     }
 
     pub fn get(&self, id: i32) -> Option<Note> {
         self.by_id.lock().unwrap().get(&id).cloned()
+    }
+
+    pub fn account_of(&self, id: i32) -> Option<String> {
+        self.accounts.lock().unwrap().get(&id).cloned()
     }
 }
 

@@ -214,9 +214,16 @@ pub struct Account {
     pub token: String,
     pub email: String,
     pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub instance_name: String,
 }
 
 impl Account {
+    /// Stable identifier for an account on an instance (`email@server`), matching Android.
+    pub fn id(&self) -> String {
+        format!("{}@{}", self.email, self.server)
+    }
+
     /// The same account without its token: what a page may see.
     pub fn public(&self) -> Account {
         Account {
@@ -230,17 +237,47 @@ fn account_file(config_dir: &Path) -> PathBuf {
     config_dir.join("account.json")
 }
 
+fn accounts_file(config_dir: &Path) -> PathBuf {
+    config_dir.join("accounts.json")
+}
+
 /// The sign-in for `server`, if there is one (a sign-in to another server is not this one's).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn load_account(config_dir: &Path, server: &str) -> Option<Account> {
     let text = fs::read_to_string(account_file(config_dir)).ok()?;
     let a: Account = serde_json::from_str(&text).ok()?;
     (a.server == server && !a.token.is_empty()).then_some(a)
 }
 
-/// Written to a new file readable by this user only, then moved over the old one.
-pub fn save_account(config_dir: &Path, a: &Account) -> std::io::Result<()> {
+/// Every saved account across all instances. Migrates transparently from legacy single
+/// `account.json` when `accounts.json` does not exist yet.
+pub fn load_accounts(config_dir: &Path) -> Vec<Account> {
+    if let Ok(text) = fs::read_to_string(accounts_file(config_dir)) {
+        if let Ok(list) = serde_json::from_str::<Vec<Account>>(&text) {
+            return list
+                .into_iter()
+                .filter(|a| !a.server.is_empty() && !a.token.is_empty())
+                .collect();
+        }
+    }
+    if let Ok(text) = fs::read_to_string(account_file(config_dir)) {
+        if let Ok(a) = serde_json::from_str::<Account>(&text) {
+            if !a.server.is_empty() && !a.token.is_empty() {
+                return vec![a];
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn write_secret_json<T: Serialize + ?Sized>(
+    config_dir: &Path,
+    dest: PathBuf,
+    tmp_name: &str,
+    value: &T,
+) -> std::io::Result<()> {
     fs::create_dir_all(config_dir)?;
-    let tmp = config_dir.join("account.json.tmp");
+    let tmp = config_dir.join(tmp_name);
     let _ = fs::remove_file(&tmp);
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -250,12 +287,52 @@ pub fn save_account(config_dir: &Path, a: &Account) -> std::io::Result<()> {
         options.mode(0o600);
     }
     let mut f = options.open(&tmp)?;
-    f.write_all((serde_json::to_string_pretty(a)? + "\n").as_bytes())?;
+    f.write_all((serde_json::to_string_pretty(value)? + "\n").as_bytes())?;
     f.sync_all()?;
     drop(f);
-    fs::rename(tmp, account_file(config_dir))
+    fs::rename(tmp, dest)
 }
 
+/// Written to a new file readable by this user only, then moved over the old one.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn save_account(config_dir: &Path, a: &Account) -> std::io::Result<()> {
+    write_secret_json(config_dir, account_file(config_dir), "account.json.tmp", a)
+}
+
+/// Persist all accounts to `accounts.json` (0600, atomic rename) and clear legacy `account.json`.
+pub fn save_accounts(config_dir: &Path, accounts: &[Account]) -> std::io::Result<()> {
+    if accounts.is_empty() {
+        let _ = fs::remove_file(accounts_file(config_dir));
+        let _ = fs::remove_file(account_file(config_dir));
+        return Ok(());
+    }
+    write_secret_json(
+        config_dir,
+        accounts_file(config_dir),
+        "accounts.json.tmp",
+        accounts,
+    )?;
+    let _ = fs::remove_file(account_file(config_dir));
+    Ok(())
+}
+
+/// Insert or replace an account by its stable `id` (`email@server`).
+pub fn upsert_account(accounts: &mut Vec<Account>, account: Account) {
+    let id = account.id();
+    if let Some(slot) = accounts.iter_mut().find(|a| a.id() == id) {
+        *slot = account;
+    } else {
+        accounts.push(account);
+    }
+}
+
+/// Remove an account by its stable `id`, returning it if found.
+pub fn remove_account_by_id(accounts: &mut Vec<Account>, id: &str) -> Option<Account> {
+    let pos = accounts.iter().position(|a| a.id() == id)?;
+    Some(accounts.remove(pos))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn forget_account(config_dir: &Path) {
     let _ = fs::remove_file(account_file(config_dir));
 }
@@ -398,6 +475,7 @@ fn granted(v: &Value, server: &str) -> Option<Granted> {
             token: token.to_string(),
             email: field("email"),
             name: field("name"),
+            instance_name: String::new(),
         },
         agent_token: v
             .get("agent_token")
@@ -2108,6 +2186,7 @@ mod tests {
             token: "secret".into(),
             email: "a@example.org".into(),
             name: "A".into(),
+            instance_name: String::new(),
         };
         save_account(&dir, &a).unwrap();
         assert_eq!(load_account(&dir, "https://ai.example"), Some(a.clone()));
@@ -2126,6 +2205,63 @@ mod tests {
         }
         forget_account(&dir);
         assert_eq!(load_account(&dir, "https://ai.example"), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn accounts_store_migrates_and_keeps_multiple_accounts_and_instances() {
+        let dir = std::env::temp_dir().join(format!("llembas-accounts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let a1 = Account {
+            server: "https://home.example".into(),
+            token: "t1".into(),
+            email: "alice@example.org".into(),
+            name: "Alice".into(),
+            instance_name: "Home".into(),
+        };
+        let a2 = Account {
+            server: "https://work.example".into(),
+            token: "t2".into(),
+            email: "bob@example.com".into(),
+            name: "Bob".into(),
+            instance_name: "Work".into(),
+        };
+        let a3 = Account {
+            server: "https://home.example".into(),
+            token: "t3".into(),
+            email: "carol@example.org".into(),
+            name: "Carol".into(),
+            instance_name: "Home".into(),
+        };
+        // Transparent migration from single legacy account.json.
+        save_account(&dir, &a1).unwrap();
+        let mut list = load_accounts(&dir);
+        assert_eq!(list, vec![a1.clone()]);
+
+        upsert_account(&mut list, a2.clone());
+        upsert_account(&mut list, a3.clone());
+        save_accounts(&dir, &list).unwrap();
+        assert!(!account_file(&dir).exists());
+        assert_eq!(
+            load_accounts(&dir),
+            vec![a1.clone(), a2.clone(), a3.clone()]
+        );
+
+        // Upsert replaces matching id without duplicating.
+        let mut a1_refreshed = a1.clone();
+        a1_refreshed.token = "t1-new".into();
+        upsert_account(&mut list, a1_refreshed.clone());
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].token, "t1-new");
+
+        // Removal returns the removed account and drops it from disk.
+        let removed = remove_account_by_id(&mut list, &a2.id());
+        assert_eq!(removed, Some(a2));
+        save_accounts(&dir, &list).unwrap();
+        assert_eq!(load_accounts(&dir), vec![a1_refreshed, a3]);
+
+        save_accounts(&dir, &[]).unwrap();
+        assert!(load_accounts(&dir).is_empty());
         fs::remove_dir_all(&dir).unwrap();
     }
 }

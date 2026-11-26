@@ -119,8 +119,12 @@ struct App {
     refused: Mutex<Option<String>>,
     /// The app's own sign-in to that server.
     account: Mutex<Option<Account>>,
+    /// All saved accounts across instances (`accounts.json`), including the active one.
+    accounts: Mutex<Vec<Account>>,
     /// Set to cancel the device login in progress.
     signing_in: Mutex<Option<Arc<AtomicBool>>>,
+    /// Set to cancel an "add another account/instance" device login in progress.
+    adding_sign_in: Mutex<Option<Arc<AtomicBool>>>,
     streams: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     next_stream: AtomicU64,
     /// The terminal panel's sockets (`terminal.rs`), by the page's id for each.
@@ -195,6 +199,44 @@ impl App {
             .map(|r| r.roots.clone())
             .unwrap_or_default()
     }
+
+    fn active_account_id(&self) -> Option<String> {
+        self.account.lock().unwrap().as_ref().map(Account::id)
+    }
+
+    fn close_streams(&self) {
+        let mut streams = self.streams.lock().unwrap();
+        for stop in streams.values() {
+            stop.store(true, Ordering::SeqCst);
+        }
+        streams.clear();
+    }
+
+    /// Tear down every live connection and cached surface for the active account before
+    /// switching accounts, changing servers, or signing out.
+    fn teardown_session(&self) {
+        self.close_streams();
+        self.editor.stop();
+        self.carries.cancel_all();
+        self.watch.reset();
+        self.terminals.close_all();
+        self.python.clear();
+        self.sealed.clear_pages();
+        self.media.clear();
+    }
+}
+
+/// Public summary of one saved account/instance (never carries the token).
+#[derive(Clone, Serialize)]
+struct AccountSummary {
+    id: String,
+    server: String,
+    instance_name: String,
+    email: String,
+    name: String,
+    active: bool,
+    default: bool,
+    agent_linked: bool,
 }
 
 /// What the app's page draws from: everything but the token.
@@ -209,6 +251,10 @@ struct Status {
     /// Discovery has answered (or failed) for the chosen server.
     checked: bool,
     account: Option<Account>,
+    accounts: Vec<AccountSummary>,
+    default_account: Option<String>,
+    /// The server URL the local CLI is currently linked to, if any.
+    agent_linked_server: Option<String>,
     signing_in: bool,
     linked: bool,
     agent: AgentState,
@@ -223,10 +269,41 @@ struct Status {
     notify: bool,
 }
 
+fn resolve_default(accounts: &[Account], wanted: Option<&str>) -> Option<String> {
+    wanted
+        .filter(|id| accounts.iter().any(|a| a.id() == *id))
+        .map(String::from)
+        .or_else(|| accounts.first().map(Account::id))
+}
+
 fn status(app: &App) -> Status {
     let s = app.settings();
     let discovery = app.server.lock().unwrap().clone();
     let refused = app.refused.lock().unwrap().clone();
+    let active_acc = app.account.lock().unwrap().clone();
+    let active_id = active_acc.as_ref().map(Account::id);
+    let stored = app.accounts.lock().unwrap().clone();
+    let default_id = resolve_default(&stored, s.default_account.as_deref());
+    let cli_linked = cli::linked_instance();
+    let accounts = stored
+        .iter()
+        .map(|a| {
+            let id = a.id();
+            let agent_linked = cli_linked.as_ref().is_some_and(|(base, email)| {
+                base == a.server.trim_end_matches('/') && (email.is_empty() || email == a.email)
+            });
+            AccountSummary {
+                active: active_id.as_deref() == Some(id.as_str()),
+                default: default_id.as_deref() == Some(id.as_str()),
+                id,
+                server: a.server.clone(),
+                instance_name: a.instance_name.clone(),
+                email: a.email.clone(),
+                name: a.name.clone(),
+                agent_linked,
+            }
+        })
+        .collect();
     Status {
         version: env!("CARGO_PKG_VERSION"),
         linked: s.server.as_deref().is_some_and(cli::linked_to),
@@ -234,7 +311,10 @@ fn status(app: &App) -> Status {
         server: s.server,
         discovery,
         refused,
-        account: app.account.lock().unwrap().as_ref().map(Account::public),
+        account: active_acc.as_ref().map(Account::public),
+        accounts,
+        default_account: default_id,
+        agent_linked_server: cli_linked.map(|(base, _)| base),
         signing_in: app.signing_in.lock().unwrap().is_some(),
         agent: app.agent.state(),
         agent_wanted: app.agent.wanted(),
@@ -265,13 +345,44 @@ fn get_status(app: tauri::State<'_, App>) -> Status {
 /// sign-in kept for it.
 fn check_server(handle: &AppHandle) {
     let app = handle.state::<App>();
-    let Some(base) = app.settings().server else {
+    let s = app.settings();
+    let Some(base) = s.server else {
         return;
     };
     let found = server::discover(&base);
     match found {
         Ok(d) => {
-            *app.account.lock().unwrap() = server::load_account(&app.config_dir, &d.base);
+            // Backfill instance_name on any stored accounts for this server that lacked it.
+            let mut changed = false;
+            let picked = {
+                let mut stored = app.accounts.lock().unwrap();
+                for a in stored.iter_mut() {
+                    if a.server == d.base && a.instance_name != d.name {
+                        a.instance_name = d.name.clone();
+                        changed = true;
+                    }
+                }
+                if changed {
+                    let _ = server::save_accounts(&app.config_dir, &stored);
+                }
+                let current_id = app.active_account_id();
+                current_id
+                    .as_deref()
+                    .and_then(|id| stored.iter().find(|a| a.id() == id && a.server == d.base))
+                    .or_else(|| {
+                        s.active_account.as_deref().and_then(|id| {
+                            stored.iter().find(|a| a.id() == id && a.server == d.base)
+                        })
+                    })
+                    .or_else(|| {
+                        s.default_account.as_deref().and_then(|id| {
+                            stored.iter().find(|a| a.id() == id && a.server == d.base)
+                        })
+                    })
+                    .or_else(|| stored.iter().find(|a| a.server == d.base))
+                    .cloned()
+            };
+            *app.account.lock().unwrap() = picked;
             *app.server.lock().unwrap() = Some(d);
             *app.refused.lock().unwrap() = None;
         }
@@ -292,6 +403,15 @@ async fn recheck_server(handle: AppHandle) -> Result<Status, String> {
     Ok(status_of(&handle))
 }
 
+/// Check that `address` is a LLeMbas 2.0 server without changing the active account.
+#[tauri::command]
+async fn probe_server(address: String) -> Result<Discovery, String> {
+    let base = settings::normalise(&address)?;
+    tauri::async_runtime::spawn_blocking(move || server::discover(&base))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Check that `address` is a LLeMbas 2.0 server and remember it. A refused one is not kept.
 #[tauri::command]
 async fn set_server(handle: AppHandle, address: String) -> Result<Status, String> {
@@ -304,21 +424,222 @@ async fn set_server(handle: AppHandle, address: String) -> Result<Status, String
     let before = app.settings().server;
     app.update(|s| s.server = Some(d.base.clone()))?;
     if before.as_deref() != Some(d.base.as_str()) {
-        app.editor.stop();
-        app.carries.cancel_all();
-        app.agent.stop();
-        app.watch.reset();
-        app.terminals.close_all();
-        // Another server: its Pyodide is not the one made ready, and is not served any more.
-        app.python.clear();
-        app.sealed.clear_pages();
-        app.media.clear();
+        app.teardown_session();
     }
-    *app.account.lock().unwrap() = server::load_account(&app.config_dir, &d.base);
+    let existing = app
+        .accounts
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|a| a.server == d.base)
+        .cloned();
+    *app.account.lock().unwrap() = existing;
     *app.server.lock().unwrap() = Some(d);
     *app.refused.lock().unwrap() = None;
     announce(&handle);
     Ok(status_of(&handle))
+}
+
+/// Save a newly approved account, updating `accounts.json` and default/active pointers.
+fn persist_signed_in(app: &App, mut account: Account, d: &Discovery) -> Result<Account, String> {
+    account.instance_name = d.name.clone();
+    let id = account.id();
+    let next_default = {
+        let mut stored = app.accounts.lock().unwrap();
+        server::upsert_account(&mut stored, account.clone());
+        server::save_accounts(&app.config_dir, &stored)
+            .map_err(|e| format!("The sign-in could not be saved: {e}"))?;
+        resolve_default(&stored, app.settings().default_account.as_deref())
+    };
+    let _ = app.update(|s| {
+        s.server = Some(d.base.clone());
+        s.active_account = Some(id);
+        s.default_account = next_default;
+    });
+    Ok(account)
+}
+
+/// Switch the window to a saved account (`id = email@server`).
+fn switch_to_account_blocking(handle: &AppHandle, id: &str) -> Result<Status, String> {
+    let app = handle.state::<App>();
+    let target = app
+        .accounts
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|a| a.id() == id)
+        .cloned()
+        .ok_or_else(|| "No such saved account.".to_string())?;
+    let current_id = app.active_account_id();
+    if current_id.as_deref() == Some(id) && app.server.lock().unwrap().is_some() {
+        return Ok(status_of(handle));
+    }
+    app.teardown_session();
+    app.update(|s| {
+        s.server = Some(target.server.clone());
+        s.active_account = Some(target.id());
+    })?;
+    *app.account.lock().unwrap() = Some(target.clone());
+    *app.server.lock().unwrap() = None;
+    *app.refused.lock().unwrap() = None;
+    announce(handle);
+    check_server(handle);
+    Ok(status_of(handle))
+}
+
+#[tauri::command]
+async fn switch_account(handle: AppHandle, id: String) -> Result<Status, String> {
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || switch_to_account_blocking(&h, &id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn set_default_account(handle: AppHandle, id: String) -> Result<Status, String> {
+    let app = handle.state::<App>();
+    let exists = app.accounts.lock().unwrap().iter().any(|a| a.id() == id);
+    if !exists {
+        return Err("No such saved account.".into());
+    }
+    app.update(|s| s.default_account = Some(id))?;
+    announce(&handle);
+    Ok(status_of(&handle))
+}
+
+/// Remove a saved account by `id`, revoking its token and switching to the next saved
+/// account if it was active (or returning to setup when none remain).
+fn remove_account_blocking(handle: &AppHandle, id: &str, revoke: bool) -> Result<Status, String> {
+    let app = handle.state::<App>();
+    let was_active = app.active_account_id().as_deref() == Some(id);
+    let (removed, next_default, fallback) = {
+        let mut stored = app.accounts.lock().unwrap();
+        let removed = server::remove_account_by_id(&mut stored, id);
+        if removed.is_some() {
+            let _ = server::save_accounts(&app.config_dir, &stored);
+        }
+        let next_default = resolve_default(&stored, app.settings().default_account.as_deref());
+        let fallback = next_default
+            .as_deref()
+            .and_then(|did| stored.iter().find(|a| a.id() == did))
+            .or_else(|| stored.first())
+            .cloned();
+        (removed, next_default, fallback)
+    };
+    if let Some(a) = removed {
+        if revoke {
+            std::thread::spawn(move || server::sign_out(&a.server, &a.token));
+        }
+    }
+    let _ = app.update(|s| {
+        s.default_account = next_default.clone();
+        if was_active {
+            s.active_account = fallback.as_ref().map(Account::id);
+            if let Some(ref f) = fallback {
+                s.server = Some(f.server.clone());
+            }
+        }
+    });
+    if was_active {
+        app.teardown_session();
+        if let Some(next) = fallback {
+            *app.account.lock().unwrap() = Some(next);
+            *app.server.lock().unwrap() = None;
+            *app.refused.lock().unwrap() = None;
+            announce(handle);
+            check_server(handle);
+            return Ok(status_of(handle));
+        }
+        *app.account.lock().unwrap() = None;
+    }
+    announce(handle);
+    Ok(status_of(handle))
+}
+
+#[tauri::command]
+async fn remove_account(handle: AppHandle, id: String) -> Result<Status, String> {
+    let h = handle.clone();
+    tauri::async_runtime::spawn_blocking(move || remove_account_blocking(&h, &id, true))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Add another account or instance without disturbing the active session until approved.
+#[tauri::command]
+fn add_sign_in(handle: AppHandle, address: String) -> Result<(), String> {
+    let base = settings::normalise(&address)?;
+    let app = handle.state::<App>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut busy = app.adding_sign_in.lock().unwrap();
+        if let Some(old) = busy.take() {
+            old.store(true, Ordering::SeqCst);
+        }
+        *busy = Some(cancel.clone());
+    }
+    std::thread::spawn(move || {
+        let host = cli::hostname().unwrap_or_default();
+        // Never overwrite an existing CLI device link when adding a secondary account.
+        let cli_free = !link_works(&handle.state::<App>()) && cli::linked_instance().is_none();
+        let outcome = server::discover(&base).and_then(|d| {
+            let with_agent = d.one_approval && cli_free;
+            let code = server::start_sign_in(&d, &host, with_agent)?;
+            let _ = handle
+                .opener()
+                .open_url(&code.verification_uri_complete, None::<&str>);
+            let _ = handle.emit("add-signin", SignIn::Code { code: code.clone() });
+            let granted = server::await_sign_in(&d, &code, &cancel)?;
+            Ok((d, granted))
+        });
+        let app = handle.state::<App>();
+        {
+            let mut busy = app.adding_sign_in.lock().unwrap();
+            if busy.as_ref().is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
+                *busy = None;
+            }
+        }
+        let mut agent_hand = None;
+        let event = match outcome {
+            Ok((d, granted)) => match persist_signed_in(&app, granted.account.clone(), &d) {
+                Ok(saved) => {
+                    app.teardown_session();
+                    *app.account.lock().unwrap() = Some(saved);
+                    *app.server.lock().unwrap() = Some(d.clone());
+                    *app.refused.lock().unwrap() = None;
+                    if let Some(t) = granted.agent_token {
+                        agent_hand = Some((d.base.clone(), t));
+                    }
+                    SignIn::Done
+                }
+                Err(message) => {
+                    server::sign_out(&d.base, &granted.account.token);
+                    if let Some(t) = granted.agent_token {
+                        server::sign_out(&d.base, &t);
+                    }
+                    SignIn::Failed { message }
+                }
+            },
+            Err(message) => SignIn::Failed { message },
+        };
+        let _ = handle.emit("add-signin", event);
+        announce(&handle);
+        if let Some((base_url, token)) = agent_hand {
+            if link_works(&app) || cli::linked_instance().is_some() {
+                server::sign_out(&base_url, &token);
+            } else if let Err(message) = hand_to_cli(&handle, &base_url, token) {
+                let _ = handle.emit("linking", Linking::Failed { message });
+                announce(&handle);
+            }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn add_sign_in_cancel(handle: AppHandle) {
+    if let Some(c) = handle.state::<App>().adding_sign_in.lock().unwrap().take() {
+        c.store(true, Ordering::SeqCst);
+    }
 }
 
 /// What the page hears while signing in: the code, then the outcome.
@@ -332,11 +653,7 @@ enum SignIn {
 
 /// Sign the app in to the server: a device login for the app's scopes, approved in the browser.
 /// Where the server can (`one_approval`), the same approval asks for the agent's token too, unless
-/// the agent's link works right now (the CLI says it is linked). Whether the CLI has a login for
-/// this server on file is not asked: a login the server refuses is a file all the same, and
-/// asking that left a computer with a refused link and no way to a new one from the sign-in.
-/// After the approval the agent's token goes to the CLI -- whose `--token-stdin` login replaces
-/// the one it had for this server -- or, when the link came up meanwhile, is given up.
+/// the agent's link works right now or the CLI is already logged in to another instance.
 #[tauri::command]
 fn sign_in(handle: AppHandle) -> Result<(), String> {
     let app = handle.state::<App>();
@@ -354,7 +671,9 @@ fn sign_in(handle: AppHandle) -> Result<(), String> {
     announce(&handle);
     std::thread::spawn(move || {
         let host = cli::hostname().unwrap_or_default();
-        let with_agent = d.one_approval && !link_works(&handle.state::<App>());
+        let cli_other =
+            cli::linked_instance().is_some_and(|(base, _)| base != d.base.trim_end_matches('/'));
+        let with_agent = d.one_approval && !link_works(&handle.state::<App>()) && !cli_other;
         let result = server::start_sign_in(&d, &host, with_agent).and_then(|code| {
             let _ = handle
                 .opener()
@@ -371,22 +690,20 @@ fn sign_in(handle: AppHandle) -> Result<(), String> {
         }
         let mut agent_token = None;
         let outcome = match result {
-            Ok(granted) => match server::save_account(&app.config_dir, &granted.account) {
-                Ok(()) => {
-                    *app.account.lock().unwrap() = Some(granted.account);
+            Ok(granted) => match persist_signed_in(&app, granted.account.clone(), &d) {
+                Ok(saved) => {
+                    *app.account.lock().unwrap() = Some(saved);
                     app.watch.reset();
                     agent_token = granted.agent_token;
                     SignIn::Done
                 }
-                Err(e) => {
+                Err(message) => {
                     // Nobody holds either token now: give both up.
                     server::sign_out(&d.base, &granted.account.token);
                     if let Some(t) = granted.agent_token {
                         server::sign_out(&d.base, &t);
                     }
-                    SignIn::Failed {
-                        message: format!("The sign-in could not be saved: {e}"),
-                    }
+                    SignIn::Failed { message }
                 }
             },
             Err(message) => SignIn::Failed { message },
@@ -414,41 +731,31 @@ fn sign_in_cancel(handle: AppHandle) {
     announce(&handle);
 }
 
-/// Sign the app out: the token is given up on the server and forgotten here. The agent's own
-/// link (the CLI's) is not touched.
+/// Sign the active account out: the token is given up on the server and forgotten here. If
+/// another saved account remains, the window switches to it; otherwise it returns to setup.
+/// The agent's own link (the CLI's) is not touched.
 #[tauri::command]
-fn sign_out(handle: AppHandle) {
-    let app = handle.state::<App>();
-    let account = app.account.lock().unwrap().take();
-    server::forget_account(&app.config_dir);
-    // The editor's helper asks the server under the CLI's own login: not for a window nobody is signed in to.
-    app.editor.stop();
-    app.carries.cancel_all();
-    app.watch.reset();
-    app.terminals.close_all();
-    app.python.clear();
-    app.sealed.clear_pages();
-    app.media.clear();
-    if let Some(a) = account {
-        std::thread::spawn(move || server::sign_out(&a.server, &a.token));
-    }
-    announce(&handle);
+async fn sign_out(handle: AppHandle) {
+    let active_id = handle.state::<App>().active_account_id();
+    let Some(id) = active_id else {
+        return;
+    };
+    let h = handle.clone();
+    let _ =
+        tauri::async_runtime::spawn_blocking(move || remove_account_blocking(&h, &id, true)).await;
 }
 
-/// The token was refused: it was revoked, or expired. Forget it, so the page asks to sign in.
+/// The token was refused: it was revoked, or expired. Forget this account so another saved one
+/// takes over or the page asks to sign in again.
 fn token_refused(handle: &AppHandle) {
-    let app = handle.state::<App>();
-    if app.account.lock().unwrap().take().is_some() {
-        server::forget_account(&app.config_dir);
-        app.editor.stop();
-        // (What is being carried under the sign-in that ended: stopped, its half-written file gone.)
-        app.carries.cancel_all();
-        app.terminals.close_all();
-        app.python.clear();
-        app.sealed.clear_pages();
-        app.media.clear();
-        announce(handle);
-    }
+    let active_id = handle.state::<App>().active_account_id();
+    let Some(id) = active_id else {
+        return;
+    };
+    let h = handle.clone();
+    std::thread::spawn(move || {
+        let _ = remove_account_blocking(&h, &id, false);
+    });
 }
 
 /// One request to the server's `/api/v2`, as the signed-in account: `path` from there on
@@ -1996,10 +2303,16 @@ fn link_works(app: &App) -> bool {
     }
 }
 
+fn agent_server(s: &Settings) -> Option<String> {
+    cli::linked_instance()
+        .map(|(base, _)| base)
+        .or_else(|| s.server.clone())
+}
+
 fn set_agent_wanted(handle: &AppHandle, on: bool) -> Result<(), String> {
     let app = handle.state::<App>();
     let s = app.update(|s| s.agent = on)?;
-    match (on, s.server) {
+    match (on, agent_server(&s)) {
         (true, Some(server)) => {
             app.agent.start(server);
             let h = handle.clone();
@@ -2026,7 +2339,7 @@ fn remote_changed(handle: &AppHandle, r: Remote) {
     let app = handle.state::<App>();
     *app.remote.lock().unwrap() = Some(r.clone());
     if r.restart_needed && app.agent.wanted() {
-        if let Some(server) = app.settings().server {
+        if let Some(server) = agent_server(&app.settings()) {
             app.agent.start(server);
         }
     }
@@ -2640,7 +2953,10 @@ fn watch_chats(handle: AppHandle) {
             } else {
                 d.title.clone()
             };
-            let id = app.watch.notes.add(watch::Note::Chat(d.id.clone()));
+            let id = app
+                .watch
+                .notes
+                .add_for(app.active_account_id(), watch::Note::Chat(d.id.clone()));
             let _ = handle
                 .notification()
                 .builder()
@@ -2659,24 +2975,51 @@ fn notification_action(handle: &AppHandle, done: &ActionPerformed) {
     let Some(id) = done.notification().map(|n| n.id()) else {
         return;
     };
-    let Some(note) = handle.state::<App>().watch.notes.get(id) else {
+    let app = handle.state::<App>();
+    let Some(note) = app.watch.notes.get(id) else {
         return;
     };
-    match (note, done.action_id()) {
+    let target_account = app.watch.notes.account_of(id);
+    let action = done.action_id().to_string();
+    match (note, action.as_str()) {
         (watch::Note::Chat(chat), "tap") => {
             show(handle);
-            let _ = handle.emit("open-chat", chat);
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                if let Some(acc) = target_account {
+                    if h.state::<App>().active_account_id().as_deref() != Some(acc.as_str()) {
+                        let _ = switch_to_account_blocking(&h, &acc);
+                    }
+                }
+                let _ = h.emit("open-chat", chat);
+            });
         }
         (watch::Note::Report(report), "tap" | "open") => {
             show(handle);
-            let _ = handle.emit("open-report", report);
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                if let Some(acc) = target_account {
+                    if h.state::<App>().active_account_id().as_deref() != Some(acc.as_str()) {
+                        let _ = switch_to_account_blocking(&h, &acc);
+                    }
+                }
+                let _ = h.emit("open-report", report);
+            });
         }
         (watch::Note::Run { schedule, run }, "tap" | "open") => {
             show(handle);
-            let _ = handle.emit(
-                "open-schedule",
-                serde_json::json!({ "schedule": schedule, "run": run }),
-            );
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                if let Some(acc) = target_account {
+                    if h.state::<App>().active_account_id().as_deref() != Some(acc.as_str()) {
+                        let _ = switch_to_account_blocking(&h, &acc);
+                    }
+                }
+                let _ = h.emit(
+                    "open-schedule",
+                    serde_json::json!({ "schedule": schedule, "run": run }),
+                );
+            });
         }
         (watch::Note::Run { schedule, .. }, which @ ("run_again" | "pause")) => {
             let path = format!(
@@ -2686,7 +3029,20 @@ fn notification_action(handle: &AppHandle, done: &ActionPerformed) {
             );
             let h = handle.clone();
             std::thread::spawn(move || {
-                let Some((app_url, token)) = h.state::<App>().door() else {
+                let door = target_account
+                    .as_deref()
+                    .and_then(|acc_id| {
+                        h.state::<App>()
+                            .accounts
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .find(|a| a.id() == acc_id)
+                            .cloned()
+                    })
+                    .map(|a| (format!("{}/api/v2", a.server), a.token))
+                    .or_else(|| h.state::<App>().door());
+                let Some((app_url, token)) = door else {
                     return;
                 };
                 match server::request(
@@ -2756,7 +3112,10 @@ fn report_filed(handle: &AppHandle, data: &str, door: &(String, String)) {
     let words = app.watch.words.lock().unwrap().clone();
     if n > 1 {
         // One notification for all of them; a click opens the list.
-        let id = app.watch.notes.add(watch::Note::Report(String::new()));
+        let id = app
+            .watch
+            .notes
+            .add_for(app.active_account_id(), watch::Note::Report(String::new()));
         let _ = handle
             .notification()
             .builder()
@@ -2771,7 +3130,10 @@ fn report_filed(handle: &AppHandle, data: &str, door: &(String, String)) {
     if in_front && app.watch.open_report.lock().unwrap().as_deref() == Some(report.id.as_str()) {
         return;
     }
-    let id = app.watch.notes.add(watch::Note::Report(report.id));
+    let id = app
+        .watch
+        .notes
+        .add_for(app.active_account_id(), watch::Note::Report(report.id));
     let _ = handle
         .notification()
         .builder()
@@ -2877,10 +3239,13 @@ fn watch_events(handle: AppHandle) {
                     }
                     .clone()
                 });
-                let id = app.watch.notes.add(watch::Note::Run {
-                    schedule: r.schedule.clone(),
-                    run: r.run.clone(),
-                });
+                let id = app.watch.notes.add_for(
+                    app.active_account_id(),
+                    watch::Note::Run {
+                        schedule: r.schedule.clone(),
+                        run: r.run.clone(),
+                    },
+                );
                 let mut note = handle
                     .notification()
                     .builder()
@@ -3026,7 +3391,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             recheck_server,
+            probe_server,
             set_server,
+            switch_account,
+            set_default_account,
+            remove_account,
+            add_sign_in,
+            add_sign_in_cancel,
             sign_in,
             sign_in_cancel,
             sign_out,
@@ -3134,7 +3505,21 @@ pub fn run() {
                 let s = s.clone();
                 let _ = notify_handle.run_on_main_thread(move || on_agent_state(&h, &s));
             });
-            let loaded = settings::load(&config_dir);
+            let mut loaded = settings::load(&config_dir);
+            let stored_accounts = server::load_accounts(&config_dir);
+            let default_id = resolve_default(&stored_accounts, loaded.default_account.as_deref());
+            // Cold start opens on the default account/instance when saved accounts exist.
+            let initial_account = default_id
+                .as_deref()
+                .and_then(|id| stored_accounts.iter().find(|a| a.id() == id))
+                .or_else(|| stored_accounts.first())
+                .cloned();
+            if let Some(ref acc) = initial_account {
+                loaded.server = Some(acc.server.clone());
+                loaded.active_account = Some(acc.id());
+                loaded.default_account = default_id;
+                let _ = settings::save(&config_dir, &loaded);
+            }
             // Until the account has said, the server's own default: Moria.
             let theme = loaded
                 .theme
@@ -3153,8 +3538,10 @@ pub fn run() {
                 theme: Mutex::new(theme),
                 server: Mutex::new(None),
                 refused: Mutex::new(None),
-                account: Mutex::new(None),
+                account: Mutex::new(initial_account),
+                accounts: Mutex::new(stored_accounts),
                 signing_in: Mutex::new(None),
+                adding_sign_in: Mutex::new(None),
                 streams: Mutex::new(HashMap::new()),
                 next_stream: AtomicU64::new(0),
                 terminals: terminal::Sessions::default(),
@@ -3191,7 +3578,7 @@ pub fn run() {
                     refresh_remote(&h);
                 });
             }
-            if let (true, Some(server)) = (loaded.agent, loaded.server) {
+            if let (true, Some(server)) = (loaded.agent, agent_server(&loaded)) {
                 handle.state::<App>().agent.start(server);
             }
             Ok(())

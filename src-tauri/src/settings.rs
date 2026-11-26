@@ -23,6 +23,10 @@ pub struct Settings {
     /// report later than that is news, also after a restart (`watch.rs`). Nothing of a report
     /// itself is kept.
     pub reports_seen: std::collections::BTreeMap<String, String>,
+    /// The default account id (`email@server`): opened on a cold start when present.
+    pub default_account: Option<String>,
+    /// The account id (`email@server`) last in use.
+    pub active_account: Option<String>,
 }
 
 impl Default for Settings {
@@ -33,6 +37,8 @@ impl Default for Settings {
             theme: None,
             notify: true,
             reports_seen: std::collections::BTreeMap::new(),
+            default_account: None,
+            active_account: None,
         }
     }
 }
@@ -122,6 +128,8 @@ mod tests {
                 "2026-01-02T03:04:05+00:00".to_string(),
             )]
             .into(),
+            default_account: Some("ada@example.org@https://ai.example".into()),
+            active_account: Some("ada@example.org@https://ai.example".into()),
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), s);
