@@ -4,6 +4,28 @@ All notable changes to LLeMbas Desktop. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.0-beta.16] — 2026-11-26
+
+### Added
+
+- **Multiple accounts and instances, with a default.** Save sign-ins across
+  multiple LLeMbas 2.0 servers and multiple accounts on the same server
+  (`accounts.json`, migrating seamlessly from single `account.json`), designate
+  a **Default** account opened on cold start, and switch accounts cleanly from
+  the title bar host switcher, Settings → Accounts, or the command palette.
+- **Safe local agent coexistence.** Adding secondary accounts or instances does
+  not overwrite or revoke the local `lembas service` link; Settings → Agent
+  shows clearly when the local agent is linked to another server.
+- **Cross-account notification routing.** Clicking a chat, report, or schedule
+  notification switches to the account that triggered it before opening the
+  target.
+
+### Fixed
+
+- **Ctrl+Shift+V no longer pastes twice in the terminal.** Calls
+  `e.preventDefault()`, uses `term.paste(text)` for bracketed paste support,
+  and guards against duplicate native webview paste events.
+
 ## [1.0.0-beta.15] — 2026-11-24
 
 The workspace's editor helper needs a LLeMbas CLI with the editor's methods (harness spec
