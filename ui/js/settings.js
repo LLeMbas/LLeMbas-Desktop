@@ -240,10 +240,12 @@ export function renderSettings(s) {
         : null,
     ),
   )
-  const scopeKey = s.account ? `${s.server || ""}|${s.account.email || s.account.name || ""}` : ""
+  const scopeKey = accountScope(s)
   if (s.account && appsFor !== scopeKey) askApps(scopeKey)
   if (s.account && mcpFor !== scopeKey) askMcp(scopeKey)
 }
+
+const accountScope = (s) => (s?.account ? `${s.server || ""}|${s.account.email || s.account.name || ""}` : "")
 
 // --- The MCP servers and their sign-ins (GET /mcp) --------------------------------------------------
 //
@@ -271,10 +273,7 @@ async function askMcp(server) {
   if (!$("settings").hidden) renderSettings(current())
 }
 
-const mcpShown = (s) => {
-  const scopeKey = s.account ? `${s.server || ""}|${s.account.email || s.account.name || ""}` : ""
-  return !!s.account && mcpFor === scopeKey && !!mcp?.length
-}
+const mcpShown = (s) => !!s.account && mcpFor === accountScope(s) && !!mcp?.length
 
 /** A sign-in page, only where it is a page of the instance the app is signed in to. */
 function signinPage(s, url) {
@@ -327,7 +326,7 @@ function mcpSection(s) {
     t("MCP servers"),
     h("p", { class: "set__intro", text: t("Tools from other services that your chats on the server may use. Signing in to one happens in your browser, on your server.") }),
     rows,
-    h("div", { class: "set__buttons" }, h("button", { type: "button", class: "btn btn--sm", id: "mcp-refresh", text: t("Read again"), onclick: () => askMcp(`${s.server || ""}|${s.account?.email || s.account?.name || ""}`) })),
+    h("div", { class: "set__buttons" }, h("button", { type: "button", class: "btn btn--sm", id: "mcp-refresh", text: t("Read again"), onclick: () => askMcp(accountScope(s)) })),
   )
 }
 
@@ -454,7 +453,7 @@ export function initSettings(getStatus) {
     const s = current()
     if (!mcpAwaited || !s?.account) return
     mcpAwaited = false
-    askMcp(s.server)
+    askMcp(accountScope(s))
   })
   $("settings-body").addEventListener("scroll", () => {
     // The group at the top is the one marked beside them.
