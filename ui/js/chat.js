@@ -1308,6 +1308,13 @@ class Live {
         // The subagent tree as it changed (spec 3.4.0): the activity panel draws it.
         treeChanged(this.chat.id, data.tree)
         break
+      case "mode":
+        // The chat's approval mode changed mid-run (by the device or another client).
+        if (typeof data?.mode === "string" && data.mode && open?.chat?.id === this.chat.id && open.chat.mode !== data.mode) {
+          open.chat = { ...open.chat, mode: data.mode }
+          renderChips()
+        }
+        break
       case "jobs":
         this.jobs.hidden = !(data.jobs || []).length
         append(
@@ -2424,7 +2431,7 @@ async function renderChips() {
   }
   const save = async (body) => {
     try {
-      const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, body)
+      const r = await asking(patch(`/chats/${encodeURIComponent(chat.id)}`, body), chat.id)
       if (open?.chat?.id === chat.id) {
         open.chat = r.chat
         renderChips()
@@ -2437,13 +2444,14 @@ async function renderChips() {
   }
   const models = await chatModels(chat)
   if (drawing !== chipsDrawn || open?.chat?.id !== chat.id) return
+  const live = open.chat
   open.models = models // the models this chat may use, as /effort reads its levels
-  const current = modelFor(models, chat) || { id: chat.model, name: chat.model, efforts: [] }
+  const current = modelFor(models, live) || { id: live.model, name: live.model, efforts: [] }
   const parts = []
-  if (chat.kind === "agent") parts.push(modeChip(chat.mode || "edit", (m) => save({ mode: m })))
-  if (chat.model) parts.push(modelChip(models, chat, (id) => save({ model: id }), mayPick))
-  parts.push(effortChip(current, chat.effort || levelsOf(current).start, (l) => save({ effort: l })))
-  if (chat.kind === "chat" && picturesOffered() && !chat.archived) message.replaceChildren(pictureChip())
+  if (live.kind === "agent") parts.push(modeChip(live.mode || "edit", (m) => save({ mode: m })))
+  if (live.model) parts.push(modelChip(models, live, (id) => save({ model: id }), mayPick))
+  parts.push(effortChip(current, live.effort || levelsOf(current).start, (l) => save({ effort: l })))
+  if (live.kind === "chat" && picturesOffered() && !live.archived) message.replaceChildren(pictureChip())
   else {
     wantPicture = false
     message.replaceChildren()
@@ -3246,7 +3254,7 @@ async function saveChat(body, done) {
   const chat = open?.chat
   if (!chat?.id) return
   try {
-    const r = await patch(`/chats/${encodeURIComponent(chat.id)}`, body)
+    const r = await asking(patch(`/chats/${encodeURIComponent(chat.id)}`, body), chat.id)
     if (open?.chat?.id === chat.id && r?.chat) {
       open.chat = r.chat
       setTitle(r.chat.title)
