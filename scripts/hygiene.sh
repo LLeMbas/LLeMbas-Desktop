@@ -20,7 +20,11 @@ patterns=(
 )
 found=0
 for pattern in "${patterns[@]}"; do
-  if git ls-files -z | grep -zv '^scripts/hygiene.sh$' | xargs -0 grep -nIEi -- "$pattern" ; then
+  # The output decides, not the exit status: xargs answers 123 when any one batch of files has no
+  # match, and grep 2 on an error -- either would have read as "clean" around real matches.
+  hits=$(git ls-files -z | grep -zv '^scripts/hygiene.sh$' | xargs -0 grep -nIEi -- "$pattern" 2>/dev/null || true)
+  if [ -n "$hits" ]; then
+    printf '%s\n' "$hits"
     echo "hygiene: the lines above match /$pattern/" >&2
     found=1
   fi
